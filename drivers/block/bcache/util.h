@@ -184,10 +184,12 @@ do {									\
 	(fifo)->data = NULL;						\
 } while (0)
 
+#define fifo_free(fifo)		((fifo)->size - fifo_used(fifo) - 1)
 #define fifo_used(fifo)		(((fifo)->back - (fifo)->front) & (fifo)->size)
-#define fifo_free(fifo)		((fifo)->size - fifo_used(fifo))
-#define fifo_full(fifo)		(fifo_free(fifo) == 0)
+
 #define fifo_empty(fifo)	((fifo)->front == (fifo)->back)
+#define fifo_full(fifo)							\
+	((fifo)->front == (((fifo)->back + 1) & (fifo)->size))
 
 #define fifo_front(fifo)	((fifo)->data[(fifo)->front])
 #define fifo_back(fifo)							\

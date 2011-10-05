@@ -9,6 +9,34 @@
 #define CUTOFF_WRITEBACK	50
 #define CUTOFF_WRITEBACK_SYNC	75
 
+struct search {
+	/* Stack frame for bio_complete */
+	struct closure		cl;
+
+	struct task_struct	*task;
+
+	struct bio		*orig_bio;
+	struct bio		*cache_bio;
+	struct bbio		bio;
+
+	struct btree_op		op;
+
+	unsigned		skip:1;
+	unsigned		bio_done:1;
+	unsigned		lookup_done:1;
+	unsigned		recoverable:1;
+
+	/* IO error returned to s->bio */
+	short			error;
+
+	/* Starting vec in cache_bio after which we must free pages */
+	unsigned short		pages_from;
+};
+
+struct kmem_cache *search_cache;
+
+static void bio_invalidate(struct search *);
+static void __bio_complete(struct search *);
 static void __request_read(struct closure *);
 
 static void btree_op_init(struct btree_op *op)
@@ -196,7 +224,7 @@ static void bio_insert_endio(struct bio *bio, int error)
 	bcache_endio(op->d->c, bio, error, "writing data to cache");
 }
 
-void bio_insert(struct closure *cl)
+static void bio_insert(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 	struct search *s = container_of(op, struct search, op);
@@ -291,7 +319,7 @@ err:
 		 (uint64_t) bio->bi_sector);
 }
 
-void bio_invalidate(struct search *s)
+static void bio_invalidate(struct search *s)
 {
 	struct bio *bio = s->cache_bio;
 
@@ -315,9 +343,32 @@ void bio_invalidate(struct search *s)
 	s->bio_done = true;
 }
 
+void btree_insert_async(struct closure *cl)
+{
+	struct btree_op *op = container_of(cl, struct btree_op, cl);
+	struct search *s = container_of(op, struct search, op);
+
+	if (s->bio_done &&
+	    op->insert_type == INSERT_READ)
+		__bio_complete(s);
+again:
+	if (btree_insert(op, op->d->c)) {
+		s->error	= -ENOMEM;
+		s->bio_done	= true;
+	}
+
+	if (s->skip && !s->bio_done) {
+		bio_invalidate(s);
+		goto again;
+	}
+
+	return_f(cl, !s->bio_done
+		 ? bio_insert : NULL);
+}
+
 /* Process a bio */
 
-void __bio_complete(struct search *s)
+static void __bio_complete(struct search *s)
 {
 	if (s->orig_bio) {
 		if (s->error)
@@ -813,4 +864,17 @@ int bcache_make_request(struct request_queue *q, struct bio *bio)
 
 	(bio->bi_rw & REQ_WRITE ? request_write : request_read)(s);
 	return 0;
+}
+
+void bcache_request_exit(void)
+{
+	if (search_cache)
+		kmem_cache_destroy(search_cache);
+}
+
+int bcache_request_init(void)
+{
+	search_cache = KMEM_CACHE(search, 0);
+	return search_cache ? 0 : -ENOMEM;
+
 }

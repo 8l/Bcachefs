@@ -13,6 +13,9 @@ struct dirty {
 	struct dirty_io		*io;
 };
 
+static struct kmem_cache *dirty_cache;
+static struct workqueue_struct *dirty_wq;
+
 static void read_dirty(struct cached_dev *);
 
 /* Background writeback */
@@ -66,11 +69,11 @@ static int btree_refill_dirty(struct btree *b, struct btree_op *op, int *count)
 				return ret;
 
 		} else if (KEY_DIRTY(k)) {
-			w = kmem_cache_alloc(bcache_dirty, GFP_NOWAIT);
+			w = kmem_cache_alloc(dirty_cache, GFP_NOWAIT);
 			if (!w) {
 				spin_unlock(&op->d->lock);
 
-				w = kmem_cache_alloc(bcache_dirty, GFP_NOIO);
+				w = kmem_cache_alloc(dirty_cache, GFP_NOIO);
 				if (!w)
 					return -ENOMEM;
 
@@ -84,7 +87,7 @@ static int btree_refill_dirty(struct btree *b, struct btree_op *op, int *count)
 			SET_KEY_DIRTY(&w->key, false);
 
 			if (RB_INSERT(&op->d->dirty, w, node, dirty_cmp))
-				kmem_cache_free(bcache_dirty, w);
+				kmem_cache_free(dirty_cache, w);
 			else
 				(*count)++;
 		}
@@ -164,7 +167,7 @@ bool in_writeback(struct cached_dev *d, sector_t offset, unsigned len)
 	ret = RB_SEARCH(&d->dirty, s, node, dirty_cmp);
 	if (ret && !ret->io) {
 		rb_erase(&ret->node, &d->dirty);
-		kmem_cache_free(bcache_dirty, ret);
+		kmem_cache_free(dirty_cache, ret);
 		ret = NULL;
 	}
 
@@ -175,7 +178,7 @@ bool in_writeback(struct cached_dev *d, sector_t offset, unsigned len)
 void queue_writeback(struct cached_dev *d)
 {
 	atomic_inc(&d->count);
-	if (!queue_work(bcache_writeback, &d->refill))
+	if (!queue_work(dirty_wq, &d->refill))
 		cached_dev_put(d);
 }
 
@@ -225,13 +228,13 @@ static void write_dirty_finish(struct closure *cl)
 		keylist_add(&op.keys, &w->key);
 
 		pr_debug("clearing %s", pkey(&w->key));
-		__btree_insert_async(&op, d->c);
+		btree_insert(&op, d->c);
 		closure_sync(&op.cl);
 	}
 
 	spin_lock(&d->lock);
 	rb_erase(&w->node, &d->dirty);
-	kmem_cache_free(bcache_dirty, w);
+	kmem_cache_free(dirty_cache, w);
 	atomic_dec_bug(&d->in_flight);
 
 	read_dirty(d);
@@ -245,7 +248,7 @@ static void dirty_endio(struct bio *bio, int error)
 		SET_KEY_DIRTY(&w->key, true);
 
 	bio_put(bio);
-	closure_put(&w->io->cl, bcache_writeback);
+	closure_put(&w->io->cl, dirty_wq);
 }
 
 static void write_dirty(struct closure *cl)
@@ -296,7 +299,7 @@ static void read_dirty(struct cached_dev *d)
 
 		if (ptr_stale(d->c, &w->key, 0)) {
 			rb_erase(&w->node, &d->dirty);
-			kmem_cache_free(bcache_dirty, w);
+			kmem_cache_free(dirty_cache, w);
 			continue;
 		}
 
@@ -348,8 +351,20 @@ void read_dirty_work(struct work_struct *work)
 	read_dirty(d);
 }
 
+void bcache_dirty_exit(void)
+{
+	if (dirty_wq)
+		destroy_workqueue(dirty_wq);
+	if (dirty_cache)
+		kmem_cache_destroy(dirty_cache);
+}
+
 int bcache_dirty_init(void)
 {
-	bcache_dirty = KMEM_CACHE(dirty, 0);
-	return bcache_dirty ? 0 : -ENOMEM;
+	if (!(dirty_cache = KMEM_CACHE(dirty, 0)) ||
+	    !(dirty_wq = create_singlethread_workqueue("dirty_wq"))) {
+		bcache_dirty_exit();
+		return -ENOMEM;
+	} else
+		return 0;
 }

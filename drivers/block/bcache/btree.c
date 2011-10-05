@@ -97,9 +97,14 @@
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Kent Overstreet <kent.overstreet@gmail.com>");
 
-const char *insert_types[] = {
-	"read", "write", NULL, "writeback", "undirty", NULL, "replay"
-};
+const char *insert_type(struct btree_op *op)
+{
+	static const char *insert_types[] = {
+		"read", "write", NULL, "writeback", "undirty", NULL, "replay"
+	};
+
+	return insert_types[op->insert_type];
+}
 
 #define MAX_NEED_GC		64
 #define MAX_SAVE_PRIO		72
@@ -2339,7 +2344,7 @@ static int btree_insert_recurse(struct btree *b, struct btree_op *op,
 	return 0;
 }
 
-int __btree_insert_async(struct btree_op *op, struct cache_set *c)
+int btree_insert(struct btree_op *op, struct cache_set *c)
 {
 	int ret = 0;
 	struct cache *ca;
@@ -2400,29 +2405,6 @@ int __btree_insert_async(struct btree_op *op, struct cache_set *c)
 		atomic_dec_bug(op->journal);
 	op->journal = NULL;
 	return ret;
-}
-
-void btree_insert_async(struct closure *cl)
-{
-	struct btree_op *op = container_of(cl, struct btree_op, cl);
-	struct search *s = container_of(op, struct search, op);
-
-	if (s->bio_done &&
-	    op->insert_type == INSERT_READ)
-		__bio_complete(s);
-again:
-	if (__btree_insert_async(op, op->d->c)) {
-		s->error	= -ENOMEM;
-		s->bio_done	= true;
-	}
-
-	if (s->skip && !s->bio_done) {
-		bio_invalidate(s);
-		goto again;
-	}
-
-	return_f(cl, !s->bio_done
-		 ? bio_insert : NULL);
 }
 
 void set_new_root(struct btree *b)

@@ -3,6 +3,24 @@
 
 #include <linux/random.h>
 
+#define BKEY_MID_BITS		10
+#define BKEY_MID_MAX		(~(~0 << (BKEY_MID_BITS - 1)))
+#define BKEY_MID_MIN		(-1 - BKEY_MID_MAX)
+
+#define BKEY_EXPONENT_BITS	7
+#define BKEY_MANTISSA_BITS	15
+#define BKEY_MANTISSA_MASK	((1 << BKEY_MANTISSA_BITS) - 1)
+#define BKEY_MANTISSA_SHIFT	63
+
+struct bkey_float {
+	int		m:BKEY_MID_BITS;
+	unsigned	exponent:BKEY_EXPONENT_BITS;
+	unsigned	mantissa:BKEY_MANTISSA_BITS;
+};
+
+#define bset_tree_space(b)						\
+	((PAGE_SIZE << bset_tree_order(b)) / sizeof(struct bkey_float))
+
 bool __ptr_invalid(struct cache_set *c, int level, const struct bkey *k)
 {
 	if (level && (!KEY_PTRS(k) || !KEY_SIZE(k) || KEY_DIRTY(k)))
@@ -670,4 +688,60 @@ void btree_sort_lazy(struct btree *b)
 
 	if (b->nsets > 2 - b->level)
 		btree_sort(b, 0, NULL);
+}
+
+/* Sysfs stuff */
+
+struct bset_stats {
+	size_t sets, keys, trees, floats, failed, tree_space;
+};
+
+static int btree_bset_stats(struct btree *b, struct btree_op *op,
+			    struct bset_stats *stats)
+{
+	struct bkey *k;
+
+	stats->sets		+= b->nsets;
+	stats->tree_space	+= bset_tree_space(b);
+
+	for (int i = 0; i < 4 && b->tree[i].size; i++) {
+		stats->trees++;
+		stats->keys	+= b->sets[i]->keys * sizeof(uint64_t);
+		stats->floats	+= b->tree[i].size - 1;
+
+		for (size_t j = 1; j < b->tree[i].size; j++)
+			if (b->tree[i].key[j].exponent == 127)
+				stats->failed++;
+	}
+
+	if (b->level)
+		for_each_key_filter(b, k, ptr_bad) {
+			int ret = btree(bset_stats, k, b, op, stats);
+			if (ret)
+				return ret;
+		}
+
+	return 0;
+}
+
+int bset_print_stats(struct cache_set *c, char *buf)
+{
+	struct btree_op op;
+	struct bset_stats t;
+
+	btree_op_init_stack(&op);
+	memset(&t, 0, sizeof(struct bset_stats));
+
+	btree_root(bset_stats, c, &op, &t);
+
+	return snprintf(buf, PAGE_SIZE,
+			"sets:		%zu\n"
+			"key bytes:	%zu\n"
+			"trees:		%zu\n"
+			"tree space:	%zu\n"
+			"floats:		%zu\n"
+			"bytes/float:	%zu\n"
+			"failed:		%zu",
+			t.sets, t.keys, t.trees, t.tree_space,
+			t.floats, DIV_SAFE(t.keys, t.floats), t.failed);
 }

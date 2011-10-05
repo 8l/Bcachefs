@@ -58,15 +58,13 @@ static const unsigned accounting_weight		= 32;
 static const char * const accounting_types[]	= {
 	"total", "five_minute", "hour", "day" };
 
-struct kobject *bcache_kobj;
+static struct kobject *bcache_kobj;
 static struct mutex register_lock;
 static LIST_HEAD(uncached_devices);
 LIST_HEAD(cache_sets);
 static int bcache_major, bcache_minor;
-static struct kmem_cache *search_cache;
 
-struct kmem_cache *bcache_dirty;
-struct workqueue_struct *bcache_wq, *bcache_writeback;
+struct workqueue_struct *bcache_wq;
 
 static void cache_init_journal(struct cache *);
 
@@ -180,38 +178,6 @@ read_attribute(cache_hit_ratio);
 read_attribute(cache_readaheads);
 read_attribute(cache_miss_collisions);
 read_attribute(bypassed);
-
-struct bset_stats {
-	size_t sets, keys, trees, floats, failed, tree_space;
-};
-
-static int btree_bset_stats(struct btree *b, struct btree_op *op,
-			    struct bset_stats *stats)
-{
-	struct bkey *k;
-
-	stats->sets		+= b->nsets;
-	stats->tree_space	+= bset_tree_space(b);
-
-	for (int i = 0; i < 4 && b->tree[i].size; i++) {
-		stats->trees++;
-		stats->keys	+= b->sets[i]->keys * sizeof(uint64_t);
-		stats->floats	+= b->tree[i].size - 1;
-
-		for (size_t j = 1; j < b->tree[i].size; j++)
-			if (b->tree[i].key[j].exponent == 127)
-				stats->failed++;
-	}
-
-	if (b->level)
-		for_each_key_filter(b, k, ptr_bad) {
-			int ret = btree(bset_stats, k, b, op, stats);
-			if (ret)
-				return ret;
-		}
-
-	return 0;
-}
 
 /* Superblock/other metadata */
 
@@ -733,9 +699,8 @@ static void cached_dev_close(struct cached_dev *d)
 	if (atomic_xchg(&d->closing, 1))
 		return;
 
-	if (should_refill_dirty(d) &&
-	    queue_work(bcache_writeback, &d->refill))
-		return;
+	if (should_refill_dirty(d))
+		queue_writeback(d);
 
 	if (atomic_dec_and_test(&d->count))
 		__detach_dev(d);
@@ -1419,26 +1384,8 @@ static ssize_t __show_cache_set(struct cache_set *c, struct attribute *attr,
 	sysfs_print(congested_threshold_us,	c->congested_us);
 	sysfs_print(active_journal_entries,	fifo_used(&c->journal.pin));
 
-	if (attr == &sysfs_bset_tree_stats) {
-		struct btree_op op;
-		struct bset_stats t;
-
-		btree_op_init_stack(&op);
-		memset(&t, 0, sizeof(struct bset_stats));
-
-		btree_root(bset_stats, c, &op, &t);
-
-		sysfs_printf(bset_tree_stats,
-			    "sets:		%zu\n"
-			    "key bytes:	%zu\n"
-			    "trees:		%zu\n"
-			    "tree space:	%zu\n"
-			    "floats:		%zu\n"
-			    "bytes/float:	%zu\n"
-			    "failed:		%zu",
-			    t.sets, t.keys, t.trees, t.tree_space,
-			    t.floats, DIV_SAFE(t.keys, t.floats), t.failed);
-	}
+	if (attr == &sysfs_bset_tree_stats)
+		return bset_print_stats(c, buf);
 
 	return 0;
 }
@@ -2437,6 +2384,19 @@ err:
 	return ret;
 }
 
+static void bcache_exit(void)
+{
+#ifdef CONFIG_CGROUP_BCACHE
+	cgroup_unload_subsys(&bcache_subsys);
+#endif
+	bcache_debug_exit();
+	kobject_put(bcache_kobj);
+	bcache_dirty_exit();
+	bcache_request_exit();
+	destroy_workqueue(bcache_wq);
+	unregister_blkdev(bcache_major, "bcache");
+}
+
 static int __init bcache_init(void)
 {
 	static const struct attribute *files[] = {
@@ -2451,16 +2411,14 @@ static int __init bcache_init(void)
 	if (bcache_major < 0)
 		return bcache_major;
 
-	if (!(search_cache = KMEM_CACHE(search, 0)) ||
+	if (!(bcache_wq = create_workqueue("bcache")) ||
+	    bcache_request_init() ||
 	    bcache_dirty_init() ||
-	    !(bcache_wq = create_workqueue("bcache")) ||
-	    !(bcache_writeback =
-	      create_singlethread_workqueue("bcache_writeback")) ||
 	    !(bcache_kobj = kobject_create_and_add("bcache", fs_kobj)) ||
 	    sysfs_create_files(bcache_kobj, files))
 		goto err;
 
-	if (bcache_debug_init())
+	if (bcache_debug_init(bcache_kobj))
 		goto err;
 
 #ifdef CONFIG_CGROUP_BCACHE
@@ -2469,30 +2427,12 @@ static int __init bcache_init(void)
 #endif
 	return 0;
 err:
-	if (bcache_writeback)
-		destroy_workqueue(bcache_writeback);
+	bcache_dirty_exit();
+	bcache_request_exit();
 	if (bcache_wq)
 		destroy_workqueue(bcache_wq);
-	if (bcache_dirty)
-		kmem_cache_destroy(bcache_dirty);
-	if (search_cache)
-		kmem_cache_destroy(search_cache);
 	return -ENOMEM;
 }
 
-static void bcache_exit(void)
-{
-#ifdef CONFIG_CGROUP_BCACHE
-	cgroup_unload_subsys(&bcache_subsys);
-#endif
-	bcache_debug_exit();
-	kobject_put(bcache_kobj);
-	destroy_workqueue(bcache_writeback);
-	destroy_workqueue(bcache_wq);
-	kmem_cache_destroy(bcache_dirty);
-	kmem_cache_destroy(search_cache);
-	unregister_blkdev(bcache_major, "bcache");
-}
-
-module_init(bcache_init);
 module_exit(bcache_exit);
+module_init(bcache_init);

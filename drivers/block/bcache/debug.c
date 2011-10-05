@@ -378,17 +378,17 @@ static ssize_t store(struct kobject *k, struct kobj_attribute *attr,
 kobj_attribute_rw(latency_warn_ms, show, store);
 #endif
 
-int __init bcache_debug_init(void)
+int __init bcache_debug_init(struct kobject *kobj)
 {
 	int ret = 0;
 #ifdef CONFIG_BCACHE_DEBUG
-	ret = sysfs_create_file(bcache_kobj, &ksysfs_fuzz.attr);
+	ret = sysfs_create_file(kobj, &ksysfs_fuzz.attr);
 	if (ret)
 		return ret;
 #endif
 
 #ifdef CONFIG_BCACHE_LATENCY_DEBUG
-	ret = sysfs_create_file(bcache_kobj, &ksysfs_latency_warn_ms.attr);
+	ret = sysfs_create_file(kobj, &ksysfs_latency_warn_ms.attr);
 	if (ret)
 		return ret;
 #endif

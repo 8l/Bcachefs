@@ -252,7 +252,7 @@ int btree_journal_replay(struct cache_set *s, struct list_head *list,
 			op->journal = i->pin;
 			atomic_inc(op->journal);
 
-			ret = __btree_insert_async(op, s);
+			ret = btree_insert(op, s);
 			if (ret)
 				goto err;
 

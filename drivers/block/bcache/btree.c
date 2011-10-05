@@ -1150,6 +1150,8 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 
 /* Btree cache */
 
+#define btree_reserve(c)	((c->root ? c->root->level : 1) * 4 + 4)
+
 static void free_bucket(struct btree *b)
 {
 	lockdep_assert_held(&b->c->bucket_lock);
@@ -2506,15 +2508,16 @@ static struct bio *cache_hit(struct btree *b, struct bio *bio,
 
 #define SEARCH(op, bio) KEY((op)->d->id, (bio)->bi_sector, 0)
 
-static int btree_search(struct btree *b, struct search *s, uint64_t *reada)
+static int btree_search(struct btree *b, struct btree_op *op,
+			struct search *s, uint64_t *reada)
 {
 	struct bio *n, *bio = &s->bio.bio;
 	struct btree_iter iter;
-	btree_iter_init(b, &iter, &SEARCH(&s->op, bio));
+	btree_iter_init(b, &iter, &SEARCH(op, bio));
 
 	while (1) {
 		struct bkey *k = btree_iter_next(&iter);
-		if (!k || KEY_DEV(k) != s->op.d->id)
+		if (!k || KEY_DEV(k) != op->d->id)
 			return 0;
 
 		if (ptr_bad(b, k))
@@ -2534,44 +2537,45 @@ static int btree_search(struct btree *b, struct search *s, uint64_t *reada)
 				return -ENOMEM;
 
 			BUG_ON(n == bio);
-			s->cache_miss = true;
+			op->cache_miss = true;
 			generic_make_request(n);
 		}
 
 		pr_debug("%s", pkey(k));
 
 		do {
-			n = cache_hit(b, bio, k, &s->op);
+			n = cache_hit(b, bio, k, op);
 			if (!n)
 				break;
 			if (IS_ERR(n))
 				return -ENOMEM;
 
 			if (n == bio) {
-				s->cache_hit = true;
+				op->cache_hit = true;
 				return 0;
 			}
 		} while (bio->bi_sector < k->key);
 	}
 }
 
-int btree_search_recurse(struct btree *b, struct search *s, uint64_t *reada)
+int btree_search_recurse(struct btree *b, struct btree_op *op,
+			 struct search *s, uint64_t *reada)
 {
 	int ret = -1;
 	struct bio *bio = &s->bio.bio;
-	struct bkey search = SEARCH(&s->op, bio), *k = &search;
+	struct bkey search = SEARCH(op, bio), *k = &search;
 
 	pr_debug("at %s searching for %llu", pbtree(b), search.key);
 
 	if (!b->level)
-		return btree_search(b, s, reada);
+		return btree_search(b, op, s, reada);
 
 	while ((k = next_recurse_key(b, k))) {
-		ret = btree(search_recurse, k, &s->op, b, s, reada);
+		ret = btree(search_recurse, k, op, b, op, s, reada);
 
 		if (ret ||
-		    s->cache_hit ||
-		    bkey_cmp(k, &KEY(s->op.d->id, bio_end(bio), 0)) >= 0)
+		    op->cache_hit ||
+		    bkey_cmp(k, &KEY(op->d->id, bio_end(bio), 0)) >= 0)
 			return ret;
 	}
 

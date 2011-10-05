@@ -521,7 +521,9 @@ static void __do_bio_hook(struct search *s)
 	struct bio *bio = &s->bio.bio;
 	memcpy(bio, s->orig_bio, sizeof(struct bio));
 
+#ifdef CONFIG_DISKMON
 	bio->bi_flowid		= NULL;
+#endif
 	bio->bi_end_io		= request_endio;
 	bio->bi_private		= &s->cl;
 	bio->bi_destructor	= NULL;
@@ -681,7 +683,7 @@ static void __request_read(struct closure *cl)
 	struct bio *bio = &s->bio.bio;
 	uint64_t reada = bio->bi_bdev->bd_inode->i_size >> 9;
 
-	int ret = btree_root(search_recurse, op->d->c, op, s, &reada);
+	int ret = btree_root(search_recurse, op->d->c, op, op, s, &reada);
 
 	if (ret == -ENOMEM) {
 		closure_put(&s->cl, NULL);
@@ -693,21 +695,21 @@ static void __request_read(struct closure *cl)
 
 	s->lookup_done = true;
 
-	if (!s->cache_hit && !s->skip) {
+	if (!op->cache_hit && !s->skip) {
 		reada = min_t(uint64_t, reada,
 			      bio->bi_sector + (op->d->readahead >> 9));
 
 		do_readahead(s, bio, reada);
 	}
 
-	if (!s->cache_hit) {
-		s->cache_miss = true;
+	if (!op->cache_hit) {
+		op->cache_miss = true;
 
 		if (closure_bio_submit(bio, &s->cl, op->d->c->bio_split))
 			return_f(cl, request_resubmit);
 	}
 
-	atomic_inc(&op->d->stats[s->skip][s->cache_miss]);
+	atomic_inc(&op->d->stats[s->skip][op->cache_miss]);
 
 	return_f(cl, NULL);
 }

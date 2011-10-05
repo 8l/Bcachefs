@@ -163,6 +163,9 @@ struct btree_op {
 		INSERT_UNDIRTY		= 4,
 		INSERT_REPLAY		= 6
 	} insert_type:8;
+
+	unsigned		cache_hit:1;
+	unsigned		cache_miss:1;
 };
 
 extern const char *insert_types[];
@@ -565,8 +568,6 @@ struct search {
 	unsigned		skip:1;
 	unsigned		bio_done:1;
 	unsigned		lookup_done:1;
-	unsigned		cache_hit:1;
-	unsigned		cache_miss:1;
 	unsigned		recoverable:1;
 
 	/* IO error returned to s->bio */
@@ -578,8 +579,6 @@ struct search {
 
 #define btree_prio		USHRT_MAX
 #define initial_prio		32768
-
-#define btree_reserve(c)	((c->root ? c->root->level : 1) * 4 + 4)
 
 #define btree_bytes(c)		((c)->btree_pages * PAGE_SIZE)
 #define btree_blocks(b)		(KEY_SIZE(&b->key) >> (b)->c->block_bits)
@@ -1036,7 +1035,7 @@ bool should_split(struct btree *);
 bool btree_insert_keys(struct btree *, struct btree_op *);
 int __btree_insert_async(struct btree_op *, struct cache_set *);
 void btree_insert_async(struct closure *);
-int btree_search_recurse(struct btree *, struct search *, uint64_t *);
+int btree_search_recurse(struct btree *, struct btree_op *, struct search *, uint64_t *);
 
 void __btree_sort(struct btree *, int, struct bset *,
 		  struct btree_iter *, bool);

@@ -1035,7 +1035,8 @@ bool should_split(struct btree *);
 bool btree_insert_keys(struct btree *, struct btree_op *);
 int __btree_insert_async(struct btree_op *, struct cache_set *);
 void btree_insert_async(struct closure *);
-int btree_search_recurse(struct btree *, struct btree_op *, struct search *, uint64_t *);
+int btree_search_recurse(struct btree *, struct btree_op *,
+			 struct bio *, uint64_t *);
 
 void __btree_sort(struct btree *, int, struct bset *,
 		  struct btree_iter *, bool);

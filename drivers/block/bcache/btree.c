@@ -2509,9 +2509,8 @@ static struct bio *cache_hit(struct btree *b, struct bio *bio,
 #define SEARCH(op, bio) KEY((op)->d->id, (bio)->bi_sector, 0)
 
 static int btree_search(struct btree *b, struct btree_op *op,
-			struct search *s, uint64_t *reada)
+			struct bio *bio, uint64_t *reada)
 {
-	struct bio *n, *bio = &s->bio.bio;
 	struct btree_iter iter;
 	btree_iter_init(b, &iter, &SEARCH(op, bio));
 
@@ -2532,7 +2531,7 @@ static int btree_search(struct btree *b, struct btree_op *op,
 			int sectors = min_t(int, bio_max_sectors(bio),
 					    KEY_START(k) - bio->bi_sector);
 
-			n = bio_split_get(bio, sectors, b->c);
+			struct bio *n = bio_split_get(bio, sectors, b->c);
 			if (!n)
 				return -ENOMEM;
 
@@ -2544,7 +2543,7 @@ static int btree_search(struct btree *b, struct btree_op *op,
 		pr_debug("%s", pkey(k));
 
 		do {
-			n = cache_hit(b, bio, k, op);
+			struct bio *n = cache_hit(b, bio, k, op);
 			if (!n)
 				break;
 			if (IS_ERR(n))
@@ -2559,19 +2558,18 @@ static int btree_search(struct btree *b, struct btree_op *op,
 }
 
 int btree_search_recurse(struct btree *b, struct btree_op *op,
-			 struct search *s, uint64_t *reada)
+			 struct bio *bio, uint64_t *reada)
 {
 	int ret = -1;
-	struct bio *bio = &s->bio.bio;
 	struct bkey search = SEARCH(op, bio), *k = &search;
 
 	pr_debug("at %s searching for %llu", pbtree(b), search.key);
 
 	if (!b->level)
-		return btree_search(b, op, s, reada);
+		return btree_search(b, op, bio, reada);
 
 	while ((k = next_recurse_key(b, k))) {
-		ret = btree(search_recurse, k, op, b, op, s, reada);
+		ret = btree(search_recurse, k, op, b, op, bio, reada);
 
 		if (ret ||
 		    op->cache_hit ||

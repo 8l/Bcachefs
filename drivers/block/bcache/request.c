@@ -683,7 +683,7 @@ static void __request_read(struct closure *cl)
 	struct bio *bio = &s->bio.bio;
 	uint64_t reada = bio->bi_bdev->bd_inode->i_size >> 9;
 
-	int ret = btree_root(search_recurse, op->d->c, op, op, s, &reada);
+	int ret = btree_root(search_recurse, op->d->c, op, op, bio, &reada);
 
 	if (ret == -ENOMEM) {
 		closure_put(&s->cl, NULL);

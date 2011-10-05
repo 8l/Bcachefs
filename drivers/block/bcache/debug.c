@@ -177,7 +177,7 @@ static int btree_dump(struct btree *b, struct btree_op *op, struct seq_file *f,
 		    last != KEY_START(k))
 			seq_printf(f, "<hole>\n");
 		else if (b->level && !ptr_bad(b, k))
-			btree(dump, k, op, b, op, f, tabs - 1, &last, sectors);
+			btree(dump, k, b, op, f, tabs - 1, &last, sectors);
 
 		seq_printf(f, "%s%i %4i: %s %s\n",
 			   tabs, _i, j, pkey(k), buf);
@@ -203,7 +203,7 @@ static int debug_seq_show(struct seq_file *f, void *data)
 	struct btree_op op;
 	btree_op_init_stack(&op);
 
-	btree_root(dump, c, &op, &op, f, &tabs[4], &last, &sectors);
+	btree_root(dump, c, &op, f, &tabs[4], &last, &sectors);
 
 	seq_printf(f, "%s\n" "%llu Mb found\n",
 		   pkey(&c->root->key), sectors / 2048);

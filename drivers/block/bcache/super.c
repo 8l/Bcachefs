@@ -205,7 +205,7 @@ static int btree_bset_stats(struct btree *b, struct btree_op *op,
 
 	if (b->level)
 		for_each_key_filter(b, k, ptr_bad) {
-			int ret = btree(bset_stats, k, op, b, op, stats);
+			int ret = btree(bset_stats, k, b, op, stats);
 			if (ret)
 				return ret;
 		}
@@ -1426,7 +1426,7 @@ static ssize_t __show_cache_set(struct cache_set *c, struct attribute *attr,
 		btree_op_init_stack(&op);
 		memset(&t, 0, sizeof(struct bset_stats));
 
-		btree_root(bset_stats, c, &op, &op, &t);
+		btree_root(bset_stats, c, &op, &t);
 
 		sysfs_printf(bset_tree_stats,
 			    "sets:		%zu\n"
@@ -1767,7 +1767,7 @@ static void run_cache_set(struct cache_set *c)
 		uuid_io(c, READ_SYNC, k, &op.cl);
 
 		err = "error in recovery";
-		if (btree_root(check, c, &op, &op))
+		if (btree_root(check, c, &op))
 			goto err;
 
 		printk(KERN_DEBUG "bcache: btree_check() done\n");

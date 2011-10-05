@@ -1929,7 +1929,7 @@ void btree_gc(struct work_struct *w)
 	}
 	spin_unlock(&c->bucket_lock);
 
-	ret = btree_root(gc_root, c, &op, &op, &writes, &stats);
+	ret = btree_root(gc_root, c, &op, &writes, &stats);
 	closure_sync(&op.cl);
 	closure_sync(&writes);
 
@@ -2309,7 +2309,7 @@ static int btree_insert_recurse(struct btree *b, struct btree_op *op,
 			keylist_push(stack_keys);
 		}
 
-		ret = btree(insert_recurse, k, op, b, op, stack_keys);
+		ret = btree(insert_recurse, k, b, op, stack_keys);
 		if (ret)
 			return ret;
 	}
@@ -2377,7 +2377,7 @@ int __btree_insert_async(struct btree_op *op, struct cache_set *c)
 			op->lock = 0;
 		}
 
-		ret = btree_root(insert_recurse, c, op, op, &stack_keys);
+		ret = btree_root(insert_recurse, c, op, &stack_keys);
 
 		if (ret == -EAGAIN) {
 			ret = 0;
@@ -2569,7 +2569,7 @@ int btree_search_recurse(struct btree *b, struct btree_op *op,
 		return btree_search(b, op, bio, reada);
 
 	while ((k = next_recurse_key(b, k))) {
-		ret = btree(search_recurse, k, op, b, op, bio, reada);
+		ret = btree(search_recurse, k, b, op, bio, reada);
 
 		if (ret ||
 		    op->cache_hit ||
@@ -2614,7 +2614,7 @@ int btree_check(struct btree *b, struct btree_op *op)
 			if (p)
 				get_bucket(b->c, p, b->level - 1, NULL);
 
-			ret = btree(check, k, op, b, op);
+			ret = btree(check, k, b, op);
 			if (ret)
 				return ret;
 

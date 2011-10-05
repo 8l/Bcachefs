@@ -827,14 +827,14 @@ static inline void __rw_unlock(bool w, struct btree *b, bool nowrite)
 
 #define insert_lock(s, b)	((b)->level	<= (s)->lock)
 
-#define btree(f, k, op, b, ...)						\
+#define btree(f, k, b, op, ...)						\
 ({									\
 	int _r, l = b->level - 1;					\
 	bool _w = l <= (op)->lock;					\
 	struct btree *_b = get_bucket(b->c, k, l, op);			\
 	BUG_ON(ptr_bad(b, k));						\
 	if (!IS_ERR(_b)) {						\
-		_r = btree_ ## f(_b, ## __VA_ARGS__);			\
+		_r = btree_ ## f(_b, op, ## __VA_ARGS__);		\
 		rw_unlock(_w, _b);					\
 	} else								\
 		_r = PTR_ERR(_b);					\
@@ -850,7 +850,7 @@ static inline void __rw_unlock(bool w, struct btree *b, bool nowrite)
 		rw_lock(_w, _b, _b->level);				\
 		if (_b == (c)->root &&					\
 		    _w == insert_lock(op, _b))				\
-			_r = btree_ ## f(_b, ##__VA_ARGS__);		\
+			_r = btree_ ## f(_b, op, ##__VA_ARGS__);	\
 		rw_unlock(_w, _b);					\
 	} while (_r == -EINTR);						\
 									\

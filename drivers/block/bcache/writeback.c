@@ -61,7 +61,7 @@ static int btree_refill_dirty(struct btree *b, struct btree_op *op, int *count)
 			continue;
 
 		if (b->level) {
-			int ret = btree(refill_dirty, k, op, b, op, count);
+			int ret = btree(refill_dirty, k, b, op, count);
 			if (ret)
 				return ret;
 
@@ -108,7 +108,7 @@ static bool refill_dirty(struct cached_dev *d)
 	down_write(&d->writeback_lock);
 again:
 	l = d->last_found;
-	r = btree_root(refill_dirty, d->c, &op, &op, &count);
+	r = btree_root(refill_dirty, d->c, &op, &count);
 
 	pr_debug("found %i keys on %i from %llu to %llu, %i%% used",
 		 count, d->id, l, d->last_found, d->c->gc_stats.in_use);

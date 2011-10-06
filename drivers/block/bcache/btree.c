@@ -2490,8 +2490,8 @@ static struct bio *cache_hit(struct btree *b, struct bio *bio,
 
 #define SEARCH(op, bio) KEY((op)->d->id, (bio)->bi_sector, 0)
 
-static int btree_search(struct btree *b, struct btree_op *op,
-			struct bio *bio, uint64_t *reada)
+static int btree_search_leaf(struct btree *b, struct btree_op *op,
+			     struct bio *bio, uint64_t *reada)
 {
 	struct btree_iter iter;
 	btree_iter_init(b, &iter, &SEARCH(op, bio));
@@ -2548,7 +2548,7 @@ int btree_search_recurse(struct btree *b, struct btree_op *op,
 	pr_debug("at %s searching for %llu", pbtree(b), search.key);
 
 	if (!b->level)
-		return btree_search(b, op, bio, reada);
+		return btree_search_leaf(b, op, bio, reada);
 
 	while ((k = next_recurse_key(b, k))) {
 		ret = btree(search_recurse, k, b, op, bio, reada);

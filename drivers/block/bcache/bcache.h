@@ -1026,7 +1026,6 @@ void btree_journal_wait(struct cache_set *, struct closure *);
 void btree_journal_next(struct cache_set *);
 void btree_journal_mark(struct cache_set *, struct list_head *);
 void btree_journal_meta(struct cache_set *, struct closure *);
-void btree_journal_work(struct work_struct *work);
 int btree_journal_read(struct cache_set *, struct list_head *,
 		       struct btree_op *);
 int btree_journal_replay(struct cache_set *, struct list_head *,
@@ -1057,6 +1056,8 @@ extern struct list_head cache_sets; /* only needed for old shrinker, will die */
 struct cache_set *alloc_cache_set(struct cache_sb *);
 void free_discards(struct cache *);
 int alloc_discards(struct cache *);
+void free_journal(struct cache_set *);
+int alloc_journal(struct cache_set *);
 void free_open_buckets(struct cache_set *);
 int alloc_open_buckets(struct cache_set *);
 void free_btree_cache(struct cache_set *);

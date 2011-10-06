@@ -69,3 +69,5 @@ struct journal {
 #define journal_pin_cmp(c, l, r)				\
 	(fifo_idx(&(c)->journal.pin, (l)->journal) >		\
 	 fifo_idx(&(c)->journal.pin, (r)->journal))
+
+#define JOURNAL_PIN	20000

@@ -1508,10 +1508,10 @@ bool cache_set_error(struct cache_set *c, const char *m, ...)
 
 static void free_cache_set(struct cache_set *c)
 {
+	free_open_buckets(c);
 	free_btree_cache(c);
+	free_journal(c);
 
-	free_pages((unsigned long) c->journal.w[1].data, JSET_BITS);
-	free_pages((unsigned long) c->journal.w[0].data, JSET_BITS);
 	free_pages((unsigned long) c->uuids, ilog2(bucket_pages(c)));
 	free_pages((unsigned long) c->sort, ilog2(bucket_pages(c)));
 
@@ -1570,8 +1570,6 @@ static void unregister_cache_set_work(struct work_struct *w)
 #define alloc_bucket_pages(gfp, c)			\
 	((void *) __get_free_pages(__GFP_ZERO|gfp, ilog2(bucket_pages(c))))
 
-#define JOURNAL_PIN	20000
-
 struct cache_set *alloc_cache_set(struct cache_sb *sb)
 {
 	int iter_size;
@@ -1611,17 +1609,11 @@ struct cache_set *alloc_cache_set(struct cache_sb *sb)
 
 	INIT_WORK(&c->unregister, unregister_cache_set_work);
 	INIT_WORK(&c->gc_work, btree_gc);
-	INIT_WORK(&c->journal.work, btree_journal_work);
 	INIT_LIST_HEAD(&c->devices);
 	INIT_LIST_HEAD(&c->lru);
 	INIT_LIST_HEAD(&c->freed);
 	INIT_LIST_HEAD(&c->open_buckets);
 	INIT_LIST_HEAD(&c->dirty_buckets);
-
-	atomic_set(&c->journal.io, -1);
-	spin_lock_init(&c->journal.lock);
-	c->journal.w[0].c = c;
-	c->journal.w[1].c = c;
 
 	iter_size = (sb->bucket_size / sb->block_size + 1) *
 		sizeof(struct btree_iter_set);
@@ -1630,18 +1622,12 @@ struct cache_set *alloc_cache_set(struct cache_sb *sb)
 	    !(c->fill_iter = kmalloc(iter_size, GFP_KERNEL)) ||
 	    !(c->sort = alloc_bucket_pages(GFP_KERNEL, c)) ||
 	    !(c->uuids = alloc_bucket_pages(GFP_KERNEL, c)) ||
-	    !(init_fifo(&c->journal.pin, JOURNAL_PIN, GFP_KERNEL)) ||
-	    !(c->journal.w[0].data = (void *) __get_free_pages(GFP_KERNEL,
-							       JSET_BITS)) ||
-	    !(c->journal.w[1].data = (void *) __get_free_pages(GFP_KERNEL,
-							       JSET_BITS)))
+	    alloc_journal(c) ||
+	    alloc_btree_cache(c) ||
+	    alloc_open_buckets(c))
 		goto err;
 
 	c->fill_iter->size = sb->bucket_size / sb->block_size;
-
-	if (alloc_btree_cache(c) ||
-	    alloc_open_buckets(c))
-		goto err;
 
 	c->congested_us	= 2000;
 	c->error_limit	= 8 << IO_ERROR_SHIFT;

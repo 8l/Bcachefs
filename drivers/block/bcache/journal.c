@@ -530,7 +530,7 @@ static void __btree_journal_try_write(struct cache_set *c, bool noflush)
 
 #define btree_journal_try_write(c)	__btree_journal_try_write(c, false)
 
-void btree_journal_work(struct work_struct *work)
+static void btree_journal_work(struct work_struct *work)
 {
 	struct journal *j = container_of(work, struct journal, work);
 	struct cache_set *c = container_of(j, struct cache_set, journal);
@@ -618,3 +618,28 @@ out:
 	btree_insert_async(cl);
 }
 
+void free_journal(struct cache_set *c)
+{
+	free_pages((unsigned long) c->journal.w[1].data, JSET_BITS);
+	free_pages((unsigned long) c->journal.w[0].data, JSET_BITS);
+	free_fifo(&c->journal.pin);
+}
+
+int alloc_journal(struct cache_set *c)
+{
+	struct journal *j = &c->journal;
+
+	INIT_WORK(&j->work, btree_journal_work);
+	atomic_set(&j->io, -1);
+	spin_lock_init(&j->lock);
+
+	j->w[0].c = c;
+	j->w[1].c = c;
+
+	if (!(init_fifo(&j->pin, JOURNAL_PIN, GFP_KERNEL)) ||
+	    !(j->w[0].data = (void *) __get_free_pages(GFP_KERNEL, JSET_BITS)) ||
+	    !(j->w[1].data = (void *) __get_free_pages(GFP_KERNEL, JSET_BITS)))
+		return -ENOMEM;
+
+	return 0;
+}

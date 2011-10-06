@@ -1812,7 +1812,7 @@ static void run_cache_set(struct cache_set *c)
 		uuid_io(c, READ_SYNC, k, &op.cl);
 
 		err = "error in recovery";
-		if (btree_root(check, c, &op))
+		if (btree_check(c, &op))
 			goto err;
 
 		printk(KERN_DEBUG "bcache: btree_check() done\n");

@@ -1295,7 +1295,8 @@ static void btree_gc_work(struct work_struct *w)
 
 /* Initial partial gc */
 
-int btree_check(struct btree *b, struct btree_op *op)
+int btree_check_recurse(struct btree *b, struct btree_op *op,
+			unsigned long **seen)
 {
 	int ret;
 	struct bkey *k;
@@ -1304,7 +1305,9 @@ int btree_check(struct btree *b, struct btree_op *op)
 		for (unsigned i = 0; i < KEY_PTRS(k); i++) {
 			struct bucket *g = PTR_BUCKET(b->c, k, i);
 
-			if (!ptr_stale(b->c, k, i)) {
+			if (!__test_and_set_bit(PTR_BUCKET_NR(b->c, k, i),
+						seen[PTR_DEV(k, i)]) ||
+			    !ptr_stale(b->c, k, i)) {
 				g->gen = PTR_GEN(k, i);
 
 				if (b->level)
@@ -1325,7 +1328,7 @@ int btree_check(struct btree *b, struct btree_op *op)
 			if (p)
 				prefetch_bucket(b->c, p, b->level - 1);
 
-			ret = btree(check, k, b, op);
+			ret = btree(check_recurse, k, b, op, seen);
 			if (ret)
 				return ret;
 
@@ -1334,6 +1337,30 @@ int btree_check(struct btree *b, struct btree_op *op)
 	}
 
 	return 0;
+}
+
+int btree_check(struct cache_set *c, struct btree_op *op)
+{
+	int ret = -ENOMEM;
+	unsigned long *seen[MAX_CACHES_PER_SET];
+
+	memset(seen, 0, sizeof(seen));
+
+	for (int i = 0; c->cache[i]; i++) {
+		size_t n = DIV_ROUND_UP(c->cache[i]->sb.nbuckets, 8);
+		seen[i] = kmalloc(n, GFP_KERNEL);
+		if (!seen[i])
+			goto err;
+
+		/* Disables the seen array until prio_read() uses it too */
+		memset(seen[i], 0xFF, n);
+	}
+
+	ret = btree_root(check_recurse, c, op, seen);
+err:
+	for (int i = 0; i < MAX_CACHES_PER_SET; i++)
+		kfree(seen[i]);
+	return ret;
 }
 
 /* Btree insertion */

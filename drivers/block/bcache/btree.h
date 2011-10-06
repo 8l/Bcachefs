@@ -143,7 +143,7 @@ struct btree *get_bucket(struct cache_set *, struct bkey *,
 
 const char *insert_type(struct btree_op *);
 size_t btree_gc_finish(struct cache_set *);
-int btree_check(struct btree *, struct btree_op *);
+int btree_check(struct cache_set *, struct btree_op *);
 void __btree_mark_key(struct cache_set *, int, struct bkey *);
 
 void btree_read_work(struct work_struct *);

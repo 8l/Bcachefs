@@ -1322,6 +1322,11 @@ config BUILD_DOCSRC
 
 	  Say N if you are unsure.
 
+config DYNAMIC_FAULT
+	bool "Enable dynamic fault support"
+	default n
+	depends on DEBUG_FS
+
 config DYNAMIC_DEBUG
 	bool "Enable dynamic printk() support"
 	default n

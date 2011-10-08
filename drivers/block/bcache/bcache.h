@@ -919,6 +919,15 @@ static inline void cached_dev_put(struct cached_dev *d)
 		cached_dev_detach_finish(d);
 }
 
+static inline bool cached_dev_get(struct cached_dev *d)
+{
+	if (!atomic_inc_not_zero(&d->count))
+		return false;
+
+	smp_mb__after_atomic_inc();
+	return true;
+}
+
 static inline uint8_t gen_after(uint8_t a, uint8_t b)
 {
 	uint8_t r = a - b;

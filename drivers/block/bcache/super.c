@@ -895,7 +895,7 @@ STORE(cached_dev)
 	     attr == &sysfs_writeback_percent ||
 	     attr == &sysfs_writeback) &&
 	    should_refill_dirty(d) &&
-	    atomic_inc_not_zero(&d->count)) {
+	    cached_dev_get(d)) {
 		mutex_unlock(&register_lock);
 		read_dirty_work(&d->refill);
 		return size;
@@ -936,6 +936,8 @@ static void __cached_dev_detach_finish(struct cached_dev *d)
 	char buf[BDEVNAME_SIZE];
 	struct closure cl;
 	closure_init_stack(&cl);
+
+	smp_mb__after_atomic_dec();
 
 	BUG_ON(!atomic_read(&d->closing));
 	BUG_ON(atomic_read(&d->count));
@@ -1200,7 +1202,7 @@ static int bcache_congested(void *data, int bits)
 	if (bdi_congested(&q->backing_dev_info, bits))
 		return 1;
 
-	if (atomic_inc_not_zero(&d->count)) {
+	if (cached_dev_get(d)) {
 		struct cache *ca;
 
 		for_each_cache(ca, d->c) {
@@ -1220,7 +1222,7 @@ static void bcache_unplug(struct request_queue *q)
 
 	blk_unplug(bdev_get_queue(d->bdev));
 
-	if (atomic_inc_not_zero(&d->count)) {
+	if (cached_dev_get(d)) {
 		struct cache *c;
 
 		for_each_cache(c, d->c)
@@ -1545,7 +1547,7 @@ static void cache_set_free(struct kobject *kobj)
 static void cache_set_unregister(struct work_struct *w)
 {
 	struct cache_set *c = container_of(w, struct cache_set, unregister);
-	struct cached_dev *d;
+	struct cached_dev *d, *t;
 
 	mutex_lock(&register_lock);
 
@@ -1554,7 +1556,7 @@ static void cache_set_unregister(struct work_struct *w)
 	for (int i = 0; i < 4; i++)
 		kobject_put(&c->accounting[i]);
 
-	list_for_each_entry(d, &c->devices, list)
+	list_for_each_entry_safe(d, t, &c->devices, list)
 		cached_dev_detach(d);
 
 	kobject_put(&c->kobj);

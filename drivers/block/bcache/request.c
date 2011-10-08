@@ -856,7 +856,7 @@ int bcache_make_request(struct request_queue *q, struct bio *bio)
 	bio->bi_sector += 16;
 
 	if (!bio_has_data(bio) ||
-	    !atomic_inc_not_zero(&d->count))
+	    !cached_dev_get(d))
 		return 1;
 
 	s = do_bio_hook(bio, d);

@@ -227,8 +227,14 @@ struct cached_dev {
 
 	unsigned long		readahead;
 
+	/* Number of writeback bios in flight */
 	atomic_t		in_flight;
+
+	/* Nonzero, and writeback has a refcount (d->count), iff there is dirty
+	 * data in the cache
+	 */
 	atomic_long_t		last_refilled;
+
 	uint64_t		last_found;
 	uint64_t		last_read;
 	struct rb_root		dirty;
@@ -1010,10 +1016,7 @@ void __btree_sort(struct btree *, int, struct bset *,
 		  struct btree_iter *, bool);
 
 bool in_writeback(struct cached_dev *, sector_t, unsigned);
-void maybe_refill_dirty(struct btree_op *);
 void queue_writeback(struct cached_dev *);
-bool should_refill_dirty(struct cached_dev *);
-void read_dirty_work(struct work_struct *);
 
 int get_congested(struct cache_set *);
 void count_io_errors(struct cache *, int, const char *);
@@ -1063,6 +1066,8 @@ void free_open_buckets(struct cache_set *);
 int alloc_open_buckets(struct cache_set *);
 void free_btree_cache(struct cache_set *);
 int alloc_btree_cache(struct cache_set *);
+void bcache_debug_init_cache(struct cache *);
+void bcache_writeback_init_cached_dev(struct cached_dev *);
 
 #ifdef CONFIG_DEBUG_FS
 void bcache_debug_init_cache(struct cache *);
@@ -1072,8 +1077,8 @@ static inline void bcache_debug_init_cache(struct cache *c) {}
 
 void bcache_debug_exit(void);
 int bcache_debug_init(struct kobject *);
-void bcache_dirty_exit(void);
-int bcache_dirty_init(void);
+void bcache_writeback_exit(void);
+int bcache_writeback_init(void);
 void bcache_request_exit(void);
 int bcache_request_init(void);
 void bcache_util_exit(void);

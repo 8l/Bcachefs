@@ -883,20 +883,13 @@ STORE(__cached_dev)
 
 STORE(cached_dev)
 {
-	struct cached_dev *d = container_of(kobj, struct cached_dev, kobj);
 	mutex_lock(&register_lock);
-
 	size = __cached_dev_store(kobj, attr, buf, size);
 
-	if ((attr == &sysfs_writeback_running ||
-	     attr == &sysfs_writeback_percent ||
-	     attr == &sysfs_writeback) &&
-	    should_refill_dirty(d) &&
-	    cached_dev_get(d)) {
-		mutex_unlock(&register_lock);
-		read_dirty_work(&d->refill);
-		return size;
-	}
+	if (attr == &sysfs_writeback_running ||
+	    attr == &sysfs_writeback_percent ||
+	    attr == &sysfs_writeback)
+		queue_writeback(container_of(kobj, struct cached_dev, kobj));
 
 	mutex_unlock(&register_lock);
 	return size;
@@ -975,8 +968,7 @@ static void cached_dev_detach(struct cached_dev *d)
 	if (atomic_xchg(&d->closing, 1))
 		return;
 
-	if (should_refill_dirty(d))
-		queue_writeback(d);
+	queue_writeback(d);
 
 	if (atomic_dec_and_test(&d->count))
 		__cached_dev_detach_finish(d);
@@ -1062,8 +1054,11 @@ found:
 	/* d->c must be set before d->count != 0 */
 	atomic_set(&d->count, 1);
 
-	if (BDEV_STATE(&d->sb) == BDEV_STATE_DIRTY)
+	if (BDEV_STATE(&d->sb) == BDEV_STATE_DIRTY) {
+		atomic_long_set(&d->last_refilled, jiffies ?: 1);
+		atomic_inc(&d->count);
 		queue_writeback(d);
+	}
 
 	cached_dev_run(d);
 
@@ -1142,9 +1137,7 @@ static struct cached_dev *cached_dev_alloc(void)
 		kobject_init(&d->accounting[i].kobj, &accounting_obj);
 
 	INIT_LIST_HEAD(&d->list);
-	INIT_WORK(&d->refill, read_dirty_work);
 	spin_lock_init(&d->lock);
-	init_rwsem(&d->writeback_lock);
 	sema_init(&d->sb_write, 1);
 
 	init_timer(&d->accounting_timer);
@@ -1152,10 +1145,6 @@ static struct cached_dev *cached_dev_alloc(void)
 	d->accounting_timer.data	= (unsigned long) d;
 	d->accounting_timer.function	= scale_accounting;
 	add_timer(&d->accounting_timer);
-
-	d->dirty			= RB_ROOT;
-	d->writeback_running		= true;
-	d->writeback_delay		= 30;
 
 	d->sequential_merge		= true;
 	d->sequential_cutoff		= 4 << 20;
@@ -1167,6 +1156,8 @@ static struct cached_dev *cached_dev_alloc(void)
 		list_add(&j->lru, &d->io_lru);
 		hlist_add_head(&j->hash, d->io_hash + RECENT_IO);
 	}
+
+	bcache_writeback_init_cached_dev(d);
 
 	return d;
 }
@@ -2247,7 +2238,7 @@ static void bcache_exit(void)
 {
 	bcache_debug_exit();
 	bcache_util_exit();
-	bcache_dirty_exit();
+	bcache_writeback_exit();
 	bcache_request_exit();
 	if (bcache_kobj)
 		kobject_put(bcache_kobj);
@@ -2274,7 +2265,7 @@ static int __init bcache_init(void)
 	    !(bcache_kobj = kobject_create_and_add("bcache", fs_kobj)) ||
 	    sysfs_create_files(bcache_kobj, files) ||
 	    bcache_request_init() ||
-	    bcache_dirty_init() ||
+	    bcache_writeback_init() ||
 	    bcache_util_init() ||
 	    bcache_debug_init(bcache_kobj))
 		goto err;

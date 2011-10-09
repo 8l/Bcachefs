@@ -1,7 +1,3 @@
-/* TODO:
- *  Change refcounting so that writeback has a refcount iff there is dirty data
- *  in the cache
- */
 
 #include "bcache.h"
 
@@ -105,6 +101,7 @@ static int btree_refill_dirty(struct btree *b, struct btree_op *op, int *count)
 
 static bool refill_dirty(struct cached_dev *d)
 {
+	bool put = false;
 	int r, count = 0;
 	uint64_t l;
 
@@ -136,8 +133,9 @@ again:
 			}
 
 			atomic_long_set(&d->last_refilled, 0);
+			put = true;
 		} else
-			atomic_long_set(&d->last_refilled, jiffies);
+			atomic_long_set(&d->last_refilled, jiffies ?: 1);
 	}
 
 	if (!RB_EMPTY_ROOT(&d->dirty)) {
@@ -154,6 +152,9 @@ again:
 
 	up_write(&d->writeback_lock);
 	closure_sync(&op.cl);
+
+	if (put)
+		cached_dev_put(d);
 
 	return count;
 }
@@ -179,14 +180,7 @@ bool in_writeback(struct cached_dev *d, sector_t offset, unsigned len)
 	return ret;
 }
 
-void queue_writeback(struct cached_dev *d)
-{
-	atomic_inc(&d->count);
-	if (!queue_work(dirty_wq, &d->refill))
-		cached_dev_put(d);
-}
-
-bool should_refill_dirty(struct cached_dev *d)
+static bool should_refill_dirty(struct cached_dev *d)
 {
 	long t = atomic_long_read(&d->last_refilled);
 	unsigned ms = d->writeback_delay * 1000;
@@ -199,16 +193,10 @@ bool should_refill_dirty(struct cached_dev *d)
 		 atomic_read(&d->closing));
 }
 
-void maybe_refill_dirty(struct btree_op *op)
+void queue_writeback(struct cached_dev *d)
 {
-	if (op->insert_type != INSERT_READ &&
-	    !atomic_read(&op->d->in_flight)) {
-		if (should_refill_dirty(op->d))
-			queue_writeback(op->d);
-
-		if (op->insert_type == INSERT_WRITEBACK)
-			atomic_long_cmpxchg(&op->d->last_refilled, 0, jiffies);
-	}
+	if (should_refill_dirty(d))
+		queue_work(dirty_wq, &d->refill);
 }
 
 static void write_dirty_finish(struct closure *cl)
@@ -298,7 +286,7 @@ static void read_dirty(struct cached_dev *d)
 				continue;
 			}
 
-			goto out;
+			return;
 		}
 
 		if (ptr_stale(d->c, &w->key, 0)) {
@@ -314,7 +302,7 @@ static void read_dirty(struct cached_dev *d)
 				* DIV_ROUND_UP(KEY_SIZE(&w->key), PAGE_SECTORS),
 				GFP_KERNEL);
 		if (!w->io)
-			goto out;
+			return;
 
 		closure_init(&w->io->cl, NULL);
 		w->io->cl.fn		= write_dirty;
@@ -329,33 +317,40 @@ static void read_dirty(struct cached_dev *d)
 		if (bio_alloc_pages(&w->io->bio, GFP_KERNEL)) {
 			kfree(w->io);
 			w->io = NULL;
-			goto out;
+			return;
 		}
 
 		d->last_read = w->key.key;
 		pr_debug("%s", pkey(&w->key));
 
 		closure_bio_submit(&w->io->bio, &w->io->cl, d->c->bio_split);
-		atomic_inc(&d->count);
 		if (atomic_inc_return(&d->in_flight) >= 8)
-			goto out;
+			return;
 
 		spin_lock(&d->lock);
 	}
 
 	spin_unlock(&d->lock);
-out:
-	cached_dev_put(d);
 }
 
-void read_dirty_work(struct work_struct *work)
+static void read_dirty_work(struct work_struct *work)
 {
 	struct cached_dev *d = container_of(work, struct cached_dev, refill);
 	spin_lock(&d->lock);
 	read_dirty(d);
 }
 
-void bcache_dirty_exit(void)
+void bcache_writeback_init_cached_dev(struct cached_dev *d)
+{
+	INIT_WORK(&d->refill, read_dirty_work);
+	init_rwsem(&d->writeback_lock);
+
+	d->dirty			= RB_ROOT;
+	d->writeback_running		= true;
+	d->writeback_delay		= 30;
+}
+
+void bcache_writeback_exit(void)
 {
 	if (dirty_wq)
 		destroy_workqueue(dirty_wq);
@@ -363,11 +358,11 @@ void bcache_dirty_exit(void)
 		kmem_cache_destroy(dirty_cache);
 }
 
-int __init bcache_dirty_init(void)
+int __init bcache_writeback_init(void)
 {
 	if (!(dirty_cache = KMEM_CACHE(dirty, 0)) ||
 	    !(dirty_wq = create_singlethread_workqueue("dirty_wq"))) {
-		bcache_dirty_exit();
+		bcache_writeback_exit();
 		return -ENOMEM;
 	} else
 		return 0;

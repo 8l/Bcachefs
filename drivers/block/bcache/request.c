@@ -394,7 +394,14 @@ static void bio_insert(struct closure *cl)
 		keylist_push(&op->keys);
 
 		if (n == bio) {
-			maybe_refill_dirty(op);
+			queue_writeback(op->d);
+
+			if (op->insert_type == INSERT_WRITEBACK &&
+			    !atomic_long_read(&op->d->last_refilled) &&
+			    !atomic_long_xchg(&op->d->last_refilled,
+					      jiffies ?: 1))
+				atomic_inc(&op->d->count);
+
 			s->bio_done = true;
 		}
 

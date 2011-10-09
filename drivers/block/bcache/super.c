@@ -1087,8 +1087,10 @@ static void cached_dev_free(struct kobject *kobj)
 	if (d->c)
 		kobject_put(&d->c->kobj);
 
-	if (!IS_ERR_OR_NULL(d->bdev))
+	if (!IS_ERR_OR_NULL(d->bdev)) {
+		blk_sync_queue(bdev_get_queue(d->bdev));
 		blkdev_put(d->bdev, FMODE_READ|FMODE_WRITE);
+	}
 
 	list_del(&d->list);
 	kfree(d);
@@ -1520,6 +1522,12 @@ static void cache_set_free(struct kobject *kobj)
 		if (b->write)
 			btree_write(b, true, &op);
 
+	for_each_cache(ca, c)
+		closure_wait_on(&c->bucket_wait, bcache_wq, &op.cl,
+				atomic_read(&ca->prio_written) >= 0);
+
+	btree_journal_wait(c, &op.cl);
+
 	closure_sync(&op.cl);
 
 	cancel_work_sync(&c->gc_work);
@@ -1540,6 +1548,10 @@ static void cache_set_free(struct kobject *kobj)
 		bioset_free(c->bio_split);
 	if (c->search)
 		mempool_destroy(c->search);
+
+	printk(KERN_DEBUG "bcache: Cache set %pU unregistered\n",
+	       c->sb.set_uuid);
+
 	kfree(c);
 	module_put(THIS_MODULE);
 }
@@ -1548,6 +1560,8 @@ static void cache_set_unregister(struct work_struct *w)
 {
 	struct cache_set *c = container_of(w, struct cache_set, unregister);
 	struct cached_dev *d, *t;
+
+	kobject_del(&c->kobj);
 
 	mutex_lock(&register_lock);
 
@@ -1988,8 +2002,6 @@ static void cache_free(struct kobject *kobj)
 
 	lockdep_assert_held(&register_lock);
 
-	/* XXX: wait if prios are being written */
-
 	if (c->set)
 		c->set->cache[c->sb.nr_this_dev] = NULL;
 
@@ -2010,16 +2022,18 @@ static void cache_free(struct kobject *kobj)
 		put_page(c->discard_page);
 
 	free_heap(&c->heap);
-	free_fifo(&c->journal);
-	free_fifo(&c->unused);
 	free_fifo(&c->free_inc);
 	free_fifo(&c->free);
+	free_fifo(&c->unused);
+	free_fifo(&c->journal);
 
 	if (c->sb_bio.bi_inline_vecs[0].bv_page)
 		put_page(c->sb_bio.bi_io_vec[0].bv_page);
 
-	if (!IS_ERR_OR_NULL(c->bdev))
+	if (!IS_ERR_OR_NULL(c->bdev)) {
+		blk_sync_queue(bdev_get_queue(c->bdev));
 		blkdev_put(c->bdev, FMODE_READ|FMODE_WRITE);
+	}
 
 	kfree(c);
 	module_put(THIS_MODULE);

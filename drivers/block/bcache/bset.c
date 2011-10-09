@@ -21,6 +21,57 @@ struct bkey_float {
 #define bset_tree_space(b)						\
 	((PAGE_SIZE << bset_tree_order(b)) / sizeof(struct bkey_float))
 
+/* Keylists */
+
+void keylist_copy(struct keylist *dest, struct keylist *src)
+{
+	*dest = *src;
+
+	if (src->list == src->d) {
+		size_t n = (uint64_t *) src->top - src->d;
+		dest->top = (struct bkey *) &dest->d[n];
+		dest->list = dest->d;
+	}
+}
+
+int keylist_realloc(struct keylist *l, int nptrs)
+{
+	unsigned n = (uint64_t *) l->top - l->list;
+	unsigned size = roundup_pow_of_two(n + 2 + nptrs);
+	uint64_t *new;
+
+	if (size <= KEYLIST_INLINE ||
+	    roundup_pow_of_two(n) == size)
+		return 0;
+
+	new = krealloc(l->list == l->d ? NULL : l->list,
+		       sizeof(uint64_t) * size, GFP_NOIO);
+
+	if (!new)
+		return -ENOMEM;
+
+	if (l->list == l->d)
+		memcpy(new, l->list, sizeof(uint64_t) * KEYLIST_INLINE);
+
+	l->list = new;
+	l->top = (struct bkey *) (&l->list[n]);
+
+	return 0;
+}
+
+struct bkey *keylist_pop(struct keylist *l)
+{
+	if (l->top == (struct bkey *) l->list)
+		return NULL;
+
+	l->top = prev(l->top);
+	BUG_ON((uint64_t *) l->top < l->list);
+
+	return l->top;
+}
+
+/* Pointer validation */
+
 bool __ptr_invalid(struct cache_set *c, int level, const struct bkey *k)
 {
 	if (level && (!KEY_PTRS(k) || !KEY_SIZE(k) || KEY_DIRTY(k)))
@@ -115,6 +166,8 @@ bug:
 		  g->prio, g->gen, g->last_gc, g->mark, g->gc_gen);
 	return true;
 }
+
+/* Key/pointer manipulation */
 
 bool __cut_front(const struct bkey *where, struct bkey *k)
 {

@@ -748,6 +748,7 @@ static inline void keylist_free(struct keylist *l)
 		kfree(l->list);
 }
 
+void keylist_copy(struct keylist *, struct keylist *);
 struct bkey *keylist_pop(struct keylist *);
 int keylist_realloc(struct keylist *, int);
 
@@ -930,6 +931,9 @@ static inline uint8_t gen_after(uint8_t a, uint8_t b)
 #define ptr_stale(c, k, n)					\
 	gen_after(PTR_BUCKET(c, k, n)->gen, PTR_GEN(k, n))
 
+#define bucket_gc_gen(b)	((uint8_t) ((b)->gen - (b)->last_gc))
+#define bucket_disk_gen(b)	((uint8_t) ((b)->gen - (b)->disk_gen))
+
 #define kobj_attribute_write(n, fn)					\
 	static struct kobj_attribute ksysfs_##n = __ATTR(n, S_IWUSR, NULL, fn)
 
@@ -1035,8 +1039,14 @@ int btree_journal_replay(struct cache_set *, struct list_head *,
 void set_new_root(struct btree *);
 struct btree *get_bucket(struct cache_set *, struct bkey *,
 			 int, struct btree_op *);
+uint8_t inc_gen(struct cache *, struct bucket *);
 void rescale_priorities(struct cache_set *, int);
+void bucket_add_unused(struct cache *, struct bucket *);
+bool can_save_prios(struct cache *);
 void free_some_buckets(struct cache *);
+void unpop_bucket(struct cache_set *, struct bkey *);
+int __pop_bucket_set(struct cache_set *, uint16_t,
+		     struct bkey *, int, struct closure *);
 int pop_bucket_set(struct cache_set *, uint16_t,
 		   struct bkey *, int, struct closure *);
 

@@ -8,8 +8,6 @@
 #include <linux/sort.h>
 #include <linux/sysfs.h>
 
-#include "blk-cgroup.h"
-
 static const char bcache_magic[] = {
 	0xc6, 0x85, 0x73, 0xf6, 0x4e, 0x1a, 0x45, 0xca,
 	0x82, 0x65, 0xf5, 0x7f, 0x48, 0xba, 0x6d, 0x81
@@ -2159,117 +2157,6 @@ err:		kobject_put(&c->kobj);
 	return NULL;
 }
 
-/* Cgroup interface */
-
-static struct bcache_cgroup bcache_default_cgroup;
-
-#ifdef CONFIG_CGROUP_BCACHE
-
-struct bcache_cgroup *cgroup_to_bcache(struct cgroup *cgroup)
-{
-	return cgroup
-		? container_of(cgroup_subsys_state(cgroup, bcache_subsys_id),
-			       struct bcache_cgroup, css)
-		: &bcache_default_cgroup;
-}
-
-struct bcache_cgroup *bio_to_cgroup(struct bio *bio)
-{
-	return cgroup_to_bcache(get_bio_cgroup(bio));
-}
-
-static u64 bcache_writethrough_read(struct cgroup *cgrp, struct cftype *cft)
-{
-	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
-	return bcachecg->writethrough;
-}
-
-static int bcache_writethrough_write(struct cgroup *cgrp, struct cftype *cft,
-				     u64 val)
-{
-	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
-	bcachecg->writethrough = val;
-	return 0;
-}
-
-static u64 bcache_writeback_read(struct cgroup *cgrp, struct cftype *cft)
-{
-	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
-	return bcachecg->writeback;
-}
-
-static int bcache_writeback_write(struct cgroup *cgrp, struct cftype *cft,
-				  u64 val)
-{
-	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
-	bcachecg->writeback = val;
-	return 0;
-}
-
-struct cftype bcache_files[] = {
-	{
-		.name		= "writethrough",
-		.read_u64	= bcache_writethrough_read,
-		.write_u64	= bcache_writethrough_write,
-	},
-	{
-		.name		= "writeback",
-		.read_u64	= bcache_writeback_read,
-		.write_u64	= bcache_writeback_write,
-	},
-};
-
-static void init_bcache_cgroup(struct bcache_cgroup *cg)
-{
-	cg->writeback = false;
-	cg->writethrough = false;
-}
-
-static struct cgroup_subsys_state *
-bcachecg_create(struct cgroup_subsys *subsys, struct cgroup *cgroup)
-{
-	struct bcache_cgroup *cg;
-
-	cg = kzalloc(sizeof(*cg), GFP_KERNEL);
-	if (!cg)
-		return ERR_PTR(-ENOMEM);
-	init_bcache_cgroup(cg);
-	return &cg->css;
-}
-
-static void bcachecg_destroy(struct cgroup_subsys *subsys,
-			     struct cgroup *cgroup)
-{
-	struct bcache_cgroup *cg = cgroup_to_bcache(cgroup);
-	free_css_id(&bcache_subsys, &cg->css);
-	kfree(cg);
-}
-
-static int bcachecg_populate(struct cgroup_subsys *subsys,
-			     struct cgroup *cgroup)
-{
-	return cgroup_add_files(cgroup, subsys, bcache_files,
-				ARRAY_SIZE(bcache_files));
-}
-
-struct cgroup_subsys bcache_subsys = {
-	.create		= bcachecg_create,
-	.destroy	= bcachecg_destroy,
-	.populate	= bcachecg_populate,
-	.subsys_id	= bcache_subsys_id,
-	.name		= "bcache",
-	.module		= THIS_MODULE,
-};
-EXPORT_SYMBOL_GPL(bcache_subsys);
-#else
-
-struct bcache_cgroup *bio_to_cgroup(struct bio *bio)
-{
-	return &bcache_default_cgroup;
-}
-
-#endif
-
 /* Global interfaces/init */
 
 static ssize_t register_bcache(struct kobject *, struct kobj_attribute *,
@@ -2335,14 +2222,13 @@ err:
 
 static void bcache_exit(void)
 {
-#ifdef CONFIG_CGROUP_BCACHE
-	cgroup_unload_subsys(&bcache_subsys);
-#endif
 	bcache_debug_exit();
-	kobject_put(bcache_kobj);
 	bcache_dirty_exit();
 	bcache_request_exit();
-	destroy_workqueue(bcache_wq);
+	if (bcache_kobj)
+		kobject_put(bcache_kobj);
+	if (bcache_wq)
+		destroy_workqueue(bcache_wq);
 	unregister_blkdev(bcache_major, "bcache");
 }
 
@@ -2361,25 +2247,16 @@ static int __init bcache_init(void)
 		return bcache_major;
 
 	if (!(bcache_wq = create_workqueue("bcache")) ||
+	    !(bcache_kobj = kobject_create_and_add("bcache", fs_kobj)) ||
+	    sysfs_create_files(bcache_kobj, files) ||
 	    bcache_request_init() ||
 	    bcache_dirty_init() ||
-	    !(bcache_kobj = kobject_create_and_add("bcache", fs_kobj)) ||
-	    sysfs_create_files(bcache_kobj, files))
+	    bcache_debug_init(bcache_kobj))
 		goto err;
 
-	if (bcache_debug_init(bcache_kobj))
-		goto err;
-
-#ifdef CONFIG_CGROUP_BCACHE
-	cgroup_load_subsys(&bcache_subsys);
-	init_bcache_cgroup(&bcache_default_cgroup);
-#endif
 	return 0;
 err:
-	bcache_dirty_exit();
-	bcache_request_exit();
-	if (bcache_wq)
-		destroy_workqueue(bcache_wq);
+	bcache_exit();
 	return -ENOMEM;
 }
 

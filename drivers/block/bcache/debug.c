@@ -378,6 +378,12 @@ static ssize_t store(struct kobject *k, struct kobj_attribute *attr,
 kobj_attribute_rw(latency_warn_ms, show, store);
 #endif
 
+void bcache_debug_exit(void)
+{
+	if (!IS_ERR_OR_NULL(debug))
+		debugfs_remove_recursive(debug);
+}
+
 int __init bcache_debug_init(struct kobject *kobj)
 {
 	int ret = 0;
@@ -395,10 +401,4 @@ int __init bcache_debug_init(struct kobject *kobj)
 
 	debug = debugfs_create_dir("bcache", NULL);
 	return ret;
-}
-
-void bcache_debug_exit(void)
-{
-	if (!IS_ERR_OR_NULL(debug))
-		debugfs_remove_recursive(debug);
 }

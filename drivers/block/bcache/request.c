@@ -1,8 +1,11 @@
 
 #include "bcache.h"
 
+#include <linux/cgroup.h>
 #include <linux/hash.h>
 #include <linux/random.h>
+
+#include "blk-cgroup.h"
 
 #define CUTOFF_CACHE_ADD	95
 #define CUTOFF_CACHE_READA	90
@@ -38,6 +41,121 @@ struct kmem_cache *search_cache;
 static void bio_invalidate(struct search *);
 static void __bio_complete(struct search *);
 static void __request_read(struct closure *);
+
+/* Cgroup interface */
+
+static struct bcache_cgroup {
+	struct cgroup_subsys_state	css;
+	bool				writeback;
+	bool				writethrough;
+} bcache_default_cgroup;
+
+#ifdef CONFIG_CGROUP_BCACHE
+
+static struct bcache_cgroup *cgroup_to_bcache(struct cgroup *cgroup)
+{
+	return cgroup
+		? container_of(cgroup_subsys_state(cgroup, bcache_subsys_id),
+			       struct bcache_cgroup, css)
+		: &bcache_default_cgroup;
+}
+
+static struct bcache_cgroup *bio_to_cgroup(struct bio *bio)
+{
+	return cgroup_to_bcache(get_bio_cgroup(bio));
+}
+
+static u64 bcache_writethrough_read(struct cgroup *cgrp, struct cftype *cft)
+{
+	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
+	return bcachecg->writethrough;
+}
+
+static int bcache_writethrough_write(struct cgroup *cgrp, struct cftype *cft,
+				     u64 val)
+{
+	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
+	bcachecg->writethrough = val;
+	return 0;
+}
+
+static u64 bcache_writeback_read(struct cgroup *cgrp, struct cftype *cft)
+{
+	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
+	return bcachecg->writeback;
+}
+
+static int bcache_writeback_write(struct cgroup *cgrp, struct cftype *cft,
+				  u64 val)
+{
+	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
+	bcachecg->writeback = val;
+	return 0;
+}
+
+struct cftype bcache_files[] = {
+	{
+		.name		= "writethrough",
+		.read_u64	= bcache_writethrough_read,
+		.write_u64	= bcache_writethrough_write,
+	},
+	{
+		.name		= "writeback",
+		.read_u64	= bcache_writeback_read,
+		.write_u64	= bcache_writeback_write,
+	},
+};
+
+static void init_bcache_cgroup(struct bcache_cgroup *cg)
+{
+	cg->writeback = false;
+	cg->writethrough = false;
+}
+
+static struct cgroup_subsys_state *
+bcachecg_create(struct cgroup_subsys *subsys, struct cgroup *cgroup)
+{
+	struct bcache_cgroup *cg;
+
+	cg = kzalloc(sizeof(*cg), GFP_KERNEL);
+	if (!cg)
+		return ERR_PTR(-ENOMEM);
+	init_bcache_cgroup(cg);
+	return &cg->css;
+}
+
+static void bcachecg_destroy(struct cgroup_subsys *subsys,
+			     struct cgroup *cgroup)
+{
+	struct bcache_cgroup *cg = cgroup_to_bcache(cgroup);
+	free_css_id(&bcache_subsys, &cg->css);
+	kfree(cg);
+}
+
+static int bcachecg_populate(struct cgroup_subsys *subsys,
+			     struct cgroup *cgroup)
+{
+	return cgroup_add_files(cgroup, subsys, bcache_files,
+				ARRAY_SIZE(bcache_files));
+}
+
+struct cgroup_subsys bcache_subsys = {
+	.create		= bcachecg_create,
+	.destroy	= bcachecg_destroy,
+	.populate	= bcachecg_populate,
+	.subsys_id	= bcache_subsys_id,
+	.name		= "bcache",
+	.module		= THIS_MODULE,
+};
+EXPORT_SYMBOL_GPL(bcache_subsys);
+#else
+
+static struct bcache_cgroup *bio_to_cgroup(struct bio *bio)
+{
+	return &bcache_default_cgroup;
+}
+
+#endif
 
 static void btree_op_init(struct btree_op *op)
 {
@@ -868,13 +986,22 @@ int bcache_make_request(struct request_queue *q, struct bio *bio)
 
 void bcache_request_exit(void)
 {
+#ifdef CONFIG_CGROUP_BCACHE
+	cgroup_unload_subsys(&bcache_subsys);
+#endif
 	if (search_cache)
 		kmem_cache_destroy(search_cache);
 }
 
-int bcache_request_init(void)
+int __init bcache_request_init(void)
 {
 	search_cache = KMEM_CACHE(search, 0);
-	return search_cache ? 0 : -ENOMEM;
+	if (!search_cache)
+		return -ENOMEM;
 
+#ifdef CONFIG_CGROUP_BCACHE
+	cgroup_load_subsys(&bcache_subsys);
+	init_bcache_cgroup(&bcache_default_cgroup);
+#endif
+	return 0;
 }

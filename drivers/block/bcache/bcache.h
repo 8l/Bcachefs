@@ -3,7 +3,6 @@
 
 #include <linux/bio.h>
 #include <linux/blktrace_api.h>
-#include <linux/cgroup.h>
 #include <linux/kobject.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -488,12 +487,6 @@ struct bbio {
 		uint64_t	_pad[3];
 	};
 	struct bio		bio;
-};
-
-struct bcache_cgroup {
-	struct cgroup_subsys_state	css;
-	bool				writeback;
-	bool				writethrough;
 };
 
 #define btree_prio		USHRT_MAX
@@ -1028,7 +1021,6 @@ int submit_bbio_split(struct bio *, struct cache_set *,
 		      struct bkey *, unsigned);
 
 void cache_read_endio(struct bio *, int);
-struct bcache_cgroup *bio_to_cgroup(struct bio *);
 
 void btree_journal(struct closure *);
 void btree_journal_wait(struct cache_set *, struct closure *);

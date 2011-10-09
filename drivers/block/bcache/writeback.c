@@ -363,7 +363,7 @@ void bcache_dirty_exit(void)
 		kmem_cache_destroy(dirty_cache);
 }
 
-int bcache_dirty_init(void)
+int __init bcache_dirty_init(void)
 {
 	if (!(dirty_cache = KMEM_CACHE(dirty, 0)) ||
 	    !(dirty_wq = create_singlethread_workqueue("dirty_wq"))) {

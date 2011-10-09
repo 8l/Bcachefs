@@ -191,14 +191,18 @@ int alloc_discards(struct cache *ca)
 
 /* Allocation */
 
-void bucket_add_unused(struct cache *c, struct bucket *b)
+bool bucket_add_unused(struct cache *c, struct bucket *b)
 {
 	b->prio = 0;
 
 	if (bucket_gc_gen(b) < 96U &&
 	    bucket_disk_gen(b) < 64U &&
-	    fifo_push(&c->unused, b - c->buckets))
+	    fifo_push(&c->unused, b - c->buckets)) {
 		atomic_inc(&b->pin);
+		return true;
+	}
+
+	return false;
 }
 
 static void invalidate_buckets(struct cache *c)
@@ -231,15 +235,19 @@ static void invalidate_buckets(struct cache *c)
 	c->heap.used = 0;
 
 	for_each_bucket(b, c) {
+		if (b->mark < 0)
+			continue;
+
 		if (atomic_read(&b->pin))
 			pinned++;
 		else if (bucket_gc_gen(b) >= 96U)
 			gc_gen++;
 		else if (bucket_disk_gen(b) >= 64U)
 			disk_gen++;
-		else if (!b->mark)
-			bucket_add_unused(c, b);
-		else if (b->mark > 0) {
+		else if (!b->mark) {
+			if (!bucket_add_unused(c, b))
+				return;
+		} else {
 			if (!heap_full(&c->heap))
 				heap_add(&c->heap, b, bucket_max_cmp);
 			else if (bucket_max_cmp(b, heap_peek(&c->heap))) {
@@ -247,9 +255,6 @@ static void invalidate_buckets(struct cache *c)
 				heap_sift(&c->heap, 0, bucket_max_cmp);
 			}
 		}
-
-		if (fifo_full(&c->unused))
-			return;
 	}
 
 	if (c->heap.used * 2 < c->heap.size) {
@@ -320,6 +325,10 @@ void free_some_buckets(struct cache *c)
 	}
 
 	/* XXX: tracepoint for when c->need_save_prio > 64 */
+
+	if (c->need_save_prio <= 64 &&
+	    fifo_used(&c->unused) > c->unused.size / 2)
+		return;
 
 	if (atomic_read(&c->prio_written) > 0 &&
 	    (fifo_empty(&c->free_inc) ||

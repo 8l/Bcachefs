@@ -2092,9 +2092,9 @@ static struct cache *cache_alloc(struct cache_sb *sb)
 	free = max_t(size_t, free, prio_buckets(c) + 4);
 
 	if (!init_fifo(&c->journal,	JOURNAL_PIN, GFP_KERNEL) ||
-	    !init_fifo(&c->unused,	free, GFP_KERNEL) ||
 	    !init_fifo(&c->free,	free, GFP_KERNEL) ||
 	    !init_fifo(&c->free_inc,	free << 2, GFP_KERNEL) ||
+	    !init_fifo(&c->unused,	free << 2, GFP_KERNEL) ||
 	    !init_heap(&c->heap,	free << 3, GFP_KERNEL) ||
 	    !(c->discard_page	= alloc_page(__GFP_ZERO|GFP_KERNEL)) ||
 	    !(c->buckets	= vmalloc(sizeof(struct bucket) *

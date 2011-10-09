@@ -1041,7 +1041,7 @@ struct btree *get_bucket(struct cache_set *, struct bkey *,
 			 int, struct btree_op *);
 uint8_t inc_gen(struct cache *, struct bucket *);
 void rescale_priorities(struct cache_set *, int);
-void bucket_add_unused(struct cache *, struct bucket *);
+bool bucket_add_unused(struct cache *, struct bucket *);
 bool can_save_prios(struct cache *);
 void free_some_buckets(struct cache *);
 void unpop_bucket(struct cache_set *, struct bkey *);

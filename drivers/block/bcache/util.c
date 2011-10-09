@@ -521,22 +521,23 @@ static const struct file_operations debug_ops = {
 	.release	= single_release
 };
 
-static int __init closure_debug_init(void)
+#endif
+
+void bcache_util_exit(void)
 {
+#ifdef CONFIG_BCACHE_CLOSURE_DEBUG
+	debugfs_remove(debug);
+#endif
+}
+
+int __init bcache_util_init(void)
+{
+#ifdef CONFIG_BCACHE_CLOSURE_DEBUG
 	spin_lock_init(&closure_lock);
 	debug = debugfs_create_file("closures", 0400, NULL, NULL, &debug_ops);
+#endif
 	return 0;
 }
-
-static void closure_debug_exit(void)
-{
-	debugfs_remove(debug);
-}
-
-module_init(closure_debug_init);
-module_exit(closure_debug_exit);
-
-#endif
 
 /*
  * Portions Copyright (c) 1996-2001, PostgreSQL Global Development Group (Any

@@ -1080,3 +1080,5 @@ void bcache_dirty_exit(void);
 int bcache_dirty_init(void);
 void bcache_request_exit(void);
 int bcache_request_init(void);
+void bcache_util_exit(void);
+int __init bcache_util_init(void);

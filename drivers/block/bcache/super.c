@@ -2223,6 +2223,7 @@ err:
 static void bcache_exit(void)
 {
 	bcache_debug_exit();
+	bcache_util_exit();
 	bcache_dirty_exit();
 	bcache_request_exit();
 	if (bcache_kobj)
@@ -2251,6 +2252,7 @@ static int __init bcache_init(void)
 	    sysfs_create_files(bcache_kobj, files) ||
 	    bcache_request_init() ||
 	    bcache_dirty_init() ||
+	    bcache_util_init() ||
 	    bcache_debug_init(bcache_kobj))
 		goto err;
 

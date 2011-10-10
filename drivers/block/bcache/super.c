@@ -508,7 +508,7 @@ static int uuid_write(struct cache_set *c)
 	bkey_copy(&c->uuid_bucket, &k.key);
 	__bkey_put(c, &k.key);
 
-	btree_journal_meta(c, NULL);
+	bcache_journal_meta(c, NULL);
 	return 0;
 }
 
@@ -577,7 +577,7 @@ static void prio_write_journal(struct closure *cl)
 	blktrace_msg(c, "Journalling priorities: " buckets_free(c));
 
 	c->prio_start = c->prio_next[0];
-	btree_journal_meta(c->set, cl);
+	bcache_journal_meta(c->set, cl);
 
 	return_f(cl, prio_write_done);
 }
@@ -1521,7 +1521,7 @@ static void cache_set_free(struct kobject *kobj)
 		closure_wait_on(&c->bucket_wait, bcache_wq, &op.cl,
 				atomic_read(&ca->prio_written) >= 0);
 
-	btree_journal_wait(c, &op.cl);
+	bcache_journal_wait(c, &op.cl);
 
 	closure_sync(&op.cl);
 
@@ -1716,7 +1716,7 @@ static void run_cache_set(struct cache_set *c)
 		struct jset *j;
 
 		err = "cannot allocate memory for journal";
-		if (btree_journal_read(c, &journal, &op))
+		if (bcache_journal_read(c, &journal, &op))
 			goto err;
 
 		printk(KERN_DEBUG "bcache: btree_journal_read() done\n");
@@ -1764,14 +1764,14 @@ static void run_cache_set(struct cache_set *c)
 
 		printk(KERN_DEBUG "bcache: btree_check() done\n");
 
-		btree_journal_mark(c, &journal);
+		bcache_journal_mark(c, &journal);
 
 		btree_gc_finish(c);
 
 		c->journal.cur = c->journal.w;
 		if (!fifo_full(&c->journal.pin))
-			btree_journal_next(c);
-		btree_journal_replay(c, &journal, &op);
+			bcache_journal_next(c);
+		bcache_journal_replay(c, &journal, &op);
 	} else {
 		printk(KERN_NOTICE "bcache: invalidating existing data\n");
 		/* Don't want invalidate_buckets() to queue a gc yet */
@@ -1815,8 +1815,8 @@ static void run_cache_set(struct cache_set *c)
 		SET_CACHE_SYNC(&c->sb, true);
 
 		c->journal.cur = c->journal.w;
-		btree_journal_next(c);
-		btree_journal_meta(c, &op.cl);
+		bcache_journal_next(c);
+		bcache_journal_meta(c, &op.cl);
 		mutex_unlock(&c->gc_lock);
 	}
 

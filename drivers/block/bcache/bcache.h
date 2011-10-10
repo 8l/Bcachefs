@@ -373,8 +373,11 @@ struct cache_set {
 
 	struct work_struct	gc_work;
 	struct mutex		gc_lock;
+	/* Where in the btree gc currently is */
 	struct bkey		gc_done;
+	/* Protected by bucket_lock */
 	int			gc_mark_valid;
+	/* Counts how many sectors bio_insert has added to the cache */
 	atomic_t		sectors_to_gc;
 
 	struct btree		*root;
@@ -964,8 +967,9 @@ void check_key_order_msg(struct btree *, struct bset *, const char *, ...);
 
 #endif
 
-void btree_iter_push(struct btree_iter *, struct bkey *, struct bkey *);
+struct bkey *next_recurse_key(struct btree *, struct bkey *);
 struct bkey *btree_iter_next(struct btree_iter *);
+void btree_iter_push(struct btree_iter *, struct bkey *, struct bkey *);
 struct bkey *__btree_iter_init(struct btree *, struct btree_iter *,
 			       struct bkey *, int);
 
@@ -982,20 +986,15 @@ struct bkey *__bset_search(struct btree *, unsigned, const struct bkey *);
 
 int bset_print_stats(struct cache_set *, char *);
 
-struct bkey *next_recurse_key(struct btree *, struct bkey *);
-
-bool bkey_try_merge(struct btree *, struct bkey *, struct bkey *);
-
 const char *insert_type(struct btree_op *);
 void btree_op_init_stack(struct btree_op *);
 void bcache_debug_init_cache(struct cache *);
-int get_congested(struct cache_set *);
 size_t btree_gc_finish(struct cache_set *);
 void btree_gc(struct work_struct *);
 int btree_check(struct btree *, struct btree_op *);
 void __btree_mark_key(struct cache_set *, int, struct bkey *);
 
-void fill_bucket_work(struct work_struct *);
+void btree_read_work(struct work_struct *);
 struct btree *btree_alloc(struct cache_set *, int, struct closure *);
 bool should_split(struct btree *);
 bool btree_insert_keys(struct btree *, struct btree_op *);
@@ -1004,11 +1003,11 @@ void btree_insert_async(struct closure *);
 int btree_search_recurse(struct btree *, struct btree_op *,
 			 struct bio *, uint64_t *);
 
+bool bkey_try_merge(struct btree *, struct bkey *, struct bkey *);
+void btree_sort_lazy(struct btree *);
+void btree_sort(struct btree *, int, struct bset *);
 void __btree_sort(struct btree *, int, struct bset *,
 		  struct btree_iter *, bool);
-
-void btree_sort(struct btree *, int, struct bset *);
-void btree_sort_lazy(struct btree *);
 
 bool in_writeback(struct cached_dev *, sector_t, unsigned);
 void maybe_refill_dirty(struct btree_op *);
@@ -1016,6 +1015,7 @@ void queue_writeback(struct cached_dev *);
 bool should_refill_dirty(struct cached_dev *);
 void read_dirty_work(struct work_struct *);
 
+int get_congested(struct cache_set *);
 void count_io_errors(struct cache *, int, const char *);
 void bcache_endio(struct cache_set *, struct bio *, int, const char *);
 struct bio *bbio_kmalloc(gfp_t, int);
@@ -1025,16 +1025,6 @@ int submit_bbio_split(struct bio *, struct cache_set *,
 		      struct bkey *, unsigned);
 
 void cache_read_endio(struct bio *, int);
-
-void btree_journal(struct closure *);
-void btree_journal_wait(struct cache_set *, struct closure *);
-void btree_journal_next(struct cache_set *);
-void btree_journal_mark(struct cache_set *, struct list_head *);
-void btree_journal_meta(struct cache_set *, struct closure *);
-int btree_journal_read(struct cache_set *, struct list_head *,
-		       struct btree_op *);
-int btree_journal_replay(struct cache_set *, struct list_head *,
-			 struct btree_op *);
 
 void set_new_root(struct btree *);
 struct btree *get_bucket(struct cache_set *, struct bkey *,

@@ -331,7 +331,7 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 
 		btree_sort(b, 0, NULL);
 		fill->written = 0;
-		fill_bucket_work(&fill->work.work);
+		btree_read_work(&fill->work.work);
 
 		if (b->data->keys != fill->data->keys ||
 		    memcmp(b->data->start,

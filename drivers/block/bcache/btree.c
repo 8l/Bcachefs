@@ -332,7 +332,7 @@ static void btree_bio_init(struct btree *b)
 	b->bio.bi_rw	 = REQ_META;
 }
 
-void fill_bucket_work(struct work_struct *w)
+void btree_read_work(struct work_struct *w)
 {
 	struct btree *b = container_of(to_delayed_work(w), struct btree, work);
 	struct bset *i = b->data;
@@ -395,7 +395,7 @@ void fill_bucket_work(struct work_struct *w)
 
 	__btree_sort(b, 0, NULL, iter, true);
 
-	pr_latency(b->expires, "fill_bucket");
+	pr_latency(b->expires, "btree_read");
 
 	smp_wmb(); /* b->nread is our write lock */
 	atomic_set(&b->nread, 1);
@@ -413,7 +413,7 @@ err:		atomic_set(&b->nread, -1);
 	closure_run_wait(&b->wait, bcache_wq);
 }
 
-static void fill_bucket_endio(struct bio *bio, int error)
+static void btree_read_endio(struct bio *bio, int error)
 {
 	struct btree *b = bio->bi_private;
 	bio_put(bio);
@@ -426,7 +426,7 @@ static void fill_bucket_endio(struct bio *bio, int error)
 	if (!atomic_dec_and_test(&b->io))
 		return;
 
-	PREPARE_DELAYED_WORK(&b->work, fill_bucket_work);
+	PREPARE_DELAYED_WORK(&b->work, btree_read_work);
 
 	if (atomic_read(&b->nread) == -1) {
 		atomic_set(&b->io, -1);
@@ -435,7 +435,7 @@ static void fill_bucket_endio(struct bio *bio, int error)
 		BUG_ON(!schedule_work(&b->work.work));
 }
 
-static void fill_bucket(struct btree *b)
+static void btree_read(struct btree *b)
 {
 	BUG_ON(b->nsets || b->written);
 	BUG_ON(atomic_xchg(&b->io, 1) != -1);
@@ -446,7 +446,7 @@ static void fill_bucket(struct btree *b)
 	btree_bio_init(b);
 	b->bio.bi_rw	       |= READ_SYNC;
 	b->bio.bi_size		= KEY_SIZE(&b->key) << 9;
-	b->bio.bi_end_io	= fill_bucket_endio;
+	b->bio.bi_end_io	= btree_read_endio;
 	b->bio.bi_private	= b;
 
 	bio_map(&b->bio, b->data);
@@ -989,7 +989,7 @@ retry:
 			return b;
 
 		reset_bucket(b, level);
-		fill_bucket(b);
+		btree_read(b);
 
 		if (!write)
 			downgrade_write(&b->lock);
@@ -1452,7 +1452,7 @@ void btree_gc(struct work_struct *w)
 	}
 
 	/* Possibly wait for new UUIDs or whatever to hit disk */
-	btree_journal_wait(c, &op.cl);
+	bcache_journal_wait(c, &op.cl);
 	closure_sync(&op.cl);
 
 	available = btree_gc_finish(c);
@@ -1472,6 +1472,49 @@ void btree_gc(struct work_struct *w)
 out:
 	mutex_unlock(&c->gc_lock);
 	closure_run_wait(&c->bucket_wait, bcache_wq);
+}
+
+/* Initial partial gc */
+
+int btree_check(struct btree *b, struct btree_op *op)
+{
+	int ret;
+	struct bkey *k;
+
+	for_each_key_filter(b, k, ptr_invalid) {
+		for (unsigned i = 0; i < KEY_PTRS(k); i++) {
+			struct bucket *g = PTR_BUCKET(b->c, k, i);
+
+			if (!ptr_stale(b->c, k, i)) {
+				g->gen = PTR_GEN(k, i);
+
+				if (b->level)
+					g->prio = btree_prio;
+				else if (g->prio == btree_prio)
+					g->prio = initial_prio;
+			}
+		}
+
+		btree_mark_key(b, k);
+	}
+
+	if (b->level) {
+		k = next_recurse_key(b, &ZERO_KEY);
+
+		while (k) {
+			struct bkey *p = next_recurse_key(b, k);
+			if (p)
+				get_bucket(b->c, p, b->level - 1, NULL);
+
+			ret = btree(check, k, b, op);
+			if (ret)
+				return ret;
+
+			k = p;
+		}
+	}
+
+	return 0;
 }
 
 /* Btree insertion */
@@ -1928,7 +1971,7 @@ void set_new_root(struct btree *b)
 	b->c->root = b;
 	__bkey_put(b->c, &b->key);
 
-	btree_journal_meta(b->c, NULL);
+	bcache_journal_meta(b->c, NULL);
 	pr_debug("%s for %pf", pbtree(b), __builtin_return_address(0));
 }
 
@@ -2067,48 +2110,5 @@ int btree_search_recurse(struct btree *b, struct btree_op *op,
 
 	btree_bug_on(ret == -1, b, "no key to recurse on at level %i/%i",
 		     b->level, b->c->root->level);
-	return 0;
-}
-
-/* Initial partial gc */
-
-int btree_check(struct btree *b, struct btree_op *op)
-{
-	int ret;
-	struct bkey *k;
-
-	for_each_key_filter(b, k, ptr_invalid) {
-		for (unsigned i = 0; i < KEY_PTRS(k); i++) {
-			struct bucket *g = PTR_BUCKET(b->c, k, i);
-
-			if (!ptr_stale(b->c, k, i)) {
-				g->gen = PTR_GEN(k, i);
-
-				if (b->level)
-					g->prio = btree_prio;
-				else if (g->prio == btree_prio)
-					g->prio = initial_prio;
-			}
-		}
-
-		btree_mark_key(b, k);
-	}
-
-	if (b->level) {
-		k = next_recurse_key(b, &ZERO_KEY);
-
-		while (k) {
-			struct bkey *p = next_recurse_key(b, k);
-			if (p)
-				get_bucket(b->c, p, b->level - 1, NULL);
-
-			ret = btree(check, k, b, op);
-			if (ret)
-				return ret;
-
-			k = p;
-		}
-	}
-
 	return 0;
 }

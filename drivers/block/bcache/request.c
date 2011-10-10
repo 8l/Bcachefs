@@ -365,7 +365,7 @@ static void bio_insert(struct closure *cl)
 		/* 1 for the device pointer and 1 for the chksum */
 		if (keylist_realloc(&op->keys,
 				    1 + (op->d->data_csum ? 1 : 0)))
-			return_f(cl, btree_journal);
+			return_f(cl, bcache_journal);
 
 		k = op->keys.top;
 
@@ -396,7 +396,7 @@ static void bio_insert(struct closure *cl)
 			s->bio_done = true;
 		}
 
-		cl->fn = btree_journal;
+		cl->fn = bcache_journal;
 		n->bi_rw |= REQ_WRITE;
 
 		submit_bbio(n, op->d->c, k, 0);
@@ -444,7 +444,7 @@ static void bio_invalidate(struct search *s)
 	pr_debug("invalidating %i sectors from %llu",
 		 bio_sectors(bio), (uint64_t) bio->bi_sector);
 
-	s->op.cl.fn = btree_journal;
+	s->op.cl.fn = bcache_journal;
 
 	while (bio_sectors(bio)) {
 		unsigned len = min(bio_sectors(bio), 1U << 14);

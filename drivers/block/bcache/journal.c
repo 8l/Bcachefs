@@ -3,15 +3,15 @@
 
 /* Journalling */
 
-static void btree_journal_read_endio(struct bio *bio, int error)
+static void journal_read_endio(struct bio *bio, int error)
 {
 	struct closure *cl = bio->bi_private;
 	bio_put(bio);
 	closure_put(cl, bcache_wq);
 }
 
-static int btree_journal_read_bucket(struct cache *ca, struct list_head *list,
-				     struct btree_op *op, sector_t bucket)
+static int journal_read_bucket(struct cache *ca, struct list_head *list,
+			       struct btree_op *op, sector_t bucket)
 {
 	struct bio *bio = &ca->journal_bio;
 	struct journal_replay *i;
@@ -32,7 +32,7 @@ reread:		left = ca->sb.bucket_size - offset;
 		bio->bi_rw	= READ;
 		bio->bi_size	= len << 9;
 
-		bio->bi_end_io	= btree_journal_read_endio;
+		bio->bi_end_io	= journal_read_endio;
 		bio->bi_private = &op->cl;
 		bio_map(bio, data);
 
@@ -106,12 +106,12 @@ next_set:
 	return ret;
 }
 
-int btree_journal_read(struct cache_set *c, struct list_head *list,
-		       struct btree_op *op)
+int bcache_journal_read(struct cache_set *c, struct list_head *list,
+			struct btree_op *op)
 {
 #define read_bucket(b)							\
 	({								\
-		int ret = btree_journal_read_bucket(ca, list, op, b);	\
+		int ret = journal_read_bucket(ca, list, op, b);		\
 		__set_bit(b, bitmap);					\
 		if (ret < 0)						\
 			goto err;					\
@@ -190,7 +190,7 @@ err:
 	return 0;
 }
 
-void btree_journal_mark(struct cache_set *c, struct list_head *list)
+void bcache_journal_mark(struct cache_set *c, struct list_head *list)
 {
 	atomic_t p = { 0 };
 	struct journal_replay *i =
@@ -223,8 +223,8 @@ void btree_journal_mark(struct cache_set *c, struct list_head *list)
 	}
 }
 
-int btree_journal_replay(struct cache_set *s, struct list_head *list,
-			 struct btree_op *op)
+int bcache_journal_replay(struct cache_set *s, struct list_head *list,
+			  struct btree_op *op)
 {
 	int ret = 0, keys = 0, entries = 0;
 	struct journal_replay *i =
@@ -278,7 +278,7 @@ err:
 	return ret;
 }
 
-void btree_flush_write(struct cache_set *s)
+static void btree_flush_write(struct cache_set *s)
 {
 	struct btree *b, *i;
 
@@ -338,7 +338,7 @@ found:
 	pr_debug("");
 }
 
-static void btree_journal_alloc(struct cache_set *s)
+static void journal_alloc(struct cache_set *s)
 {
 	struct journal_write *w = s->journal.cur;
 	struct cache *c;
@@ -378,9 +378,9 @@ static void btree_journal_alloc(struct cache_set *s)
 
 #define last_seq(j)	((j)->seq - fifo_used(&(j)->pin) + 1)
 
-static void btree_journal_reclaim(struct cache_set *s)
+static void journal_reclaim(struct cache_set *s)
 {
-	struct cache *c;
+	struct cache *ca;
 	struct journal_seq j;
 	atomic_t p;
 	bool popped = false, full = journal_full(s);
@@ -397,23 +397,23 @@ static void btree_journal_reclaim(struct cache_set *s)
 	if (full)
 		pr_debug("journal_pin popped");
 
-	for_each_cache(c, s)
-		while (!fifo_empty(&c->journal) &&
-		       fifo_front(&c->journal).sector != c->journal_start &&
-		       fifo_front(&c->journal).seq < last_seq(&s->journal)) {
-			fifo_pop(&c->journal, j);
-			c->journal_end = j.sector;
+	for_each_cache(ca, s)
+		while (!fifo_empty(&ca->journal) &&
+		       fifo_front(&ca->journal).sector != ca->journal_start &&
+		       fifo_front(&ca->journal).seq < last_seq(&s->journal)) {
+			fifo_pop(&ca->journal, j);
+			ca->journal_end = j.sector;
 		}
 
 	if (!KEY_PTRS(&s->journal.cur->key)) {
 		pr_debug("allocating");
-		btree_journal_alloc(s);
+		journal_alloc(s);
 	}
 
 	closure_run_wait(&s->journal.wait, bcache_wq);
 }
 
-static void __btree_journal_meta(struct cache_set *c)
+static void __journal_meta(struct cache_set *c)
 {
 	struct cache *ca;
 	struct journal_write *w = c->journal.cur;
@@ -429,7 +429,7 @@ static void __btree_journal_meta(struct cache_set *c)
 	w->data->magic = jset_magic(c);
 }
 
-void btree_journal_next(struct cache_set *s)
+void bcache_journal_next(struct cache_set *s)
 {
 	struct journal_write *w = s->journal.cur;
 	atomic_t p = { 0 };
@@ -457,15 +457,15 @@ void btree_journal_next(struct cache_set *s)
 	w->data->seq		= ++s->journal.seq;
 	w->data->last_seq	= last_seq(&s->journal);
 
-	__btree_journal_meta(s);
+	__journal_meta(s);
 
 	if (fifo_full(&s->journal.pin))
 		pr_debug("journal_pin full (%zu)", fifo_used(&s->journal.pin));
 
-	btree_journal_alloc(s);
+	journal_alloc(s);
 }
 
-static void btree_journal_endio(struct bio *bio, int error)
+static void journal_write_endio(struct bio *bio, int error)
 {
 	struct journal_write *w = bio->bi_private;
 	bio_put(bio);
@@ -480,24 +480,24 @@ static void btree_journal_endio(struct bio *bio, int error)
 	schedule_work(&w->c->journal.work);
 }
 
-static void btree_journal_write(struct cache_set *s, struct journal_write *w)
+static void journal_write(struct cache_set *s, struct journal_write *w)
 {
 	w->data->csum = csum_set(w->data);
 
 	for (unsigned i = 0; i < KEY_PTRS(&w->key); i++) {
-		struct cache *c = PTR_CACHE(s, &w->key, i);
-		struct bio *bio = &c->journal_bio;
+		struct cache *ca = PTR_CACHE(s, &w->key, i);
+		struct bio *bio = &ca->journal_bio;
 
-		atomic_long_add(set_blocks(w->data, s) * c->sb.block_size,
-				&c->meta_sectors_written);
+		atomic_long_add(set_blocks(w->data, s) * ca->sb.block_size,
+				&ca->meta_sectors_written);
 
 		bio_reset(bio);
 		bio->bi_sector	= PTR_OFFSET(&w->key, i);
-		bio->bi_bdev	= c->bdev;
+		bio->bi_bdev	= ca->bdev;
 		bio->bi_rw	= REQ_WRITE|REQ_SYNC|REQ_META;
 		bio->bi_size	= set_blocks(w->data, s) * block_bytes(s);
 
-		bio->bi_end_io	= btree_journal_endio;
+		bio->bi_end_io	= journal_write_endio;
 		bio->bi_private = w;
 		bio_map(bio, w->data);
 
@@ -507,39 +507,39 @@ static void btree_journal_write(struct cache_set *s, struct journal_write *w)
 	}
 }
 
-static void __btree_journal_try_write(struct cache_set *c, bool noflush)
+static void __journal_try_write(struct cache_set *c, bool noflush)
 {
 	struct journal_write *w = c->journal.cur;
 
 	if (!w->need_write)
 		spin_unlock(&c->journal.lock);
 	else if (journal_full(c)) {
-		btree_journal_reclaim(c);
+		journal_reclaim(c);
 		spin_unlock(&c->journal.lock);
 
 		if (!noflush)
 			btree_flush_write(c);
 		schedule_work(&c->journal.work);
 	} else if (atomic_cmpxchg(&c->journal.io, -1, 0) == -1) {
-		btree_journal_next(c);
+		bcache_journal_next(c);
 		spin_unlock(&c->journal.lock);
-		btree_journal_write(c, w);
+		journal_write(c, w);
 	} else
 		spin_unlock(&c->journal.lock);
 }
 
-#define btree_journal_try_write(c)	__btree_journal_try_write(c, false)
+#define journal_try_write(c)	__journal_try_write(c, false)
 
-static void btree_journal_work(struct work_struct *work)
+static void journal_work(struct work_struct *work)
 {
 	struct journal *j = container_of(work, struct journal, work);
 	struct cache_set *c = container_of(j, struct cache_set, journal);
 
 	spin_lock(&c->journal.lock);
-	btree_journal_try_write(c);
+	journal_try_write(c);
 }
 
-void btree_journal_wait(struct cache_set *c, struct closure *cl)
+void bcache_journal_wait(struct cache_set *c, struct closure *cl)
 {
 	struct journal_write *w;
 
@@ -548,10 +548,10 @@ void btree_journal_wait(struct cache_set *c, struct closure *cl)
 	if (w->need_write)
 		BUG_ON(!closure_wait(&w->wait, cl));
 
-	btree_journal_try_write(c);
+	journal_try_write(c);
 }
 
-void btree_journal_meta(struct cache_set *c, struct closure *cl)
+void bcache_journal_meta(struct cache_set *c, struct closure *cl)
 {
 	if (CACHE_SYNC(&c->sb)) {
 		spin_lock(&c->journal.lock);
@@ -560,12 +560,12 @@ void btree_journal_meta(struct cache_set *c, struct closure *cl)
 		if (cl)
 			BUG_ON(!closure_wait(&c->journal.cur->wait, cl));
 
-		__btree_journal_meta(c);
-		__btree_journal_try_write(c, true);
+		__journal_meta(c);
+		__journal_try_write(c, true);
 	}
 }
 
-void btree_journal(struct closure *cl)
+void bcache_journal(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 	struct cache_set *c = op->d->c;
@@ -578,7 +578,7 @@ void btree_journal(struct closure *cl)
 
 	spin_lock(&c->journal.lock);
 
-	btree_journal_reclaim(c);
+	journal_reclaim(c);
 
 	if (journal_full(c)) {
 		/* XXX: tracepoint */
@@ -586,7 +586,7 @@ void btree_journal(struct closure *cl)
 		spin_unlock(&c->journal.lock);
 
 		btree_flush_write(c);
-		return_f(cl, btree_journal);
+		return_f(cl, bcache_journal);
 	}
 
 	w = c->journal.cur;
@@ -597,8 +597,8 @@ void btree_journal(struct closure *cl)
 		/* XXX: tracepoint */
 		BUG_ON(!closure_wait(&w->wait, cl));
 
-		btree_journal_try_write(c);
-		return_f(cl, btree_journal);
+		journal_try_write(c);
+		return_f(cl, bcache_journal);
 	}
 
 	memcpy(end(w->data), op->keys.list, n * sizeof(uint64_t));
@@ -613,7 +613,7 @@ void btree_journal(struct closure *cl)
 	 */
 	BUG_ON(!closure_wait(&w->wait, cl->parent));
 
-	btree_journal_try_write(c);
+	journal_try_write(c);
 out:
 	btree_insert_async(cl);
 }
@@ -629,7 +629,7 @@ int alloc_journal(struct cache_set *c)
 {
 	struct journal *j = &c->journal;
 
-	INIT_WORK(&j->work, btree_journal_work);
+	INIT_WORK(&j->work, journal_work);
 	atomic_set(&j->io, -1);
 	spin_lock_init(&j->lock);
 

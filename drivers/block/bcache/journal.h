@@ -71,3 +71,17 @@ struct journal {
 	 fifo_idx(&(c)->journal.pin, (r)->journal))
 
 #define JOURNAL_PIN	20000
+
+struct closure;
+struct cache_set;
+struct btree_op;
+
+void bcache_journal(struct closure *);
+void bcache_journal_wait(struct cache_set *, struct closure *);
+void bcache_journal_next(struct cache_set *);
+void bcache_journal_mark(struct cache_set *, struct list_head *);
+void bcache_journal_meta(struct cache_set *, struct closure *);
+int bcache_journal_read(struct cache_set *, struct list_head *,
+			struct btree_op *);
+int bcache_journal_replay(struct cache_set *, struct list_head *,
+			  struct btree_op *);

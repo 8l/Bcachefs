@@ -563,11 +563,11 @@ PTR_FIELD(PTR_GEN,		0,  8)
 #define PTR(gen, offset, dev)						\
 	((((uint64_t) dev) << 51) | ((uint64_t) offset) << 8 | gen)
 
-#define sector_to_bucket(c, s)	((long) (s >> c->bucket_bits))
-#define bucket_to_sector(c, b)	(((sector_t) (b)) << c->bucket_bits)
+#define sector_to_bucket(c, s)	((long) ((s) >> (c)->bucket_bits))
+#define bucket_to_sector(c, b)	(((sector_t) (b)) << (c)->bucket_bits)
 #define bucket_remainder(c, b)	((b) & ((c)->sb.bucket_size - 1))
 
-#define PTR_CACHE(c, k, n)	(c->cache[PTR_DEV(k, n)])
+#define PTR_CACHE(c, k, n)	((c)->cache[PTR_DEV(k, n)])
 #define PTR_BUCKET_NR(c, k, n)	sector_to_bucket(c, PTR_OFFSET(k, n))
 
 #define PTR_BUCKET(c, k, n)						\
@@ -576,10 +576,10 @@ PTR_FIELD(PTR_GEN,		0,  8)
 /* Btree key macros */
 
 #define KEY_HEADER(len, dev)						\
-	(((uint64_t) 1 << 63) | ((uint64_t) (len) << 20) | dev)
+	(((uint64_t) 1 << 63) | ((uint64_t) (len) << 20) | (dev))
 
 #define KEY(dev, sector, len)	(struct bkey)				\
-	{ .header = KEY_HEADER(len, dev), .key = sector}
+	{ .header = KEY_HEADER(len, dev), .key = (sector) }
 
 #define KEY_START(k)		((k)->key - KEY_SIZE(k))
 #define START_KEY(k)		KEY(KEY_DEV(k), KEY_START(k), 0)
@@ -608,15 +608,15 @@ PTR_FIELD(PTR_GEN,		0,  8)
 
 /* Looping macros */
 
-#define for_each_cache(c, s)						\
-	for (int _i = 0; c = s->cache[_i], _i < s->sb.nr_in_set; _i++)
+#define for_each_cache(ca, cs)						\
+	for (int _i = 0; ca = cs->cache[_i], _i < (cs)->sb.nr_in_set; _i++)
 
-#define for_each_bucket(b, c)						\
-	for (b = (c)->buckets + (c)->sb.first_bucket;			\
-	     b < (c)->buckets + (c)->sb.nbuckets; b++)
+#define for_each_bucket(b, ca)						\
+	for (b = (ca)->buckets + (ca)->sb.first_bucket;			\
+	     b < (ca)->buckets + (ca)->sb.nbuckets; b++)
 
 #define for_each_sorted_set_start(b, i, start)				\
-	for (int _i = start; i = b->sets[_i], _i <= b->nsets; _i++)
+	for (int _i = start; i = (b)->sets[_i], _i <= (b)->nsets; _i++)
 
 #define for_each_sorted_set(b, i)	for_each_sorted_set_start(b, i, 0)
 
@@ -630,10 +630,10 @@ PTR_FIELD(PTR_GEN,		0,  8)
 #define all_keys(b, k)		0
 
 #define for_each_key_after_filter(b, k, search, filter)			\
-	for (int _i = 0; _i <= b->nsets; _i++)				\
+	for (int _i = 0; _i <= (b)->nsets; _i++)			\
 		for (k = bset_search(b, _i, search);			\
-		     (k = bkey_filter(b, b->sets[_i], k, filter))	\
-			< end(b->sets[_i]);				\
+		     (k = bkey_filter(b, (b)->sets[_i], k, filter))	\
+			< end((b)->sets[_i]);				\
 		     k = next(k))
 
 #define for_each_key_filter(b, k, filter)				\

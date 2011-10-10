@@ -1659,7 +1659,6 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	mutex_init(&c->sb_write);
 
 	INIT_WORK(&c->unregister, cache_set_unregister);
-	INIT_WORK(&c->gc_work, btree_gc);
 	INIT_LIST_HEAD(&c->devices);
 	INIT_LIST_HEAD(&c->lru);
 	INIT_LIST_HEAD(&c->freed);

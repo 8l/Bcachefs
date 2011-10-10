@@ -860,6 +860,15 @@ static inline void __rw_unlock(bool w, struct btree *b, bool nowrite)
 	_r;								\
 })
 
+static inline bool should_split(struct btree *b)
+{
+	struct bset *i = write_block(b);
+	return b->written >= btree_blocks(b) ||
+		(i->seq == b->data->seq &&
+		 b->written + __set_blocks(i, i->keys + 15, b->c)
+		 > btree_blocks(b));
+}
+
 /* Blktrace macros */
 
 #define blktrace_msg(c, fmt, ...)					\
@@ -996,13 +1005,11 @@ int bset_print_stats(struct cache_set *, char *);
 const char *insert_type(struct btree_op *);
 void btree_op_init_stack(struct btree_op *);
 size_t btree_gc_finish(struct cache_set *);
-void btree_gc(struct work_struct *);
 int btree_check(struct btree *, struct btree_op *);
 void __btree_mark_key(struct cache_set *, int, struct bkey *);
 
 void btree_read_work(struct work_struct *);
 struct btree *btree_alloc(struct cache_set *, int, struct closure *);
-bool should_split(struct btree *);
 bool btree_insert_keys(struct btree *, struct btree_op *);
 int btree_insert(struct btree_op *, struct cache_set *);
 void btree_insert_async(struct closure *);

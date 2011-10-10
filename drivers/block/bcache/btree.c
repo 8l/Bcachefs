@@ -114,6 +114,8 @@ const char *insert_type(struct btree_op *op)
 #define PTR_HASH(c, k)							\
 	(((k)->ptr[0] >> c->bucket_bits) | PTR_GEN(k, 0))
 
+static void btree_gc_work(struct work_struct *);
+
 /* Btree key manipulation */
 
 static void bkey_copy_single_ptr(struct bkey *dest,
@@ -839,6 +841,8 @@ void free_btree_cache(struct cache_set *c)
 
 int alloc_btree_cache(struct cache_set *c)
 {
+	INIT_WORK(&c->gc_work, btree_gc_work);
+
 	for (int i = 0; i < btree_reserve(c); i++) {
 		struct btree *b = __alloc_bucket(c, GFP_KERNEL);
 		if (!b)
@@ -1403,27 +1407,24 @@ size_t btree_gc_finish(struct cache_set *c)
 	return available;
 }
 
-void btree_gc(struct work_struct *w)
+static void btree_gc(struct cache_set *c)
 {
-	struct cache_set *c = container_of(w, struct cache_set, gc_work);
 	int ret;
 	unsigned long available, time = jiffies;
-	struct gc_stat stats;
 	struct bucket *b;
 	struct cache *ca;
 
+	struct gc_stat stats;
 	struct closure writes;
 	struct btree_op op;
+
+	memset(&stats, 0, sizeof(struct gc_stat));
 	closure_init_stack(&writes);
 	btree_op_init_stack(&op);
 	op.lock = SHRT_MAX;
 
-	memset(&stats, 0, sizeof(struct gc_stat));
-
+	lockdep_assert_held(&c->gc_lock);
 	blktrace_msg_all(c, "Starting gc");
-
-	if (!mutex_trylock(&c->gc_lock))
-		return;
 
 	spin_lock(&c->bucket_lock);
 	for_each_cache(ca, c)
@@ -1470,8 +1471,17 @@ void btree_gc(struct work_struct *w)
 	memcpy(&c->gc_stats, &stats, sizeof(struct gc_stat));
 	blktrace_msg_all(c, "Finished gc");
 out:
-	mutex_unlock(&c->gc_lock);
 	closure_run_wait(&c->bucket_wait, bcache_wq);
+}
+
+static void btree_gc_work(struct work_struct *w)
+{
+	struct cache_set *c = container_of(w, struct cache_set, gc_work);
+	if (!mutex_trylock(&c->gc_lock))
+		return;
+
+	btree_gc(c);
+	mutex_unlock(&c->gc_lock);
 }
 
 /* Initial partial gc */
@@ -1518,15 +1528,6 @@ int btree_check(struct btree *b, struct btree_op *op)
 }
 
 /* Btree insertion */
-
-bool should_split(struct btree *b)
-{
-	struct bset *i = write_block(b);
-	return b->written >= btree_blocks(b) ||
-		(i->seq == b->data->seq &&
-		 b->written + __set_blocks(i, i->keys + 15, b->c)
-		 > btree_blocks(b));
-}
 
 static void shift_keys(struct bset *i, struct bkey *where, struct bkey *insert)
 {
@@ -1906,11 +1907,12 @@ int btree_insert(struct btree_op *op, struct cache_set *c)
 	keylist_init(&op->keys);
 
 	while (c->need_gc > MAX_NEED_GC) {
-		closure_wait_on(&c->bucket_wait, bcache_wq, &op->cl,
-				atomic_read(&c->prio_blocked) == 0);
+		mutex_lock(&c->gc_lock);
 
 		if (c->need_gc > MAX_NEED_GC)
-			btree_gc(&c->gc_work);
+			btree_gc(c);
+
+		mutex_unlock(&c->gc_lock);
 	}
 
 	for_each_cache(ca, c)

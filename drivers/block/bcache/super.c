@@ -1100,7 +1100,9 @@ static struct cached_dev *cached_dev_alloc(void)
 		/* Not ready yet
 		&sysfs_unregister,
 		*/
+#if 0
 		&sysfs_data_csum,
+#endif
 		&sysfs_writeback,
 		&sysfs_writeback_metadata,
 		&sysfs_writeback_running,

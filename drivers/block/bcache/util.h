@@ -30,6 +30,7 @@
 
 #define REQ_UNPLUG		0U
 #define DISCARD_NOBARRIER	REQ_DISCARD
+#define current_is_writer(x)	true
 
 #endif
 

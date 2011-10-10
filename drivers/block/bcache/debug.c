@@ -372,7 +372,7 @@ static ssize_t show(struct kobject *k, struct kobj_attribute *attr, char *buf)
 static ssize_t store(struct kobject *k, struct kobj_attribute *attr,
 		     const char *buffer, size_t size)
 {
-	return strtoul_safe(buffer, latency_warn_ms) ?: size;
+	return strtoul_safe(buffer, latency_warn_ms) ?: (ssize_t) size;
 }
 
 kobj_attribute_rw(latency_warn_ms, show, store);

@@ -136,7 +136,7 @@ unsigned latency_warn_ms;
 
 static void check_bio(struct bio *bio)
 {
-	int i, size = 0;
+	unsigned i, size = 0;
 	struct bio_vec *bv;
 	struct request_queue *q = bdev_get_queue(bio->bi_bdev);
 	BUG_ON(!bio->bi_vcnt);

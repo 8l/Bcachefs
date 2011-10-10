@@ -496,7 +496,8 @@ struct bbio {
 #define initial_prio		32768
 
 #define btree_bytes(c)		((c)->btree_pages * PAGE_SIZE)
-#define btree_blocks(b)		(KEY_SIZE(&b->key) >> (b)->c->block_bits)
+#define btree_blocks(b)							\
+	((unsigned) (KEY_SIZE(&b->key) >> (b)->c->block_bits))
 
 #define bucket_pages(c)		((c)->sb.bucket_size / PAGE_SECTORS)
 #define bucket_bytes(c)		((c)->sb.bucket_size << 9)
@@ -859,14 +860,14 @@ static inline void __rw_unlock(bool w, struct btree *b, bool nowrite)
 do {									\
 	struct request_queue *q = bdev_get_queue(c->bdev);		\
 	if (q)								\
-		blk_add_trace_msg(q, fmt, #__VA_ARGS__);		\
+		blk_add_trace_msg(q, fmt, ##__VA_ARGS__);		\
 } while (0)
 
 #define blktrace_msg_all(s, fmt, ...)					\
 do {									\
 	struct cache *_c;						\
 	for_each_cache(_c, (s))						\
-		blktrace_msg(_c, fmt, #__VA_ARGS__);			\
+		blktrace_msg(_c, fmt, ##__VA_ARGS__);			\
 } while (0)
 
 #define err_printk(...)	printk(KERN_ERR "bcache: " __VA_ARGS__)
@@ -1071,4 +1072,4 @@ int bcache_dirty_init(void);
 void bcache_request_exit(void);
 int bcache_request_init(void);
 void bcache_util_exit(void);
-int __init bcache_util_init(void);
+int bcache_util_init(void);

@@ -410,7 +410,7 @@ struct cache_set {
 	int			error_decay;
 
 #define BUCKET_HASH_BITS	12
-	struct hlist_head	bucket_hash[];
+	struct hlist_head	bucket_hash[1 << BUCKET_HASH_BITS];
 };
 
 struct btree_write {
@@ -911,12 +911,12 @@ static inline bool journal_full(struct cache_set *c)
 	return !KEY_PTRS(&c->journal.cur->key) || fifo_full(&c->journal.pin);
 }
 
-void detach_dev(struct cached_dev *);
+void cached_dev_detach_finish(struct cached_dev *);
 
 static inline void cached_dev_put(struct cached_dev *d)
 {
 	if (atomic_dec_and_test(&d->count))
-		detach_dev(d);
+		cached_dev_detach_finish(d);
 }
 
 static inline uint8_t gen_after(uint8_t a, uint8_t b)
@@ -1053,7 +1053,7 @@ extern struct kmem_cache *search_cache;
 extern struct workqueue_struct *bcache_wq;
 extern struct list_head cache_sets; /* only needed for old shrinker, will die */
 
-struct cache_set *alloc_cache_set(struct cache_sb *);
+struct cache_set *cache_set_alloc(struct cache_sb *);
 void free_discards(struct cache *);
 int alloc_discards(struct cache *);
 void free_journal(struct cache_set *);

@@ -263,7 +263,7 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 	sb->bucket_size = 128;
 	sb->block_size = 4;
 
-	c = alloc_cache_set(sb);
+	c = cache_set_alloc(sb);
 	if (!c)
 		return -ENOMEM;
 

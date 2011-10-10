@@ -271,7 +271,7 @@ int strtoull_h(const char *, unsigned long long *);
 #define strtoul_safe(cp, var)						\
 ({									\
 	unsigned long _v;						\
-	int _r = strict_strtoul(buffer, 10, &_v);			\
+	int _r = strict_strtoul(cp, 10, &_v);				\
 	if (!_r)							\
 		var = _v;						\
 	_r;								\
@@ -280,7 +280,7 @@ int strtoull_h(const char *, unsigned long long *);
 #define strtoul_safe_clamp(cp, var, min, max)				\
 ({									\
 	unsigned long _v;						\
-	int _r = strict_strtoul(buffer, 10, &_v);			\
+	int _r = strict_strtoul(cp, 10, &_v);				\
 	if (!_r)							\
 		var = clamp_t(typeof(var), _v, min, max);		\
 	_r;								\

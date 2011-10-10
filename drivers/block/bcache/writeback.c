@@ -1,3 +1,7 @@
+/* TODO:
+ *  Change refcounting so that writeback has a refcount iff there is dirty data
+ *  in the cache
+ */
 
 #include "bcache.h"
 

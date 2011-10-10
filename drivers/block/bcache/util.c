@@ -71,14 +71,19 @@ STRTO_H(strtoull, unsigned long long)
 
 ssize_t hprint(char *buf, int64_t v)
 {
-	static const char units[] = "\0kMGTPEZY";
+	static const char units[] = "?kMGTPEZY";
 	char dec[3] = "";
 	int u, t = 0;
 
-	for (u = 0; v >= 1024 || v <= -1024; u++)
-		t = do_div(v, 1024);
+	for (u = 0; v >= 1024 || v <= -1024; u++) {
+		t = v & ~(~0 << 10);
+		v >>= 10;
+	}
 
-	if (u && v < 100 && v > -100)
+	if (!u)
+		return sprintf(buf, "%llu", v);
+
+	if (v < 100 && v > -100)
 		sprintf(dec, ".%i", t / 100);
 
 	return sprintf(buf, "%lli%s%c", v, dec, units[u]);

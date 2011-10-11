@@ -135,6 +135,10 @@ STORE(fn)								\
 		return ret + 1;						\
 	}
 
+#define var_printf(_var, fmt)	sysfs_printf(_var, fmt, var(_var))
+#define var_print(_var)		sysfs_print(_var, var(_var))
+#define var_hprint(_var)	sysfs_hprint(_var, var(_var))
+
 #define sysfs_strtoul(file, var)					\
 	if (attr == &sysfs_ ## file)					\
 		return strtoul_safe(buf, var) ?: (ssize_t) size;
@@ -701,26 +705,32 @@ static void scale_accounting(unsigned long data)
 	add_timer(&d->accounting_timer);
 }
 
+#define PRINT_ACCOUNTING()						\
+do {									\
+	var_print(cache_hits);						\
+	var_print(cache_misses);					\
+	var_print(cache_bypass_hits);					\
+	var_print(cache_bypass_misses);					\
+									\
+	sysfs_print(cache_hit_ratio,					\
+		    DIV_SAFE(var(cache_hits) * 100,			\
+			     var(cache_hits) + var(cache_misses)));	\
+									\
+	var_print(cache_readaheads);					\
+	var_print(cache_miss_collisions);				\
+	sysfs_hprint(bypassed,	var(sectors_bypassed) << 9);		\
+} while (0)
+
 SHOW(cached_dev_accounting)
 {
 	struct cache_accounting *a =
 		container_of(kobj, struct cache_accounting, kobj);
 
-#define a_print(var)		sysfs_print(var, a->var >> 16)
+#define var(stat)		(a->stat >> 16)
 
-	a_print(cache_hits);
-	a_print(cache_misses);
-	a_print(cache_bypass_hits);
-	a_print(cache_bypass_misses);
+	PRINT_ACCOUNTING();
 
-	sysfs_print(cache_hit_ratio,
-		    DIV_SAFE(a->cache_hits * 100,
-			     a->cache_hits + a->cache_misses) >> 16);
-
-	a_print(cache_readaheads);
-	a_print(cache_miss_collisions);
-	sysfs_hprint(bypassed,	(a->sectors_bypassed >> 16) << 9);
-
+#undef var
 	return 0;
 }
 
@@ -730,7 +740,7 @@ SHOW(cache_set_accounting)
 					   kobj);
 	int idx = kobj - c->accounting;
 
-#define sum_bdev(stat)					\
+#define var(stat)					\
 ({							\
 	struct cached_dev *d;				\
 	unsigned long ret = 0;				\
@@ -739,21 +749,9 @@ SHOW(cache_set_accounting)
 	ret >> 16;					\
 })
 
-	unsigned cache_hit_ratio(struct cache_set *c)
-	{
-		unsigned long hits = sum_bdev(cache_hits);
-		return DIV_SAFE(hits * 100, hits + sum_bdev(cache_misses));
-	}
+	PRINT_ACCOUNTING();
 
-	sysfs_print(cache_hits,		sum_bdev(cache_hits));
-	sysfs_print(cache_misses,	sum_bdev(cache_misses));
-	sysfs_print(cache_bypass_hits,	sum_bdev(cache_bypass_hits));
-	sysfs_print(cache_bypass_misses, sum_bdev(cache_bypass_misses));
-	sysfs_print(cache_hit_ratio,	cache_hit_ratio(c));
-	sysfs_print(cache_readaheads,	sum_bdev(cache_readaheads));
-	sysfs_print(cache_miss_collisions, sum_bdev(cache_miss_collisions));
-	sysfs_hprint(bypassed,		sum_bdev(sectors_bypassed) << 9);
-
+#undef var
 	return 0;
 }
 
@@ -778,20 +776,18 @@ SHOW(__cached_dev)
 	struct cached_dev *d = container_of(kobj, struct cached_dev, kobj);
 	const char *states[] = { "no cache", "clean", "dirty", "inconsistent" };
 
-#define d_printf(var, fmt)	sysfs_printf(var, fmt, d->var)
-#define d_print(var)		sysfs_print(var, d->var)
-#define d_hprint(var)		sysfs_hprint(var, d->var)
+#define var(stat)		(d->stat)
 
-	d_printf(data_csum,		"%i");
-	d_printf(writeback,		"%i");
-	d_printf(writeback_metadata,	"%i");
-	d_printf(writeback_running,	"%i");
-	d_print(writeback_delay);
-	d_print(writeback_percent);
+	var_printf(data_csum,		"%i");
+	var_printf(writeback,		"%i");
+	var_printf(writeback_metadata,	"%i");
+	var_printf(writeback_running,	"%i");
+	var_print(writeback_delay);
+	var_print(writeback_percent);
 
-	d_printf(sequential_merge,	"%i");
-	d_hprint(sequential_cutoff);
-	d_hprint(readahead);
+	var_printf(sequential_merge,	"%i");
+	var_hprint(sequential_cutoff);
+	var_hprint(readahead);
 
 	sysfs_print(running,		atomic_read(&d->running));
 	sysfs_print(state,		states[BDEV_STATE(&d->sb)]);
@@ -803,6 +799,7 @@ SHOW(__cached_dev)
 		return strlen(buf);
 	}
 
+#undef var
 	return 0;
 }
 SHOW_LOCKED(cached_dev)

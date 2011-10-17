@@ -478,6 +478,7 @@ struct closure {
 };
 
 void closure_put(struct closure *s, struct workqueue_struct *wq);
+void closure_queue(struct closure *c, struct workqueue_struct *wq);
 void __closure_init(struct closure *c, struct closure *parent, bool onstack);
 void closure_run_wait(closure_list_t *list, struct workqueue_struct *wq);
 bool closure_wait(closure_list_t *list, struct closure *c);

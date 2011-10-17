@@ -342,6 +342,7 @@ static void bio_insert_endio(struct bio *bio, int error)
 	}
 
 	bcache_endio(op->d->c, bio, error, "writing data to cache");
+	closure_put(cl, bcache_wq);
 }
 
 static void bio_insert(struct closure *cl)
@@ -560,6 +561,7 @@ void cache_read_endio(struct bio *bio, int error)
 		s->error = error;
 
 	bcache_endio(s->op.d->c, bio, error, "reading from cache");
+	closure_put(bio->bi_private, NULL);
 }
 
 static void readahead_endio(struct bio *bio, int error)
@@ -574,7 +576,8 @@ static void readahead_endio(struct bio *bio, int error)
 			bio_put(p);
 	}
 
-	request_endio(bio, 0);
+	bio_put(bio);
+	closure_put(cl, NULL);
 }
 
 int get_congested(struct cache_set *c)
@@ -791,15 +794,6 @@ static void request_read_done(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
 	struct bio_vec *bv;
-	struct bkey *k;
-
-	while ((k = keylist_pop(&s->op.keys)))
-		__bkey_put(s->op.d->c, k);
-
-	if (!s->lookup_done) {
-		closure_init(&s->op.cl, &s->cl);
-		return_f(&s->op.cl, __request_read);
-	}
 
 	if (s->cache_bio && !s->error && !atomic_read(&s->op.d->c->closing)) {
 		bv = bio_iovec_idx(s->cache_bio, s->pages_from);
@@ -842,6 +836,26 @@ insert:
 	}
 
 	return_f(cl, bio_complete);
+}
+
+static void request_read_done_bh(struct closure *cl)
+{
+	struct search *s = container_of(cl, struct search, cl);
+	struct bkey *k;
+
+	while ((k = keylist_pop(&s->op.keys)))
+		__bkey_put(s->op.d->c, k);
+
+	if (!s->lookup_done) {
+		closure_init(&s->op.cl, &s->cl);
+		return_f(&s->op.cl, __request_read);
+	}
+
+	if (s->cache_bio) {
+		cl->fn = request_read_done;
+		closure_queue(cl, bcache_wq);
+	} else
+		bio_complete(cl);
 }
 
 static void request_resubmit(struct closure *cl)
@@ -894,7 +908,7 @@ static void __request_read(struct closure *cl)
 
 static void request_read(struct search *s)
 {
-	s->cl.fn		= request_read_done;
+	s->cl.fn		= request_read_done_bh;
 	s->op.insert_type	= INSERT_READ;
 
 	__request_read(&s->op.cl);

@@ -277,7 +277,6 @@ void count_io_errors(struct cache *c, int error, const char *m)
 void bcache_endio(struct cache_set *c, struct bio *bio,
 		  int error, const char *m)
 {
-	struct closure *cl = bio->bi_private;
 	struct bbio *b = container_of(bio, struct bbio, bio);
 	struct cache *ca = PTR_CACHE(c, &b->key, 0);
 
@@ -304,7 +303,6 @@ void bcache_endio(struct cache_set *c, struct bio *bio,
 
 	count_io_errors(ca, error, m);
 	bio_put(bio);
-	closure_put(cl, bcache_wq);
 }
 
 /* Btree IO */

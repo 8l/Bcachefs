@@ -429,6 +429,12 @@ again:
 }
 EXPORT_SYMBOL_GPL(closure_put);
 
+void closure_queue(struct closure *c, struct workqueue_struct *wq)
+{
+	INIT_LIST_HEAD(&c->w.entry);
+	BUG_ON(!queue_work(wq, &c->w));
+}
+
 void closure_run_wait(closure_list_t *list, struct workqueue_struct *wq)
 {
 	struct closure *c, *next;

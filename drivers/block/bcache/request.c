@@ -583,7 +583,7 @@ int get_congested(struct cache_set *c)
 	unsigned fract;
 	int ret, i = atomic_read(&c->congested);
 
-	i += ktime_us_delta(ktime_get(), c->congested_last) / 1024;
+	i += local_clock_us() - c->congested_last_us;
 
 	if (i >= 0)
 		return 0;

@@ -194,7 +194,7 @@ void submit_bbio(struct bio *bio, struct cache_set *c,
 
 	bio->bi_sector	= PTR_OFFSET(&b->key, 0);
 	bio->bi_bdev	= PTR_CACHE(c, &b->key, 0)->bdev;
-	b->time		= ktime_get();
+	b->submit_time_us = local_clock_us();
 
 	generic_make_request(bio);
 }
@@ -220,7 +220,7 @@ int submit_bbio_split(struct bio *bio, struct cache_set *c,
 		SET_KEY_SIZE(&b->key, KEY_SIZE(k) - sectors_done);
 		SET_PTR_OFFSET(&b->key, 0, PTR_OFFSET(k, ptr) + sectors_done);
 
-		b->time = ktime_get();
+		b->submit_time_us = local_clock_us();
 		generic_make_request(n);
 	} while (n != bio);
 
@@ -286,16 +286,15 @@ void bcache_endio(struct cache_set *c, struct bio *bio,
 	       (bio->bi_destructor != (void *) c->bio_split));
 	BUG_ON(KEY_PTRS(&b->key) != 1);
 
-	if (c->congested_us) {
-		int us, congested;
-		ktime_t t = ktime_get();
+	if (c->congested_threshold_us) {
+		unsigned t = local_clock_us();
 
-		us = ktime_us_delta(t, b->time);
-		congested = atomic_read(&c->congested);
+		int us = t - b->submit_time_us;
+		int congested = atomic_read(&c->congested);
 
-		if (us > (int) c->congested_us) {
+		if (us > (int) c->congested_threshold_us) {
 			int ms = us / 1024;
-			c->congested_last = t;
+			c->congested_last_us = t;
 
 			ms = min(ms, CONGESTED_MAX + congested);
 			atomic_sub(ms, &c->congested);

@@ -1399,7 +1399,7 @@ SHOW(__cache_set)
 	sysfs_print(io_error_halflife,		c->error_decay * 88);
 	sysfs_hprint(congested,
 		     ((uint64_t) get_congested(c)) << 9);
-	sysfs_print(congested_threshold_us,	c->congested_us);
+	sysfs_print(congested_threshold_us,	c->congested_threshold_us);
 	sysfs_print(active_journal_entries,	fifo_used(&c->journal.pin));
 
 	if (attr == &sysfs_bset_tree_stats)
@@ -1440,7 +1440,7 @@ STORE(__cache_set)
 	if (attr == &sysfs_trigger_gc)
 		queue_work(bcache_wq, &c->gc_work);
 
-	sysfs_strtoul(congested_threshold_us, c->congested_us);
+	sysfs_strtoul(congested_threshold_us, c->congested_threshold_us);
 
 	sysfs_strtoul(io_error_limit, c->error_limit);
 	if (attr == &sysfs_io_error_halflife) {
@@ -1683,7 +1683,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 
 	c->fill_iter->size = sb->bucket_size / sb->block_size;
 
-	c->congested_us	= 2000;
+	c->congested_threshold_us = 2000;
 	c->error_limit	= 8 << IO_ERROR_SHIFT;
 
 	return c;

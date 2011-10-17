@@ -406,9 +406,9 @@ struct cache_set {
 	struct journal		journal;
 
 #define CONGESTED_MAX		1024
-	unsigned		congested_us;
+	unsigned		congested_threshold_us;
+	unsigned		congested_last_us;
 	atomic_t		congested;
-	ktime_t			congested_last;
 
 	atomic_long_t		writeback_keys_done;
 	atomic_long_t		writeback_keys_failed;
@@ -486,17 +486,22 @@ struct btree_iter {
 	size_t size, used;
 	struct btree_iter_set {
 		struct bkey *k, *end;
-	} data[8];
+	} data[4];
 };
 
 struct bbio {
-	ktime_t			time;
+	unsigned		submit_time_us;
 	union {
 		struct bkey	key;
 		uint64_t	_pad[3];
 	};
 	struct bio		bio;
 };
+
+static inline unsigned local_clock_us(void)
+{
+	return sched_clock() >> 10;
+}
 
 #define btree_prio		USHRT_MAX
 #define initial_prio		32768

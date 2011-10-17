@@ -554,14 +554,17 @@ static void request_endio(struct bio *bio, int error)
 
 void cache_read_endio(struct bio *bio, int error)
 {
+	struct bbio *b = container_of(bio, struct bbio, bio);
 	struct closure *cl = bio->bi_private;
 	struct search *s = container_of(cl, struct search, cl);
+
+	__bkey_put(s->op.d->c, &b->key);
 
 	if (error)
 		s->error = error;
 
 	bcache_endio(s->op.d->c, bio, error, "reading from cache");
-	closure_put(bio->bi_private, NULL);
+	closure_put(cl, NULL);
 }
 
 static void readahead_endio(struct bio *bio, int error)
@@ -841,10 +844,6 @@ insert:
 static void request_read_done_bh(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
-	struct bkey *k;
-
-	while ((k = keylist_pop(&s->op.keys)))
-		__bkey_put(s->op.d->c, k);
 
 	if (!s->lookup_done) {
 		closure_init(&s->op.cl, &s->cl);

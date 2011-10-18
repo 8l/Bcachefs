@@ -177,6 +177,8 @@ struct cached_dev {
 	/* Refcount on the cache set. Always nonzero when we're caching. */
 	atomic_t		count;
 	atomic_t		unregister;
+	struct work_struct	detach;
+
 	/* If nonzero, we're disabling caching */
 	atomic_t		closing;
 	atomic_t		running;
@@ -929,12 +931,10 @@ static inline bool journal_full(struct cache_set *c)
 	return !KEY_PTRS(&c->journal.cur->key) || fifo_full(&c->journal.pin);
 }
 
-void cached_dev_detach_finish(struct cached_dev *);
-
 static inline void cached_dev_put(struct cached_dev *d)
 {
 	if (atomic_dec_and_test(&d->count))
-		cached_dev_detach_finish(d);
+		schedule_work(&d->detach);
 }
 
 static inline bool cached_dev_get(struct cached_dev *d)

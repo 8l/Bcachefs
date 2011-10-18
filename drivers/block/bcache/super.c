@@ -921,13 +921,14 @@ static void cached_dev_run(struct cached_dev *d)
 		pr_debug("error creating sysfs link");
 }
 
-static void __cached_dev_detach_finish(struct cached_dev *d)
+void cached_dev_detach_finish(struct work_struct *w)
 {
+	struct cached_dev *d = container_of(w, struct cached_dev, detach);
 	char buf[BDEVNAME_SIZE];
 	struct closure cl;
 	closure_init_stack(&cl);
 
-	smp_mb__after_atomic_dec();
+	mutex_lock(&register_lock);
 
 	BUG_ON(!atomic_read(&d->closing));
 	BUG_ON(atomic_read(&d->count));
@@ -952,12 +953,7 @@ static void __cached_dev_detach_finish(struct cached_dev *d)
 
 	printk(KERN_DEBUG "bcache: Caching disabled for %s\n",
 	       bdevname(d->bdev, buf));
-}
 
-void cached_dev_detach_finish(struct cached_dev *d)
-{
-	mutex_lock(&register_lock);
-	__cached_dev_detach_finish(d);
 	mutex_unlock(&register_lock);
 }
 
@@ -969,9 +965,7 @@ static void cached_dev_detach(struct cached_dev *d)
 		return;
 
 	queue_writeback(d);
-
-	if (atomic_dec_and_test(&d->count))
-		__cached_dev_detach_finish(d);
+	cached_dev_put(d);
 }
 
 static int cached_dev_attach(struct cached_dev *d, struct cache_set *c)
@@ -1139,6 +1133,7 @@ static struct cached_dev *cached_dev_alloc(void)
 	INIT_LIST_HEAD(&d->list);
 	spin_lock_init(&d->lock);
 	sema_init(&d->sb_write, 1);
+	INIT_WORK(&d->detach, cached_dev_detach_finish);
 
 	init_timer(&d->accounting_timer);
 	d->accounting_timer.expires	= jiffies + accounting_delay;

@@ -71,37 +71,16 @@ struct btree_op {
 	unsigned		cache_miss:1;
 };
 
-int __btree_write(struct btree *);
-void btree_write(struct btree *b, bool now, struct btree_op *op);
-
 static inline void rw_lock(bool w, struct btree *b, int level)
 {
 	w ? down_write_nested(&b->lock, level + 1)
 	  : down_read_nested(&b->lock, level + 1);
 }
 
-static inline void __rw_unlock(bool w, struct btree *b, bool nowrite)
+static inline void rw_unlock(bool w, struct btree *b)
 {
-	bool queue;
-	long delay = max_t(long, 0, b->expires - jiffies);
-	BUG_ON(!b->written && atomic_read(&b->nread) == 1 && b->data->keys);
-
-	if (!delay && !nowrite)
-		__btree_write(b);
-
-	queue = b->write;
-
 	(w ? up_write : up_read)(&b->lock);
-
-	if (queue) {
-		smp_rmb();
-		if (atomic_read(&b->io) == -1)
-			schedule_delayed_work(&b->work, delay);
-	}
 }
-
-#define rw_unlock_nowrite(w, b)	__rw_unlock(w, b, true)
-#define rw_unlock(w, b)		__rw_unlock(w, b, false)
 
 #define insert_lock(s, b)	((b)->level	<= (s)->lock)
 
@@ -167,6 +146,7 @@ size_t btree_gc_finish(struct cache_set *);
 int btree_check(struct btree *, struct btree_op *);
 void __btree_mark_key(struct cache_set *, int, struct bkey *);
 
+void btree_write(struct btree *b, bool now, struct btree_op *op);
 void btree_read_work(struct work_struct *);
 void btree_read(struct btree *);
 

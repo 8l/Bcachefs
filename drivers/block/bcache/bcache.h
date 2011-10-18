@@ -475,7 +475,7 @@ struct btree {
 	short			level;
 	uint16_t		written;
 	uint16_t		nsets;
-	unsigned		next:1;
+	unsigned		next_write:1;
 	unsigned		page_order:7;
 
 	/* We construct a binary tree in an array as if the array started at 1,
@@ -502,11 +502,13 @@ struct btree {
 	/* Points to one of writes[] iff there is data to write */
 	struct btree_write	*write;
 
-	/* used to refcount bio splits, -1 when no io in progress */
+	/* Used to refcount bio splits, -1 when no io in progress: also
+	 * protects b->bio
+	 */
 	atomic_t		io;
 	int			prio_blocked;
 
-	/* not actually an lru anymore - just for iterating */
+	/* Not actually an lru anymore - just for iterating */
 	struct list_head	lru;
 	struct delayed_work	work;
 	closure_list_t		wait;
@@ -773,5 +775,7 @@ void bcache_writeback_exit(void);
 int bcache_writeback_init(void);
 void bcache_request_exit(void);
 int bcache_request_init(void);
+void bcache_btree_exit(void);
+int bcache_btree_init(void);
 void bcache_util_exit(void);
 int bcache_util_init(void);

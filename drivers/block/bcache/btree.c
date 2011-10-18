@@ -116,6 +116,8 @@ const char *insert_type(struct btree_op *op)
 #define PTR_HASH(c, k)							\
 	(((k)->ptr[0] >> c->bucket_bits) | PTR_GEN(k, 0))
 
+static struct workqueue_struct *btree_wq;
+
 static void btree_gc_work(struct work_struct *);
 
 /* Btree key manipulation */
@@ -429,9 +431,6 @@ void btree_read(struct btree *b)
 	BUG_ON(b->nsets || b->written);
 	BUG_ON(atomic_xchg(&b->io, 1) != -1);
 
-	cancel_delayed_work_sync(&b->work);
-	b->expires = jiffies;
-
 	btree_bio_init(b);
 	b->bio.bi_rw	       |= READ_SYNC;
 	b->bio.bi_size		= KEY_SIZE(&b->key) << 9;
@@ -489,6 +488,8 @@ static void btree_write_endio(struct bio *bio, int error)
 
 	btree_complete_write(b, w);
 
+	/* Between last use of bio and atomic_set(&b->io) */
+	smp_mb();
 	atomic_set(&b->io, -1);
 	closure_run_wait(&b->wait, bcache_wq);
 
@@ -498,27 +499,35 @@ static void btree_write_endio(struct bio *bio, int error)
 	}
 }
 
-int __btree_write(struct btree *b)
+/* Locking: this function must be called with either
+ *   a write lock held on the btree node, or
+ *   a read lock held but while running out of btree_wq, which is
+ *   singlethreaded.
+ *
+ * This is what protects b->write, b->written, and possibly other stuff.
+ */
+static int __btree_write(struct btree *b)
 {
 	int j;
 	struct bio_vec *bv;
-	struct btree_write *w;
+	struct btree_write *w = NULL;
 	struct bset *i = write_block(b);
 	void *base = (void *) ((unsigned long) i & ~(PAGE_SIZE - 1));
 
-	if (atomic_cmpxchg(&b->io, -1, 1) != -1)
-		return -1;
+	BUG_ON(current->bio_list);
 
-	/* XXX: get rid of this since we have b->io? */
-	w = xchg(&b->write, NULL);
-	if (!w) {
-		/* We raced, first saw b->write before the write was
-		 * started, but the write has already completed.
-		 */
-		atomic_set(&b->io, -1);
+	if (atomic_cmpxchg(&b->io, -1, 1) != -1) {
+		if (b->write) {
+			long delay = max_t(long, 0, b->expires - jiffies);
+			queue_delayed_work(btree_wq, &b->work, delay);
+		}
 		return -1;
 	}
 
+	/* Between cmpxchg and first use of bio */
+	smp_mb();
+
+	swap(w, b->write);
 	__cancel_delayed_work(&b->work);
 
 	pr_latency(w->wait_time, "btree write");
@@ -543,26 +552,16 @@ int __btree_write(struct btree *b)
 		memcpy(page_address(bv->bv_page),
 		       base + j * PAGE_SIZE, PAGE_SIZE);
 
-	if (bio_submit_split(&b->bio, &b->io, b->c->bio_split)) {
-		cancel_delayed_work_sync(&b->work);
-		PREPARE_DELAYED_WORK(&b->work, btree_bio_resubmit);
-		BUG_ON(!schedule_work(&b->work.work));
-	}
+	bio_submit_split(&b->bio, &b->io, b->c->bio_split);
 
 	if (0) {
 		struct closure wait;
 err:		closure_init_stack(&wait);
 
-		if (current->bio_list) {
-			atomic_set(&b->io, -1);
-			b->write = w;
-			return -1;
-		}
-
 		w->nofree = true;
 		bio_map(&b->bio, i);
 
-		BUG_ON(!closure_wait(&w->wait, &wait));
+		closure_wait(&w->wait, &wait);
 		bio_submit_split(&b->bio, &b->io, b->c->bio_split);
 		closure_sync(&wait);
 	}
@@ -587,11 +586,12 @@ static void btree_write_work(struct work_struct *w)
 {
 	struct btree *b = container_of(to_delayed_work(w), struct btree, work);
 
+	down_read(&b->lock);
 	pr_latency(b->expires, "btree_write_work");
 
-	smp_mb(); /* between unlock/requeue from rw_unlock */
-	if (down_read_trylock(&b->lock))
-		rw_unlock(false, b);
+	if (b->write)
+		__btree_write(b);
+	up_read(&b->lock);
 }
 
 void btree_write(struct btree *b, bool now, struct btree_op *op)
@@ -605,13 +605,16 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 		!i->keys));
 
 	if (!b->write) {
-		b->write = &b->writes[b->next];
+		unsigned long delay = msecs_to_jiffies(30000);
+		b->write = &b->writes[b->next_write];
 		b->write->b = b;
 		b->write->journal = NULL;
-		b->next ^= 1;
+		b->next_write ^= 1;
+
+		b->expires = jiffies + delay;
 
 		PREPARE_DELAYED_WORK(&b->work, btree_write_work);
-		b->expires = jiffies + msecs_to_jiffies(30000);
+		queue_delayed_work(btree_wq, &b->work, delay);
 	}
 
 	b->write->prio_blocked += b->prio_blocked;
@@ -681,7 +684,7 @@ static void free_bucket(struct btree *b)
 	for (int i = 0; i < 4; i++)
 		b->tree[i].size = 0;
 	atomic_set(&b->nread, 0);
-	__cancel_delayed_work(&b->work);
+	cancel_delayed_work_sync(&b->work);
 
 	b->key.ptr[0] = 0;
 	hlist_del_init_rcu(&b->hash);
@@ -695,23 +698,18 @@ static int reap_bucket(struct btree *b, struct closure *cl)
 		return -1;
 
 	BUG_ON(!b->data);
-	if (b->write || atomic_read(&b->io) != -1) {
-		if (b->write && time_is_after_jiffies(b->expires))
-			b->expires = jiffies;
+	if (cl && b->write) {
+		spin_unlock(&b->c->bucket_lock);
+		btree_write(b, true, NULL);
+		spin_lock(&b->c->bucket_lock);
+	}
 
-		if (b->write && cl) {
-			spin_unlock(&b->c->bucket_lock);
-			__btree_write(b);
-			spin_lock(&b->c->bucket_lock);
-		}
-
-		rw_unlock_nowrite(true, b);
-
-		if (!cl)
-			return -1;
-
+	if (cl)
 		closure_wait_on_async(&b->wait, bcache_wq, cl,
-				      !b->write && atomic_read(&b->io) == -1);
+				      atomic_read(&b->io) == -1);
+
+	if (b->write || atomic_read(&b->io) != -1) {
+		rw_unlock(true, b);
 		return -EAGAIN;
 	}
 
@@ -2103,5 +2101,20 @@ int btree_search_recurse(struct btree *b, struct btree_op *op,
 
 	btree_bug_on(ret == -1, b, "no key to recurse on at level %i/%i",
 		     b->level, b->c->root->level);
+	return 0;
+}
+
+void bcache_btree_exit(void)
+{
+	if (btree_wq)
+		destroy_workqueue(btree_wq);
+}
+
+int __init bcache_btree_init(void)
+{
+	btree_wq = create_singlethread_workqueue("bcache_btree_io");
+	if (!btree_wq)
+		return -ENOMEM;
+
 	return 0;
 }

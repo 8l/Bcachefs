@@ -304,7 +304,7 @@ static void btree_flush_write(struct cache_set *s)
 			goto next;
 
 		if (i && journal_pin_cmp(s, i->write, b->write)) {
-			rw_unlock_nowrite(true, i);
+			rw_unlock(true, i);
 			i = NULL;
 		}
 
@@ -313,7 +313,7 @@ static void btree_flush_write(struct cache_set *s)
 			continue;
 		}
 next:
-		rw_unlock_nowrite(true, b);
+		rw_unlock(true, b);
 	}
 
 	if (!i) {
@@ -332,10 +332,8 @@ next:
 	} else
 		spin_unlock(&s->bucket_lock);
 found:
-	i->expires = jiffies;
-	if (i->work.timer.function)
-		mod_timer_pending(&i->work.timer, i->expires);
-
+	if (i->write)
+		btree_write(i, true, NULL);
 	rw_unlock(true, i);
 	pr_debug("");
 }

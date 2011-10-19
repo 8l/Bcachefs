@@ -1521,7 +1521,8 @@ static void cache_set_free(struct kobject *kobj)
 		closure_wait_on(&c->bucket_wait, bcache_wq, &op.cl,
 				atomic_read(&ca->prio_written) >= 0);
 
-	bcache_journal_wait(c, &op.cl);
+	if (c->journal.cur)
+		bcache_journal_wait(c, &op.cl);
 
 	closure_sync(&op.cl);
 

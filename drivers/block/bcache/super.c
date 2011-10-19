@@ -1927,13 +1927,17 @@ SHOW(__cache)
 
 	if (attr == &sysfs_priority_stats) {
 		int cmp(const void *l, const void *r)
-		{	return *((uint16_t *) l) - *((uint16_t *) r); }
+		{	return *((uint16_t *) r) - *((uint16_t *) l); }
 
-		size_t n = c->sb.nbuckets, i, zero, btree;
+		/* Number of quantiles we compute */
+		const unsigned nq = 31;
+
+		size_t n = c->sb.nbuckets, i, unused, btree;
 		uint64_t sum = 0;
-		uint16_t q[7], *p;
+		uint16_t q[nq], *p, *cached;
+		ssize_t ret;
 
-		p = vmalloc(c->sb.nbuckets * sizeof(uint16_t));
+		cached = p = vmalloc(c->sb.nbuckets * sizeof(uint16_t));
 		if (!p)
 			return -ENOMEM;
 
@@ -1944,31 +1948,46 @@ SHOW(__cache)
 
 		sort(p, n, sizeof(uint16_t), cmp, NULL);
 
-		for (i = 0; i < n && !p[i]; i++)
-			;
-		zero = i;
+		while (n &&
+		       !cached[n - 1])
+			--n;
 
-		for (i = n; i && p[i - 1] == btree_prio; --i)
-			;
-		btree = n - i;
+		unused = c->sb.nbuckets - n;
 
-		for (i = zero; i < n - btree; i++)
-			sum += p[i];
+		while (cached < p + n &&
+		       *cached == btree_prio)
+			cached++;
 
-		if (n - btree - zero)
-			do_div(sum, n - btree - zero);
+		btree = cached - p;
+		n -= btree;
 
-		for (i = 0; i < 7; i++)
-			q[i] = p[zero + (n - zero - btree) * (i + 1) / 8];
+		for (i = 0; i < n; i++)
+			sum += initial_prio - cached[i];
+
+		if (n)
+			do_div(sum, n);
+
+		for (i = 0; i < nq; i++)
+			q[i] = initial_prio - cached[n * (i + 1) / (nq + 1)];
 
 		vfree(p);
-		return snprintf(buf, PAGE_SIZE,
-				"Zero:	%zu%%\n"
-				"Btree:	%zu%%\n"
-				"Avg:	%llu\n"
-				"Q:	[%u, %u, %u, %u, %u, %u, %u]\n",
-				zero * 100 / n, btree * 100 / n, sum,
-				q[0], q[1], q[2], q[3], q[4], q[5], q[6]);
+
+		ret = snprintf(buf, PAGE_SIZE,
+			       "Unused:		%zu%%\n"
+			       "Metadata:	%zu%%\n"
+			       "Average:	%llu\n"
+			       "Sectors per Q:	%zu\n"
+			       "Quantiles:	[",
+			       unused * 100 / (size_t) c->sb.nbuckets,
+			       btree * 100 / (size_t) c->sb.nbuckets, sum,
+			       n * c->sb.bucket_size / (nq + 1));
+
+		for (i = 0; i < nq && ret < (ssize_t) PAGE_SIZE; i++)
+			ret += snprintf(buf + ret, PAGE_SIZE - ret,
+					i < nq - 1 ? "%u " : "%u]\n", q[i]);
+
+		buf[PAGE_SIZE - 1] = '\0';
+		return ret;
 	}
 
 	return 0;

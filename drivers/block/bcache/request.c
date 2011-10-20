@@ -45,7 +45,9 @@ static void __request_read(struct closure *);
 /* Cgroup interface */
 
 static struct bcache_cgroup {
+#ifdef CONFIG_CGROUP_BCACHE
 	struct cgroup_subsys_state	css;
+#endif
 	bool				writeback;
 	bool				writethrough;
 } bcache_default_cgroup;

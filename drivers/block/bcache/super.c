@@ -560,12 +560,13 @@ static void prio_write_done(struct closure *cl)
 	c->prio_alloc = 0;
 	c->need_save_prio = 0;
 
-	spin_unlock(&c->set->bucket_lock);
+	c->prio.fn = NULL;
+	closure_put(&c->prio, NULL);
 
 	atomic_set(&c->prio_written, 1);
-	closure_run_wait(&c->set->bucket_wait, bcache_wq);
+	spin_unlock(&c->set->bucket_lock);
 
-	return_f(cl, NULL);
+	closure_run_wait(&c->set->bucket_wait, bcache_wq);
 }
 
 static void prio_write_journal(struct closure *cl)
@@ -610,8 +611,9 @@ static void prio_write_bucket(struct closure *cl)
 
 void prio_write(struct cache *c, struct closure *cl)
 {
-	BUG_ON(c->prio_alloc != prio_buckets(c));
+	lockdep_assert_held(&c->set->bucket_lock);
 	BUG_ON(atomic_read(&c->prio_written));
+	BUG_ON(c->prio_alloc != prio_buckets(c));
 
 	for (struct bucket *b = c->buckets;
 	     b < c->buckets + c->sb.nbuckets; b++)
@@ -1804,10 +1806,12 @@ static void run_cache_set(struct cache_set *c)
 		bkey_copy_key(&c->root->key, &MAX_KEY);
 		btree_write(c->root, true, &op);
 
+		spin_lock(&c->bucket_lock);
 		for_each_cache(ca, c) {
 			free_some_buckets(ca);
 			prio_write(ca, &op.cl);
 		}
+		spin_unlock(&c->bucket_lock);
 
 		closure_sync(&op.cl);
 		set_new_root(c->root);

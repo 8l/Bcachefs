@@ -476,7 +476,8 @@ struct btree {
 	 * so that things line up on the same cachelines better
 	 */
 	struct bset_tree {
-		size_t		size;
+		unsigned	size;
+		unsigned	extra;
 		struct bkey	end;
 		struct bkey_float *key;
 	}			tree[4];

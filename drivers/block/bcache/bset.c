@@ -3,17 +3,17 @@
 
 #include <linux/random.h>
 
-#define BKEY_MID_BITS		10
+#define BKEY_MID_BITS		3
 #define BKEY_MID_MAX		(~(~0 << (BKEY_MID_BITS - 1)))
 #define BKEY_MID_MIN		(-1 - BKEY_MID_MAX)
 
 #define BKEY_EXPONENT_BITS	7
-#define BKEY_MANTISSA_BITS	15
+#define BKEY_MANTISSA_BITS	22
 #define BKEY_MANTISSA_MASK	((1 << BKEY_MANTISSA_BITS) - 1)
 #define BKEY_MANTISSA_SHIFT	63
 
 struct bkey_float {
-	int		m:BKEY_MID_BITS;
+	unsigned	m:BKEY_MID_BITS;
 	unsigned	exponent:BKEY_EXPONENT_BITS;
 	unsigned	mantissa:BKEY_MANTISSA_BITS;
 };
@@ -264,26 +264,20 @@ void bset_init(struct btree *b, struct bset *i)
 
 /* Bset binary search */
 
-static unsigned bset_middle(struct bset *i, unsigned l, unsigned r)
+static struct bkey *bset_bsearch(struct bset *i, const struct bkey *search)
 {
-	unsigned m = (l + r) >> 1;
-	while (!KEY_IS_HEADER(node(i, m)))
-		m--;
+	unsigned l = 0, r = i->keys;
 
-	if (m == l && next(node(i, m)) != node(i, r))
-		m += bkey_u64s(node(i, m));
-
-	return m;
-}
-
-static struct bkey *bset_bsearch(struct bset *i, const struct bkey *search,
-				 unsigned l, unsigned r)
-{
 	/* Returns the smallest key greater than the search key.
 	 * This is because we index by the end, not the beginning
 	 */
 	while (l < r) {
-		unsigned m = bset_middle(i, l, r);
+		unsigned m = (l + r) >> 1;
+		while (!KEY_IS_HEADER(node(i, m)))
+			m--;
+
+		if (m == l && next(node(i, m)) != node(i, r))
+			m += bkey_u64s(node(i, m));
 
 		if (bkey_cmp(node(i, m), search) > 0)
 			r = m;
@@ -293,6 +287,8 @@ static struct bkey *bset_bsearch(struct bset *i, const struct bkey *search,
 
 	return node(i, l);
 }
+
+/* Auxiliary search trees */
 
 static unsigned bfloat_mantissa(const struct bkey *k, struct bkey_float *f)
 {
@@ -308,116 +304,224 @@ static unsigned bfloat_mantissa(const struct bkey *k, struct bkey_float *f)
 	return r & BKEY_MANTISSA_MASK;
 }
 
-void bset_build_tree_noalloc(struct btree *b, unsigned set)
+static void make_bfloat(struct bkey_float *f,
+			struct bkey *l, struct bkey *r,
+			struct bkey *m, struct bkey *p)
 {
-	struct bset *i		= b->sets[set];
-	struct bset_tree *t	= &b->tree[set];
+	BUG_ON(m < l || m > r);
+	BUG_ON(!KEY_IS_HEADER(m));
+	BUG_ON(!KEY_IS_HEADER(p));
+	BUG_ON(next(p) != m);
 
-	int dif(struct bkey *k, unsigned mid)
-	{
-		return (((uint64_t *) k) - i->d) - mid;
-	}
+	if (KEY_DEV(l) != KEY_DEV(r))
+		f->exponent = fls64(KEY_DEV(r) ^ KEY_DEV(l)) +
+			BKEY_MANTISSA_SHIFT;
+	else if (l->key != r->key)
+		f->exponent = fls64(r->key ^ l->key);
 
-	bool check(struct bkey *k, struct bkey_float *f, unsigned mid)
-	{
-		if (bfloat_mantissa(k, f) == bfloat_mantissa(prev(k), f))
-			return false;
+	f->exponent = max_t(int, f->exponent - BKEY_MANTISSA_BITS, 0);
 
-		f->m = dif(k, mid);
-		return true;
-	}
+	if (bfloat_mantissa(m, f) !=
+	    bfloat_mantissa(p, f))
+		f->mantissa = bfloat_mantissa(m, f);
+	else
+		f->exponent = 127;
+}
 
-	void make_key(struct bkey_float *f, unsigned l, unsigned r)
-	{
-		struct bkey *kl = node(i, l), *kr = node(i, r);
-		unsigned mid = (l + r) >> 1, m = mid;
+static unsigned inorder_next(unsigned j, unsigned size)
+{
+	if (j * 2 + 1 < size) {
+		j = j * 2 + 1;
 
-		if (m != r)
-			m = bset_middle(i, l, r);
+		while (j * 2 < size)
+			j *= 2;
+	} else
+		j >>= ffz(j) + 1;
 
-		if (kr == end(i))
-			kr = prev(kr);
+	return j;
+}
 
-		if (kl != i->start)
-			kl = prev(kl);
+static unsigned inorder_prev(unsigned j, unsigned size)
+{
+	if (j * 2 < size) {
+		j = j * 2;
 
-		if (KEY_DEV(kl) != KEY_DEV(kr))
-			f->exponent = fls64(KEY_DEV(kr) ^ KEY_DEV(kl)) +
-				BKEY_MANTISSA_SHIFT;
-		else if (kl->key != kr->key)
-			f->exponent = fls64(kr->key ^ kl->key);
+		while (j * 2 + 1 < size)
+			j = j * 2 + 1;
+	} else
+		j >>= ffs(j);
 
-		f->exponent = max_t(int, f->exponent - BKEY_MANTISSA_BITS, 0);
+	return j;
+}
 
-		kl = node(i, m);
-		kr = next(kl);
+/* I have no idea why this code works... and I'm the one who wrote it
+ *
+ * However, I do know what it does:
+ * Given a binary tree constructed in an array (i.e. how you normally implement
+ * a heap), it converts a node in the tree - referenced by array index - to the
+ * index it would have if you did an inorder traversal.
+ *
+ * The binary tree starts at array index 1, not 0
+ * extra is a function of size:
+ *   extra = (size - rounddown_pow_of_two(size - 1)) << 1;
+ */
+static unsigned __to_inorder(unsigned j, unsigned size, unsigned extra)
+{
+	unsigned b = fls(j);
+	unsigned shift = fls(size - 1) - b;
+
+	j  ^= 1U << (b - 1);
+	j <<= 1;
+	j  |= 1;
+	j <<= shift;
+
+	if (j > extra)
+		j -= (j - extra) >> 1;
+
+	return j;
+}
+
+static unsigned to_inorder(unsigned j, struct bset_tree *t)
+{
+	return __to_inorder(j, t->size, t->extra);
+}
+
+#if 0
+void inorder_test(void)
+{
+	unsigned long done = 0;
+	ktime_t start = ktime_get();
+
+	for (unsigned size = 2;
+	     size < 65536000;
+	     size++) {
+		unsigned extra = (size - rounddown_pow_of_two(size - 1)) << 1;
+		unsigned i = 1, j = rounddown_pow_of_two(size - 1);
+
+		if (!(size % 4096))
+			printk(KERN_NOTICE "loop %u, %llu per us\n", size,
+			       done / ktime_us_delta(ktime_get(), start));
 
 		while (1) {
-			if (-dif(kl, mid) < dif(kr, mid)) {
-				if (dif(kl, mid) * 2 < dif(node(i, l), mid) ||
-				    dif(kl, mid) < BKEY_MID_MIN)
-					goto no_pivot;
+			if (__to_inorder(j, size, extra) != i)
+				panic("size %10u j %10u i %10u", size, j, i);
 
-				if (check(kl, f, mid))
-					goto pivot;
+			if (j == rounddown_pow_of_two(size) - 1)
+				break;
 
-				kl = prev(kl);
-			} else {
-				if (dif(kr, mid) * 2 > dif(node(i, r), mid) ||
-				    dif(kr, mid) > BKEY_MID_MAX)
-					goto no_pivot;
+			BUG_ON(inorder_prev(inorder_next(j, size), size) != j);
 
-				if (check(kr, f, mid))
-					goto pivot;
-
-				kr = next(kr);
-			}
+			j = inorder_next(j, size);
+			i++;
 		}
 
-		if (0) {
-no_pivot:		f->m = m - mid;
-			f->exponent = 127;
-		} else {
-pivot:			m = mid + f->m;
-			f->mantissa = bfloat_mantissa(node(i, m), f);
-		}
-
-		BUG_ON(m < l || m > r);
-		BUG_ON(!KEY_IS_HEADER(node(i, m)));
+		done += size - 1;
 	}
+}
+#endif
+
+static inline unsigned bset_tree_to_idx(struct bkey_float *f, unsigned i)
+{
+	return ((i * 64) - sizeof(struct bset)) / sizeof(uint64_t) + f->m;
+}
+
+static struct bkey *inorder_to_bkey(struct bset *i, struct bkey_float *f,
+				    unsigned inorder)
+{
+	void *cacheline = ((void *) i) + 64 * inorder;
+	return cacheline + f->m * sizeof(uint64_t);
+}
+
+static struct bkey *tree_to_bkey(struct bset *i, unsigned j,
+				 struct bset_tree *t)
+{
+	return inorder_to_bkey(i, &t->key[j], to_inorder(j, t));
+}
+
+void bset_build_tree_noalloc(struct btree *b, unsigned set)
+{
+	struct bset_tree *t	= &b->tree[set];
+	struct bset *i		= b->sets[set];
+	struct bkey *k		= i->start;
 
 	struct {
-		unsigned l, r;
+		unsigned l;
+		unsigned r:27;
+		unsigned p:5;
 	} stack[22], *sp = stack;
 
-	size_t j = 1;
+	unsigned j, end;
+	size_t cacheline = (((size_t) i) >> 6) + 1;
 
 	if (!t->size)
 		return;
 
-	bkey_copy_key(&t->end, prev(end(i)));
+	j	= rounddown_pow_of_two(t->size - 1);
+	end	= rounddown_pow_of_two(t->size) - 1;
+
+	/* Inorder traversal */
+	while (1) {
+		struct bkey_float *f = &t->key[j];
+
+		while ((((size_t) next(k)) >> 6) != cacheline)
+			k = next(k);
+
+		f->exponent = bkey_u64s(k);
+		k = next(k);
+		cacheline++;
+		f->m = ((size_t) k & 63) / sizeof(uint64_t);
+
+		if (j == end)
+			break;
+
+		j = inorder_next(j, t->size);
+	}
+
+	while (next(k) != end(i))
+		k = next(k);
+
+	bkey_copy_key(&t->end, k);
 
 	sp->l = 0;
-	sp->r = i->keys;
+	sp->r = (uint64_t *) k - i->d;
+
+	j = 1;
+	if (is_power_of_2(t->size + 1))
+		end = t->size - 1;
 
 	/* Depth first traversal */
 	while (1) {
-		sp = &stack[ilog2(j)];
-		make_key(t->key + j, sp->l, sp->r);
+		struct bkey_float *f = &t->key[j];
+		unsigned m;
 
-		if (j == t->size - 1)
+		sp = &stack[ilog2(j)];
+
+		m = bset_tree_to_idx(f, to_inorder(j, t));
+		sp->p = f->exponent;
+
+		make_bfloat(f, node(i, sp->l), node(i, sp->r),
+			       node(i, m), node(i, m - sp->p));
+
+		if (j == end)
 			break;
 
 		if (j * 2 < t->size) {
 			sp[1].l = sp->l;
-			sp[1].r = ((sp->l + sp->r) >> 1) + t->key[j].m;
+			sp[1].r = m;
 
 			j = j * 2;
 		} else {
+			if (j == t->size - 1)
+				j >>= 1;
+
 			j >>= ffz(j) + 1;
+
 			sp = &stack[ilog2(j)];
 
-			sp[1].l = ((sp->l + sp->r) >> 1) + t->key[j].m;
+			f = &t->key[j];
+			m = bset_tree_to_idx(f, to_inorder(j, t));
+
+			sp[1].l = m - sp->p;
 			sp[1].r = sp->r;
 
 			j = j * 2 + 1;
@@ -445,13 +549,17 @@ void bset_build_tree(struct btree *b, unsigned set)
 					  64 / sizeof(struct bkey_float));
 	}
 
-	t->size = min_t(size_t, end - t->key,
-			roundup_pow_of_two((i->keys * sizeof(uint64_t)) / 96));
-
-	BUG_ON(t->key + t->size > end);
+	t->size = ((size_t) end(i) - (size_t) i) / 64;
 
 	if (t->size < 2)
 		t->size = 0;
+	else
+		t->extra = (t->size - rounddown_pow_of_two(t->size - 1)) << 1;
+
+	if (t->size > (size_t) (end - t->key)) {
+		pr_debug("not enough space for tree");
+		t->size = end - t->key;
+	}
 
 	bset_build_tree_noalloc(b, set);
 }
@@ -461,56 +569,87 @@ struct bkey *__bset_search(struct btree *b, unsigned set,
 {
 	struct bset *i		= b->sets[set];
 	struct bset_tree *t	= &b->tree[set];
-	unsigned j = 1, l = 0, r = i->keys;
+
+	struct bkey *l, *r;
+	unsigned j = 1;
+
+	struct bkey *cur(void)
+	{
+		return tree_to_bkey(i, j, t);
+	}
 
 	if (!t->size)
-		goto bsearch;
+		return bset_bsearch(i, search);
 
 	BUG_ON(i == write_block(b));
+
+	/* prev(end(i)) won't be in the cache */
+	if (bkey_cmp(search, &t->end) >= 0)
+		return end(i);
 
 	/* i->start will be in cache since it's right next to the header */
 	if (bkey_cmp(search, i->start) < 0)
 		return i->start;
 
-	/* prev(end(i)) won't be */
-	if (bkey_cmp(search, &t->end) >= 0)
-		return node(i, r);
-
-	while (j < t->size) {
+	while (1) {
 		bool cmp;
 		struct bkey_float *f = &t->key[j];
-		unsigned m = ((l + r) >> 1) + f->m;
 
 		if (j << 4 < t->size)
 			prefetch(&t->key[j << 4]);
 
-		EBUG_ON(m < l || m > r);
-		EBUG_ON(!KEY_IS_HEADER(node(i, m)));
+		EBUG_ON(!KEY_IS_HEADER(cur()));
 
 		if (f->exponent < 127)
 			cmp = f->mantissa > bfloat_mantissa(search, f);
 		else
-			cmp = bkey_cmp(node(i, m), search) > 0;
+			cmp = bkey_cmp(cur(), search) > 0;
 
 		if (cmp) {
-			EBUG_ON(m != i->keys &&
-				bkey_cmp(node(i, m), search) <= 0);
+			EBUG_ON(cur() != end(i) &&
+				bkey_cmp(cur(), search) <= 0);
 
-			r = m;
+			if (j * 2 >= t->size) {
+				unsigned inorder = to_inorder(j, t);
+				r = inorder_to_bkey(i, f, inorder);
+
+				if (--inorder) {
+					f = &t->key[inorder_prev(j, t->size)];
+					l = inorder_to_bkey(i, f, inorder);
+				} else
+					l = i->start;
+
+				break;
+			}
+
 			j = j * 2;
 		} else {
-			EBUG_ON(m && bkey_cmp(prev(node(i, m)), search) > 0);
+			EBUG_ON(cur() != i->start &&
+				bkey_cmp(prev(cur()), search) > 0);
 
-			l = m;
+			if (j * 2 + 1 >= t->size) {
+				unsigned inorder = to_inorder(j, t);
+				l = inorder_to_bkey(i, f, inorder);
+
+				if (++inorder != t->size) {
+					f = &t->key[inorder_next(j, t->size)];
+					r = inorder_to_bkey(i, f, inorder);
+				} else
+					r = end(i);
+
+				break;
+			}
+
 			j = j * 2 + 1;
 		}
 	}
-bsearch:
-	return bset_bsearch(i, search, l, r);
-}
 
-#define bset_search(b, i, search)				\
-	(search ? __bset_search(b, i, search) : b->sets[i]->start)
+	while (l != r &&
+	       bkey_cmp(l, search) <= 0)
+		l = next(l);
+
+	return l;
+}
 
 /* Btree iterator */
 
@@ -746,7 +885,7 @@ void btree_sort_lazy(struct btree *b)
 /* Sysfs stuff */
 
 struct bset_stats {
-	size_t sets, keys, trees, floats, failed, tree_space;
+	size_t writes, sets, keys, trees, floats, failed, tree_space;
 };
 
 static int btree_bset_stats(struct btree *b, struct btree_op *op,
@@ -754,7 +893,9 @@ static int btree_bset_stats(struct btree *b, struct btree_op *op,
 {
 	struct bkey *k;
 
-	stats->sets		+= b->nsets;
+	if (write_block(b) == b->sets[b->nsets])
+		stats->writes++;
+	stats->sets		+= b->nsets + 1;
 	stats->tree_space	+= bset_tree_space(b);
 
 	for (int i = 0; i < 4 && b->tree[i].size; i++) {
@@ -789,12 +930,13 @@ int bset_print_stats(struct cache_set *c, char *buf)
 
 	return snprintf(buf, PAGE_SIZE,
 			"sets:		%zu\n"
+			"write sets:	%zu\n"
 			"key bytes:	%zu\n"
 			"trees:		%zu\n"
 			"tree space:	%zu\n"
 			"floats:		%zu\n"
 			"bytes/float:	%zu\n"
-			"failed:		%zu",
-			t.sets, t.keys, t.trees, t.tree_space,
+			"failed:		%zu\n",
+			t.sets, t.writes, t.keys, t.trees, t.tree_space,
 			t.floats, DIV_SAFE(t.keys, t.floats), t.failed);
 }

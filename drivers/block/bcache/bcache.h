@@ -989,7 +989,6 @@ int bset_print_stats(struct cache_set *, char *);
 
 const char *insert_type(struct btree_op *);
 void btree_op_init_stack(struct btree_op *);
-void bcache_debug_init_cache(struct cache *);
 size_t btree_gc_finish(struct cache_set *);
 void btree_gc(struct work_struct *);
 int btree_check(struct btree *, struct btree_op *);
@@ -1064,6 +1063,12 @@ void free_open_buckets(struct cache_set *);
 int alloc_open_buckets(struct cache_set *);
 void free_btree_cache(struct cache_set *);
 int alloc_btree_cache(struct cache_set *);
+
+#ifdef CONFIG_DEBUG_FS
+void bcache_debug_init_cache(struct cache *);
+#else
+static inline void bcache_debug_init_cache(struct cache *c) {}
+#endif
 
 void bcache_debug_exit(void);
 int bcache_debug_init(struct kobject *);

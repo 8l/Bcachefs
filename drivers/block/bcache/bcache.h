@@ -489,7 +489,9 @@ struct btree_iter {
 	size_t size, used;
 	struct btree_iter_set {
 		struct bkey *k, *end;
-	} data[4];
+	} data[5];
+	/* Has to be 1 greater than the normal max for coalescing in
+	 * btree_gc_recurse() */
 };
 
 struct bbio {

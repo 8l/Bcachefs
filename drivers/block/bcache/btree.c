@@ -662,6 +662,14 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 
 #define btree_reserve(c)	((c->root ? c->root->level : 1) * 4 + 4)
 
+static void free_bucket_data(struct btree *b)
+{
+	free_pages((unsigned long) b->data, b->page_order);
+	free_pages((unsigned long) b->tree->key, bset_tree_order(b));
+	b->data = NULL;
+	b->tree->key = NULL;
+}
+
 static void free_bucket(struct btree *b)
 {
 	lockdep_assert_held(&b->c->bucket_lock);
@@ -744,10 +752,7 @@ static int shrink_buckets(struct shrinker *shrink, struct shrink_control *sc)
 		if (reap_bucket(b, NULL))
 			break;
 
-		free_pages((unsigned long) b->data, b->page_order);
-		free_pages((unsigned long) b->tree->key, bset_tree_order(b));
-		b->data = NULL;
-		b->tree->key = NULL;
+		free_bucket_data(b);
 		free_bucket(b);
 		rw_unlock(true, b);
 		nr--, ret--;
@@ -830,8 +835,7 @@ void free_btree_cache(struct cache_set *c)
 		b = list_first_entry(&c->freed, struct btree, lru);
 		list_del(&b->lru);
 		cancel_delayed_work_sync(&b->work);
-		free_pages((unsigned long) b->data, b->page_order);
-		free_pages((unsigned long) b->tree->key, bset_tree_order(b));
+		free_bucket_data(b);
 		kfree(b);
 	}
 }

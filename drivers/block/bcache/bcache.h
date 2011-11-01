@@ -439,22 +439,16 @@ struct btree_write {
 struct bkey_float;
 
 struct btree {
-	struct list_head	lru;
+	/* Hottest entries first */
 	struct hlist_node	hash;
-	struct rw_semaphore	lock;
-	struct delayed_work	work;
 
+	/* Key/pointer for this btree node */
+	BKEY_PADDED(key);
+
+	/* Time this node was last used */
 	unsigned long		jiffies;
-
+	struct rw_semaphore	lock;
 	struct cache_set	*c;
-	closure_list_t		wait;
-
-	unsigned long		expires;
-	struct btree_write	*write;
-	atomic_t		io;
-	int			prio_blocked;
-
-	struct btree_write	writes[2];
 
 	atomic_t		nread;
 	short			level;
@@ -462,15 +456,6 @@ struct btree {
 	uint16_t		nsets;
 	unsigned		next:1;
 	unsigned		page_order:7;
-
-	BKEY_PADDED(key);
-
-	union {
-		struct bset	*data;
-		struct bset	*sets[5];
-		/* Has to be 1 greater than the normal max for coalescing in
-		 * btree_gc_recurse() */
-	};
 
 	/* We construct a binary tree in an array as if the array started at 1,
 	 * so that things line up on the same cachelines better
@@ -481,6 +466,31 @@ struct btree {
 		struct bkey	end;
 		struct bkey_float *key;
 	}			tree[4];
+
+	/* The actual btree node, with pointers to each sorted set */
+	union {
+		struct bset	*data;
+		struct bset	*sets[5];
+		/* Has to be 1 greater than the normal max for coalescing in
+		 * btree_gc_recurse() */
+	};
+
+	/* If we have data to write, when it should be written in jiffies */
+	unsigned long		expires;
+
+	/* Points to one of writes[] iff there is data to write */
+	struct btree_write	*write;
+
+	/* used to refcount bio splits, -1 when no io in progress */
+	atomic_t		io;
+	int			prio_blocked;
+
+	/* not actually an lru anymore - just for iterating */
+	struct list_head	lru;
+	struct delayed_work	work;
+	closure_list_t		wait;
+
+	struct btree_write	writes[2];
 
 	struct bio		bio;
 };

@@ -281,10 +281,10 @@ void bcache_endio(struct cache_set *c, struct bio *bio,
 	struct bbio *b = container_of(bio, struct bbio, bio);
 	struct cache *ca = PTR_CACHE(c, &b->key, 0);
 
-	BUG_ON(bio->bi_destructor &&
-	       (bio->bi_destructor != bbio_destructor) &&
-	       (bio->bi_destructor != (void *) c->bio_split));
-	BUG_ON(KEY_PTRS(&b->key) != 1);
+	EBUG_ON(bio->bi_destructor &&
+		(bio->bi_destructor != bbio_destructor) &&
+		(bio->bi_destructor != (void *) c->bio_split));
+	EBUG_ON(KEY_PTRS(&b->key) != 1);
 
 	if (c->congested_threshold_us) {
 		unsigned t = local_clock_us();
@@ -1878,8 +1878,9 @@ static int btree_insert_recurse(struct btree *b, struct btree_op *op,
 		}
 
 		if (write_block(b) != b->sets[b->nsets]) {
-			bset_build_tree(b, b->nsets);
-			btree_sort_lazy(b);
+			if (!btree_sort_lazy(b))
+				bset_build_tree(b, b->nsets);
+
 			bset_init(b, write_block(b));
 		}
 

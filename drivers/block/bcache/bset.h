@@ -148,7 +148,7 @@ struct bkey *__bset_search(struct btree *, unsigned, const struct bkey *);
 	(search ? __bset_search(b, i, search) : b->sets[i]->start)
 
 bool bkey_try_merge(struct btree *, struct bkey *, struct bkey *);
-void btree_sort_lazy(struct btree *);
+bool btree_sort_lazy(struct btree *);
 void btree_sort(struct btree *, int, struct bset *);
 void __btree_sort(struct btree *, int, struct bset *,
 		  struct btree_iter *, bool);

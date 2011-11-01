@@ -854,7 +854,7 @@ void btree_sort(struct btree *b, int start, struct bset *new)
 	__btree_sort(b, start, new, &iter, false);
 }
 
-void btree_sort_lazy(struct btree *b)
+bool btree_sort_lazy(struct btree *b)
 {
 	if (b->nsets) {
 		struct bset *i;
@@ -868,15 +868,19 @@ void btree_sort_lazy(struct btree *b)
 			if (keys * 2 < total ||
 			    keys < 1000) {
 				btree_sort(b, j, NULL);
-				return;
+				return true;
 			}
 
 			keys -= b->sets[j]->keys;
 		}
+
+		if (b->nsets > 2 - b->level) {
+			btree_sort(b, 0, NULL);
+			return true;
+		}
 	}
 
-	if (b->nsets > 2 - b->level)
-		btree_sort(b, 0, NULL);
+	return false;
 }
 
 /* Sysfs stuff */

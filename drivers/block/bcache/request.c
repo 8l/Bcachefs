@@ -1,5 +1,6 @@
 
 #include "bcache.h"
+#include "btree.h"
 
 #include <linux/cgroup.h>
 #include <linux/hash.h>

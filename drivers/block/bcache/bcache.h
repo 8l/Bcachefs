@@ -485,15 +485,6 @@ struct btree {
 	struct bio		bio;
 };
 
-struct btree_iter {
-	size_t size, used;
-	struct btree_iter_set {
-		struct bkey *k, *end;
-	} data[5];
-	/* Has to be 1 greater than the normal max for coalescing in
-	 * btree_gc_recurse() */
-};
-
 struct bbio {
 	unsigned		submit_time_us;
 	union {
@@ -635,248 +626,10 @@ PTR_FIELD(PTR_GEN,		0,  8)
 	for (b = (ca)->buckets + (ca)->sb.first_bucket;			\
 	     b < (ca)->buckets + (ca)->sb.nbuckets; b++)
 
-#define for_each_sorted_set_start(b, i, start)				\
-	for (int _i = start; i = (b)->sets[_i], _i <= (b)->nsets; _i++)
-
-#define for_each_sorted_set(b, i)	for_each_sorted_set_start(b, i, 0)
-
-#define bkey_filter(b, i, k, filter)					\
-({									\
-	while (k < end(i) && filter(b, k))				\
-		k = next(k);						\
-	k;								\
-})
-
-#define all_keys(b, k)		0
-
-#define for_each_key_after_filter(b, k, search, filter)			\
-	for (int _i = 0; _i <= (b)->nsets; _i++)			\
-		for (k = bset_search(b, _i, search);			\
-		     (k = bkey_filter(b, (b)->sets[_i], k, filter))	\
-			< end((b)->sets[_i]);				\
-		     k = next(k))
-
-#define for_each_key_filter(b, k, filter)				\
-	for_each_key_after_filter(b, k, NULL, filter)
-
-#define for_each_key(b, k)	for_each_key_filter(b, k, all_keys)
-
-/* Btree key comparison/iteration */
-
-static inline int64_t bkey_cmp(const struct bkey *l, const struct bkey *r)
-{
-	return (int64_t) KEY_DEV(l) - (int64_t) KEY_DEV(r)
-		?: (int64_t) l->key - (int64_t) r->key;
-}
-
-static inline size_t bkey_u64s(const struct bkey *k)
-{
-	BUG_ON(KEY_CSUM(k) > 1);
-	return 2 + KEY_PTRS(k) + (KEY_CSUM(k) ? 1 : 0);
-}
-
-static inline size_t bkey_bytes(const struct bkey *k)
-{
-	return bkey_u64s(k) * sizeof(uint64_t);
-}
-
-static inline void bkey_copy(struct bkey *dest, const struct bkey *src)
-{
-	memcpy(dest, src, bkey_bytes(src));
-}
-
-static inline void bkey_copy_key(struct bkey *dest, const struct bkey *src)
-{
-	if (!src)
-		src = &KEY(0, 0, 0);
-
-	SET_KEY_DEV(dest, KEY_DEV(src));
-	dest->key = src->key;
-}
-
 static inline void __bkey_put(struct cache_set *c, struct bkey *k)
 {
 	for (unsigned i = 0; i < KEY_PTRS(k); i++)
 		atomic_dec_bug(&PTR_BUCKET(c, k, i)->pin);
-}
-
-static inline struct bkey *next(const struct bkey *k)
-{
-	uint64_t *d = (void *) k;
-	return (struct bkey *) (d + bkey_u64s(k));
-}
-
-static inline struct bkey *prev(const struct bkey *k)
-{
-	uint64_t *d = (void *) k;
-	do {
-		--d;
-	} while (!KEY_IS_HEADER((struct bkey *) d));
-
-	return (struct bkey *) d;
-}
-
-static inline struct bset *write_block(struct btree *b)
-{
-	 return ((void *) b->data) + b->written * block_bytes(b->c);
-}
-
-/* Keylists */
-
-struct keylist {
-	struct bkey		*top;
-	union {
-		uint64_t		*list;
-		struct bkey		*bottom;
-	};
-
-	/* Enough room for btree_split's keys without realloc */
-#define KEYLIST_INLINE		16
-	uint64_t		d[KEYLIST_INLINE];
-};
-
-static inline void keylist_init(struct keylist *l)
-{
-	l->top = (void *) (l->list = l->d);
-}
-
-static inline void keylist_push(struct keylist *l)
-{
-#ifdef CONFIG_BCACHE_EDEBUG
-	uint64_t *i = (uint64_t *) l->top;
-	while (++i < (uint64_t *) next(l->top))
-		BUG_ON(KEY_IS_HEADER((struct bkey *) i));
-#endif
-	BUG_ON(!KEY_IS_HEADER(l->top));
-	l->top = next(l->top);
-}
-
-static inline void keylist_add(struct keylist *l, struct bkey *k)
-{
-	bkey_copy(l->top, k);
-	keylist_push(l);
-}
-
-static inline bool keylist_empty(struct keylist *l)
-{
-	return l->top == (void *) l->list;
-}
-
-static inline void keylist_free(struct keylist *l)
-{
-	if (l->list != l->d)
-		kfree(l->list);
-}
-
-void keylist_copy(struct keylist *, struct keylist *);
-struct bkey *keylist_pop(struct keylist *);
-int keylist_realloc(struct keylist *, int);
-
-/* Recursing down the btree */
-
-struct btree_op {
-	struct closure		cl;
-	struct cached_dev	*d;
-
-	/* For cache lookups, keys we took refcounts on.
-	 * Everywhere else, keys to be inserted.
-	 */
-	struct keylist		keys;
-
-	/* Journal entry we have a refcount on */
-	atomic_t		*journal;
-
-	/* Btree level at which we start taking write locks */
-	short			lock;
-
-	/* Btree insertion type */
-	enum {
-		INSERT_READ		= 0,
-		INSERT_WRITE		= 1,
-		INSERT_WRITEBACK	= 3,
-		INSERT_UNDIRTY		= 4,
-		INSERT_REPLAY		= 6
-	} insert_type:8;
-
-	unsigned		cache_hit:1;
-	unsigned		cache_miss:1;
-};
-
-int __btree_write(struct btree *);
-void btree_write(struct btree *b, bool now, struct btree_op *op);
-
-static inline void rw_lock(bool w, struct btree *b, int level)
-{
-	w ? down_write_nested(&b->lock, level + 1)
-	  : down_read_nested(&b->lock, level + 1);
-}
-
-static inline void __rw_unlock(bool w, struct btree *b, bool nowrite)
-{
-	bool queue;
-	long delay = max_t(long, 0, b->expires - jiffies);
-	BUG_ON(!b->written && atomic_read(&b->nread) == 1 && b->data->keys);
-
-	if (!delay && !nowrite)
-		__btree_write(b);
-
-	queue = b->write;
-
-	(w ? up_write : up_read)(&b->lock);
-
-	if (queue) {
-		smp_rmb();
-		if (atomic_read(&b->io) == -1)
-			schedule_delayed_work(&b->work, delay);
-	}
-}
-
-#define rw_unlock_nowrite(w, b)	__rw_unlock(w, b, true)
-#define rw_unlock(w, b)		__rw_unlock(w, b, false)
-
-#define insert_lock(s, b)	((b)->level	<= (s)->lock)
-
-#define btree(f, k, b, op, ...)						\
-({									\
-	int _r, l = b->level - 1;					\
-	bool _w = l <= (op)->lock;					\
-	struct btree *_b = get_bucket(b->c, k, l, op);			\
-	BUG_ON(ptr_bad(b, k));						\
-	if (!IS_ERR(_b)) {						\
-		_r = btree_ ## f(_b, op, ## __VA_ARGS__);		\
-		rw_unlock(_w, _b);					\
-	} else								\
-		_r = PTR_ERR(_b);					\
-	_r;								\
-})
-
-#define btree_root(f, c, op, ...)					\
-({									\
-	int _r = -EINTR;						\
-	do {								\
-		struct btree *_b = (c)->root;				\
-		bool _w = insert_lock(op, _b);				\
-		rw_lock(_w, _b, _b->level);				\
-		if (_b == (c)->root &&					\
-		    _w == insert_lock(op, _b))				\
-			_r = btree_ ## f(_b, op, ##__VA_ARGS__);	\
-		rw_unlock(_w, _b);					\
-	} while (_r == -EINTR);						\
-									\
-	if ((c)->try_harder == &(op)->cl) {				\
-		(c)->try_harder = NULL;					\
-		closure_run_wait(&(c)->try_wait, bcache_wq);		\
-	}								\
-	_r;								\
-})
-
-static inline bool should_split(struct btree *b)
-{
-	struct bset *i = write_block(b);
-	return b->written >= btree_blocks(b) ||
-		(i->seq == b->data->seq &&
-		 b->written + __set_blocks(i, i->keys + 15, b->c)
-		 > btree_blocks(b));
 }
 
 /* Blktrace macros */
@@ -908,31 +661,6 @@ struct keyprint_hack bcache_pkey(const struct bkey *k);
 struct keyprint_hack bcache_pbtree(const struct btree *b);
 #define pkey(k)		(bcache_pkey(k).s)
 #define pbtree(b)	(bcache_pbtree(b).s)
-
-bool __cut_front(const struct bkey *, struct bkey *);
-bool __cut_back(const struct bkey *, struct bkey *);
-
-static inline bool cut_front(const struct bkey *where, struct bkey *k)
-{
-	BUG_ON(bkey_cmp(where, k) > 0);
-	return __cut_front(where, k);
-}
-
-static inline bool cut_back(const struct bkey *where, struct bkey *k)
-{
-	BUG_ON(bkey_cmp(where, &START_KEY(k)) < 0);
-	return __cut_back(where, k);
-}
-
-static inline void set_gc_sectors(struct cache_set *c)
-{
-	atomic_set(&c->sectors_to_gc, c->sb.bucket_size * c->nbuckets / 8);
-}
-
-static inline bool journal_full(struct cache_set *c)
-{
-	return !KEY_PTRS(&c->journal.cur->key) || fifo_full(&c->journal.pin);
-}
 
 static inline void cached_dev_put(struct cached_dev *d)
 {
@@ -970,10 +698,6 @@ static inline uint8_t gen_after(uint8_t a, uint8_t b)
 
 /* Forward declarations */
 
-/* Hack around symbol collisions */
-#define btree_alloc(x, y, z)	bcache_btree_alloc(x, y, z)
-#define btree_insert(x, y)	bcache_btree_insert(x, y)
-
 #ifdef CONFIG_BCACHE_EDEBUG
 
 unsigned count_data(struct btree *);
@@ -991,44 +715,8 @@ void check_key_order_msg(struct btree *, struct bset *, const char *, ...);
 
 #endif
 
-struct bkey *next_recurse_key(struct btree *, struct bkey *);
-struct bkey *btree_iter_next(struct btree_iter *);
-void btree_iter_push(struct btree_iter *, struct bkey *, struct bkey *);
-struct bkey *__btree_iter_init(struct btree *, struct btree_iter *,
-			       struct bkey *, int);
 
-#define btree_iter_init(b, iter, search)			\
-	__btree_iter_init(b, iter, search, 0)
-
-void bset_init(struct btree *, struct bset *);
-void bset_build_tree_noalloc(struct btree *, unsigned);
-void bset_build_tree(struct btree *, unsigned);
-
-struct bkey *__bset_search(struct btree *, unsigned, const struct bkey *);
-#define bset_search(b, i, search)				\
-	(search ? __bset_search(b, i, search) : b->sets[i]->start)
-
-int bset_print_stats(struct cache_set *, char *);
-
-const char *insert_type(struct btree_op *);
 void btree_op_init_stack(struct btree_op *);
-size_t btree_gc_finish(struct cache_set *);
-int btree_check(struct btree *, struct btree_op *);
-void __btree_mark_key(struct cache_set *, int, struct bkey *);
-
-void btree_read_work(struct work_struct *);
-struct btree *btree_alloc(struct cache_set *, int, struct closure *);
-bool btree_insert_keys(struct btree *, struct btree_op *);
-int btree_insert(struct btree_op *, struct cache_set *);
-void btree_insert_async(struct closure *);
-int btree_search_recurse(struct btree *, struct btree_op *,
-			 struct bio *, uint64_t *);
-
-bool bkey_try_merge(struct btree *, struct bkey *, struct bkey *);
-void btree_sort_lazy(struct btree *);
-void btree_sort(struct btree *, int, struct bset *);
-void __btree_sort(struct btree *, int, struct bset *,
-		  struct btree_iter *, bool);
 
 bool in_writeback(struct cached_dev *, sector_t, unsigned);
 void queue_writeback(struct cached_dev *);
@@ -1044,9 +732,6 @@ int submit_bbio_split(struct bio *, struct cache_set *,
 
 void cache_read_endio(struct bio *, int);
 
-void set_new_root(struct btree *);
-struct btree *get_bucket(struct cache_set *, struct bkey *,
-			 int, struct btree_op *);
 uint8_t inc_gen(struct cache *, struct bucket *);
 void rescale_priorities(struct cache_set *, int);
 bool bucket_add_unused(struct cache *, struct bucket *);
@@ -1062,11 +747,6 @@ void prio_write(struct cache *, struct closure *);
 void write_bdev_super(struct cached_dev *, struct closure *);
 bool cache_set_error(struct cache_set *, const char *, ...);
 int bcache_make_request(struct request_queue *, struct bio *);
-
-const char *ptr_status(struct cache_set *, const struct bkey *);
-bool __ptr_invalid(struct cache_set *, int level, const struct bkey *);
-bool ptr_invalid(struct btree *, const struct bkey *);
-bool ptr_bad(struct btree *, const struct bkey *);
 
 extern struct kmem_cache *search_cache;
 extern struct workqueue_struct *bcache_wq;

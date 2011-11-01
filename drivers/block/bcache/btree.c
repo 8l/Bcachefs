@@ -21,6 +21,7 @@
  */
 
 #include "bcache.h"
+#include "btree.h"
 
 #include <linux/bitops.h>
 #include <linux/blkdev.h>
@@ -99,7 +100,7 @@ MODULE_AUTHOR("Kent Overstreet <kent.overstreet@gmail.com>");
 
 const char *insert_type(struct btree_op *op)
 {
-	static const char *insert_types[] = {
+	static const char * const insert_types[] = {
 		"read", "write", NULL, "writeback", "undirty", NULL, "replay"
 	};
 
@@ -434,7 +435,7 @@ static void btree_read_endio(struct bio *bio, int error)
 		BUG_ON(!schedule_work(&b->work.work));
 }
 
-static void btree_read(struct btree *b)
+void btree_read(struct btree *b)
 {
 	BUG_ON(b->nsets || b->written);
 	BUG_ON(atomic_xchg(&b->io, 1) != -1);
@@ -488,7 +489,7 @@ static void btree_write_endio(struct bio *bio, int error)
 		atomic_dec_bug(w->journal);
 		w->journal = NULL;
 		closure_run_wait(&b->c->journal.wait, bcache_wq);
-		if (journal_full(b->c))
+		if (journal_full(&b->c->journal))
 			schedule_work(&b->c->journal.work);
 	}
 
@@ -662,7 +663,7 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 
 #define btree_reserve(c)	((c->root ? c->root->level : 1) * 4 + 4)
 
-static void free_bucket_data(struct btree *b)
+void free_bucket_data(struct btree *b)
 {
 	free_pages((unsigned long) b->data, b->page_order);
 	free_pages((unsigned long) b->tree->key, bset_tree_order(b));
@@ -797,7 +798,7 @@ static void reset_bucket(struct btree *b, int level)
 	lock_set_subclass(&b->lock.dep_map, level + 1, _THIS_IP_);
 }
 
-static void alloc_bucket_data(struct btree *b, gfp_t gfp)
+void alloc_bucket_data(struct btree *b, gfp_t gfp)
 {
 	unsigned pages = KEY_SIZE(&b->key) / PAGE_SECTORS ?: 1;
 	b->page_order = ilog2(max(b->c->btree_pages, pages));
@@ -806,7 +807,7 @@ static void alloc_bucket_data(struct btree *b, gfp_t gfp)
 	b->tree->key = (void *) __get_free_pages(gfp, bset_tree_order(b));
 }
 
-static struct btree *__alloc_bucket(struct cache_set *c, gfp_t flags)
+struct btree *__alloc_bucket(struct cache_set *c, gfp_t flags)
 {
 	struct btree *b = kzalloc(sizeof(*b) + sizeof(struct bio_vec) *
 				  bucket_pages(c), flags);
@@ -969,7 +970,7 @@ retry:
 }
 
 struct btree *get_bucket(struct cache_set *c, struct bkey *k,
-				int level, struct btree_op *op)
+			 int level, struct btree_op *op)
 {
 	int nread;
 	bool write = false;

@@ -72,6 +72,9 @@ struct journal {
 
 #define JOURNAL_PIN	20000
 
+#define journal_full(j)						\
+	(!KEY_PTRS(&(j)->cur->key) || fifo_full(&(j)->pin))
+
 struct closure;
 struct cache_set;
 struct btree_op;

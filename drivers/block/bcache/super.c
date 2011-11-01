@@ -1,5 +1,6 @@
 
 #include "bcache.h"
+#include "btree.h"
 
 #include <linux/buffer_head.h>
 #include <linux/debugfs.h>

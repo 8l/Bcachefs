@@ -1,5 +1,6 @@
 
 #include "bcache.h"
+#include "btree.h"
 
 struct dirty_io {
 	struct closure		cl;

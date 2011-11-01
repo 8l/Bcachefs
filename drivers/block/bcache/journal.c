@@ -1,5 +1,6 @@
 
 #include "bcache.h"
+#include "btree.h"
 
 /* Journalling */
 
@@ -383,7 +384,7 @@ static void journal_reclaim(struct cache_set *s)
 	struct cache *ca;
 	struct journal_seq j;
 	atomic_t p;
-	bool popped = false, full = journal_full(s);
+	bool popped = false, full = journal_full(&s->journal);
 
 	while (fifo_used(&s->journal.pin) > 1 &&
 	       !atomic_read(&fifo_front(&s->journal.pin))) {
@@ -513,7 +514,7 @@ static void __journal_try_write(struct cache_set *c, bool noflush)
 
 	if (!w->need_write)
 		spin_unlock(&c->journal.lock);
-	else if (journal_full(c)) {
+	else if (journal_full(&c->journal)) {
 		journal_reclaim(c);
 		spin_unlock(&c->journal.lock);
 
@@ -580,7 +581,7 @@ void bcache_journal(struct closure *cl)
 
 	journal_reclaim(c);
 
-	if (journal_full(c)) {
+	if (journal_full(&c->journal)) {
 		/* XXX: tracepoint */
 		BUG_ON(!closure_wait(&c->journal.wait, cl));
 		spin_unlock(&c->journal.lock);

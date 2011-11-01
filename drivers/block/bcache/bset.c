@@ -657,7 +657,9 @@ struct bkey *__bset_search(struct btree *b, unsigned set,
 static inline bool btree_iter_cmp(struct btree_iter_set l,
 				  struct btree_iter_set r)
 {
-	return bkey_cmp(&START_KEY(l.k), &START_KEY(r.k)) > 0;
+	int64_t c = bkey_cmp(&START_KEY(l.k), &START_KEY(r.k));
+
+	return c ? c > 0 : l.k < r.k;
 }
 
 static inline bool btree_iter_end(struct btree_iter *iter)
@@ -737,14 +739,8 @@ static void btree_sort_fixup(struct btree_iter *iter)
 		struct bkey *k;
 
 		if (iter->used > 2 &&
-		    (bkey_cmp(&START_KEY(i[0].k), &START_KEY(i[1].k)) > 0 ||
-		     (i[0].k < i[1].k &&
-		      !bkey_cmp(&START_KEY(i[0].k), &START_KEY(i[1].k)))))
+		    btree_iter_cmp(i[0], i[1]))
 			i++;
-
-		if (top->k < i->k &&
-		    !bkey_cmp(&START_KEY(top->k), &START_KEY(i->k)))
-			swap(*top, *i);
 
 		for (k = i->k;
 		     k != i->end && bkey_cmp(top->k, &START_KEY(k)) > 0;

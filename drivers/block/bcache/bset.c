@@ -226,16 +226,21 @@ bool bkey_try_merge(struct btree *b, struct bkey *l, struct bkey *r)
 	    bkey_cmp(l, &START_KEY(r)))
 		return false;
 
-	/* Keys with no pointers aren't restricted to one bucket, and buckets
-	 * could be bigger max key size:
-	 */
-	if (KEY_SIZE(l) + KEY_SIZE(r) > USHRT_MAX)
-		return false;
-
 	for (unsigned j = 0; j < KEY_PTRS(l); j++)
 		if (l->ptr[j] + PTR(0, KEY_SIZE(l), 0) != r->ptr[j] ||
 		    PTR_BUCKET(b->c, l, j) != PTR_BUCKET(b->c, r, j))
 			return false;
+
+	/* Keys with no pointers aren't restricted to one bucket, and buckets
+	 * could be bigger max key size:
+	 */
+	if (KEY_SIZE(l) + KEY_SIZE(r) > USHRT_MAX) {
+		l->key += USHRT_MAX - KEY_SIZE(l);
+		SET_KEY_SIZE(l, USHRT_MAX);
+
+		cut_front(l, r);
+		return false;
+	}
 
 	if (KEY_CSUM(l)) {
 		if (KEY_CSUM(r))

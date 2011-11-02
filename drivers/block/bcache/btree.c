@@ -1687,7 +1687,8 @@ bool btree_insert_keys(struct btree *b, struct btree_op *op)
 			while (m != end(i) && bkey_cmp(k, &START_KEY(m)) > 0)
 				m = next(m);
 
-			if (m != i->start) {
+			if (!key_merging_disabled(b->c) &&
+			    m != i->start) {
 				m = prev(m);
 
 				status = "overwrote back";
@@ -1703,7 +1704,8 @@ bool btree_insert_keys(struct btree *b, struct btree_op *op)
 				m = next(m);
 			}
 
-			if (m != end(i)) {
+			if (!key_merging_disabled(b->c) &&
+			    m != end(i)) {
 				status = "overwrote front";
 				if (KEY_PTRS(m) == KEY_PTRS(k) && !KEY_SIZE(m))
 					goto copy;

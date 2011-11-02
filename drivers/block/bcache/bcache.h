@@ -425,10 +425,20 @@ struct cache_set {
 	int			error_limit;
 	int			error_decay;
 	unsigned		verify:1;
+	unsigned		key_merging_disabled:1;
 
 #define BUCKET_HASH_BITS	12
 	struct hlist_head	bucket_hash[1 << BUCKET_HASH_BITS];
 };
+
+static inline bool key_merging_disabled(struct cache_set *c)
+{
+#ifdef CONFIG_BCACHE_DEBUG
+	return c->key_merging_disabled;
+#else
+	return 0;
+#endif
+}
 
 struct btree_write {
 #ifdef CONFIG_BCACHE_LATENCY_DEBUG

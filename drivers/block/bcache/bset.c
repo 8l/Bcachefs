@@ -222,6 +222,9 @@ static uint64_t merge_chksums(struct bkey *l, struct bkey *r)
  */
 bool bkey_try_merge(struct btree *b, struct bkey *l, struct bkey *r)
 {
+	if (key_merging_disabled(b->c))
+		return false;
+
 	if (KEY_PTRS(l) != KEY_PTRS(r) ||
 	    KEY_DIRTY(l) != KEY_DIRTY(r) ||
 	    bkey_cmp(l, &START_KEY(r)))
@@ -232,8 +235,8 @@ bool bkey_try_merge(struct btree *b, struct bkey *l, struct bkey *r)
 		    PTR_BUCKET(b->c, l, j) != PTR_BUCKET(b->c, r, j))
 			return false;
 
-	/* Keys with no pointers aren't restricted to one bucket, and buckets
-	 * could be bigger max key size:
+	/* Keys with no pointers aren't restricted to one bucket and could
+	 * overflow KEY_SIZE
 	 */
 	if (KEY_SIZE(l) + KEY_SIZE(r) > USHRT_MAX) {
 		l->key += USHRT_MAX - KEY_SIZE(l);

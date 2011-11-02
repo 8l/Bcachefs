@@ -51,6 +51,16 @@ static struct bcache_cgroup {
 #endif
 	bool				writeback;
 	bool				writethrough;
+	union {
+
+		atomic_t		stats[2][2];
+		struct {
+			atomic_t	cache_hits;
+			atomic_t	cache_misses;
+			atomic_t	cache_bypass_hits;
+			atomic_t	cache_bypass_misses;
+		};
+	};
 } bcache_default_cgroup;
 
 #ifdef CONFIG_CGROUP_BCACHE
@@ -96,6 +106,31 @@ static int bcache_writeback_write(struct cgroup *cgrp, struct cftype *cft,
 	return 0;
 }
 
+static u64 bcache_cache_hits_read(struct cgroup *cgrp, struct cftype *cft)
+{
+	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
+	return atomic_read(&bcachecg->cache_hits);
+}
+
+static u64 bcache_cache_misses_read(struct cgroup *cgrp, struct cftype *cft)
+{
+	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
+	return atomic_read(&bcachecg->cache_misses);
+}
+
+static u64 bcache_cache_bypass_hits_read(struct cgroup *cgrp, struct cftype *cft)
+{
+	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
+	return atomic_read(&bcachecg->cache_bypass_hits);
+}
+
+static u64 bcache_cache_bypass_misses_read(struct cgroup *cgrp, struct cftype *cft)
+{
+	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
+	return atomic_read(&bcachecg->cache_bypass_misses);
+}
+
+
 struct cftype bcache_files[] = {
 	{
 		.name		= "writethrough",
@@ -106,6 +141,22 @@ struct cftype bcache_files[] = {
 		.name		= "writeback",
 		.read_u64	= bcache_writeback_read,
 		.write_u64	= bcache_writeback_write,
+	},
+	{
+		.name		= "cache_hits",
+		.read_u64	= bcache_cache_hits_read,
+	},
+	{
+		.name		= "cache_misses",
+		.read_u64	= bcache_cache_misses_read,
+	},
+	{
+		.name		= "cache_bypass_hits",
+		.read_u64	= bcache_cache_bypass_hits_read,
+	},
+	{
+		.name		= "cache_bypass_misses",
+		.read_u64	= bcache_cache_bypass_misses_read,
 	},
 };
 
@@ -902,6 +953,12 @@ static void __request_read(struct closure *cl)
 	}
 
 	atomic_inc(&op->d->stats[s->skip][op->cache_miss]);
+	{
+#ifdef CONFIG_CGROUP_BCACHE
+		struct bcache_cgroup *cg = bio_to_cgroup(bio);
+		atomic_inc(&cg->stats[s->skip][op->cache_miss]);
+#endif
+	}
 
 	return_f(cl, NULL);
 }

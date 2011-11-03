@@ -1662,10 +1662,10 @@ bool btree_insert_keys(struct btree *b, struct btree_op *op)
 	bool ret = false;
 	struct bset *i = write_block(b);
 	struct bkey *k, *m;
+	unsigned oldsize = count_data(b);
 
 	while ((k = keylist_pop(&op->keys))) {
 		const char *status = "insert";
-		unsigned oldsize = count_data(b);
 
 		BUG_ON(b->level && !KEY_PTRS(k));
 		BUG_ON(!b->level && !k->key);
@@ -1721,9 +1721,9 @@ bool btree_insert_keys(struct btree *b, struct btree_op *op)
 copy:		bkey_copy(m, k);
 merged:		ret = true;
 
+		check_overlapping_keys(b);
 		check_key_order_msg(b, i, "%s for %s at %s: %s", status,
 				    insert_type(op), pbtree(b), pkey(k));
-		BUG_ON(count_data(b) < oldsize);
 
 		if (b->level && !k->key)
 			b->prio_blocked++;
@@ -1732,6 +1732,7 @@ merged:		ret = true;
 			 insert_type(op), pbtree(b), pkey(k));
 	}
 
+	BUG_ON(count_data(b) < oldsize);
 	return ret;
 }
 

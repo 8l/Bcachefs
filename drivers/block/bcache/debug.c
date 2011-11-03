@@ -183,7 +183,6 @@ void btree_verify(struct btree *b, struct bset *new)
 	}
 
 	mutex_unlock(&b->c->verify_lock);
-	printk(KERN_INFO "verify succeeded\n");
 }
 
 void bcache_debug_cache_set_free(struct cache_set *c)
@@ -221,7 +220,7 @@ unsigned count_data(struct btree *b)
 	struct bkey *k;
 
 	if (!b->level)
-		for_each_key_filter(b, k, ptr_invalid)
+		for_each_key(b, k)
 			ret += KEY_SIZE(k);
 	return ret;
 }
@@ -237,6 +236,35 @@ void check_key_order_msg(struct btree *b, struct bset *i, const char *m, ...)
 				vdump_bucket_and_panic(b, m, args);
 				va_end(args);
 			}
+}
+
+void check_overlapping_keys(struct btree *b)
+{
+	struct bkey *k, *p;
+	struct btree_iter iter;
+
+	if (b->level)
+		return;
+
+	btree_iter_init(b, &iter, NULL);
+
+	do
+		p = btree_iter_next(&iter);
+	while (p && ptr_invalid(b, p));
+
+	while (1) {
+		do
+			k = btree_iter_next(&iter);
+		while (k && ptr_invalid(b, k));
+
+		if (!k)
+			break;
+
+		if (bkey_cmp(p, &START_KEY(k)) > 0)
+			dump_bucket_and_panic(b, "keys out of order: %s > %s",
+					      pkey(p), pkey(k));
+		p = k;
+	}
 }
 
 #endif

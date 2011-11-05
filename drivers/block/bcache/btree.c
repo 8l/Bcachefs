@@ -1721,7 +1721,8 @@ bool btree_insert_keys(struct btree *b, struct btree_op *op)
 copy:		bkey_copy(m, k);
 merged:		ret = true;
 
-		check_overlapping_keys(b);
+		check_keys(b, "%s for %s at %s: %s", status,
+			   insert_type(op), pbtree(b), pkey(k));
 		check_key_order_msg(b, i, "%s for %s at %s: %s", status,
 				    insert_type(op), pbtree(b), pkey(k));
 

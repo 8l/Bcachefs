@@ -17,7 +17,7 @@ struct keyprint_hack bcache_pbtree(const struct btree *b);
 
 unsigned count_data(struct btree *);
 void check_key_order_msg(struct btree *, struct bset *, const char *, ...);
-void check_overlapping_keys(struct btree *);
+void check_keys(struct btree *, const char *, ...);
 
 #define check_key_order(b, i)	check_key_order_msg(b, i, "keys out of order")
 #define EBUG_ON(cond)		BUG_ON(cond)
@@ -27,7 +27,7 @@ void check_overlapping_keys(struct btree *);
 #define count_data(b)					0
 #define check_key_order(b, i)				do {} while (0)
 #define check_key_order_msg(b, i, ...)			do {} while (0)
-#define check_overlapping_keys(b)			do {} while (0)
+#define check_keys(b, ...)				do {} while (0)
 #define EBUG_ON(cond)		do {} while (0)
 
 #endif

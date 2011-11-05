@@ -238,8 +238,9 @@ void check_key_order_msg(struct btree *b, struct bset *i, const char *m, ...)
 			}
 }
 
-void check_overlapping_keys(struct btree *b)
+void check_keys(struct btree *b, const char *m, ...)
 {
+	va_list args;
 	struct bkey *k, *p;
 	struct btree_iter iter;
 
@@ -252,19 +253,26 @@ void check_overlapping_keys(struct btree *b)
 		p = btree_iter_next(&iter);
 	while (p && ptr_invalid(b, p));
 
-	while (1) {
-		do
-			k = btree_iter_next(&iter);
-		while (k && ptr_invalid(b, k));
+	while ((k = btree_iter_next(&iter))) {
+		if (bkey_cmp(&START_KEY(p), &START_KEY(k)) > 0) {
+			printk(KERN_ERR "Keys out of order:\n");
+			goto bug;
+		}
 
-		if (!k)
-			break;
+		if (ptr_invalid(b, k))
+			continue;
 
-		if (bkey_cmp(p, &START_KEY(k)) > 0)
-			dump_bucket_and_panic(b, "keys out of order: %s > %s",
-					      pkey(p), pkey(k));
+		if (bkey_cmp(p, &START_KEY(k)) > 0) {
+			printk(KERN_ERR "Overlapping keys:\n");
+			goto bug;
+		}
 		p = k;
 	}
+	return;
+bug:
+	va_start(args, m);
+	vdump_bucket_and_panic(b, m, args);
+	va_end(args);
 }
 
 #endif

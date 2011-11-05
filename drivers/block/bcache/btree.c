@@ -1569,8 +1569,14 @@ static bool check_old_keys(struct btree *b, struct bkey *k,
 			break;
 
 		if (op->insert_type == INSERT_READ &&
-		    !ptr_bad(b, j)) {
-			/* Should split this key in two if necessary */
+		    (!KEY_PTRS(j) ||
+		     !ptr_bad(b, j))) {
+			/* Could split this key in two if necessary: since we
+			 * don't, we have to check if we can use the start of
+			 * the key we're inserting first. Otherwise, we could
+			 * adjust a stale key that hasn't been written to disk
+			 * and not insert anything in its place.
+			 */
 			if (bkey_cmp(&START_KEY(j), &START_KEY(k)) > 0)
 				cut_back(&START_KEY(j), k);
 			else if (bkey_cmp(j, k) < 0)
@@ -1604,31 +1610,26 @@ static bool check_old_keys(struct btree *b, struct bkey *k,
 				if (j < w->start) {
 					m = bset_search(b, b->nsets, k);
 					shift_keys(w, m, j);
-
-					cut_back(&START_KEY(k), j);
-					rebuild(j);
 				} else {
 					BKEY_PADDED(key) temp;
 					bkey_copy(&temp.key, j);
 					shift_keys(w, m, &temp.key);
 					m = next(j);
-
-					cut_back(&START_KEY(k), j);
 				}
 
 				cut_front(k, m);
+				cut_back(&START_KEY(k), j);
+				rebuild(j);
 				return false;
 			}
 
 			cut_front(k, j);
 		} else {
-			if (j >= w->start)
-				__cut_back(&START_KEY(k), j);
-			else if (!bkey_cmp(k, j) &&
-				 bkey_cmp(&START_KEY(k), &START_KEY(j)) <= 0)
+			if (j < w->start &&
+			    bkey_cmp(&START_KEY(k), &START_KEY(j)) <= 0)
 				/* Completely overwrote, so we don't have to
 				 * invalidate the binary search tree */
-				cut_front(k, j);
+				cut_front(j, j);
 			else {
 				__cut_back(&START_KEY(k), j);
 				rebuild(j);

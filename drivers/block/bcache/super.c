@@ -1311,6 +1311,9 @@ err:
 	kobject_put(&d->kobj);
 	printk(KERN_DEBUG "bcache: error opening %s: %s\n",
 	       bdevname(bdev, name), err);
+	/* Return NULL instead of an error because kobject_put() cleans
+	 * everything up
+	 */
 	return NULL;
 }
 
@@ -2196,11 +2199,14 @@ static const char *register_cache(struct cache_sb *sb, struct page *sb_page,
 	printk(KERN_DEBUG "bcache: registered cache device %s\n",
 	       bdevname(bdev, name));
 
-	if (0) {
-err:		kobject_put(&c->kobj);
-		printk(KERN_DEBUG "bcache: error opening %s: %s\n",
-		       bdevname(bdev, name), err);
-	}
+	return NULL;
+err:
+	kobject_put(&c->kobj);
+	printk(KERN_DEBUG "bcache: error opening %s: %s\n",
+	       bdevname(bdev, name), err);
+	/* Return NULL instead of an error because kobject_put() cleans
+	 * everything up
+	 */
 	return NULL;
 }
 
@@ -2250,6 +2256,10 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 		err = register_cache(sb, sb_page, bdev);
 
 	if (err) {
+		/* register_(bdev|cache) will only return an error if they
+		 * didn't get far enough to create the kobject - if they did,
+		 * the kobject destructor will do this cleanup.
+		 */
 		put_page(sb_page);
 err_close:
 		blkdev_put(bdev, FMODE_READ|FMODE_WRITE);

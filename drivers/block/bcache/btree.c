@@ -896,14 +896,8 @@ struct btree *get_bucket(struct cache_set *c, struct bkey *k,
 			 int level, struct btree_op *op)
 {
 	int nread;
-	bool write = false;
-	struct closure *cl = NULL;
+	bool write = level <= op->lock;
 	struct btree *b;
-
-	if (op) {
-		cl = &op->cl;
-		write = level <= op->lock;
-	}
 
 	BUG_ON(level < 0);
 retry:
@@ -911,7 +905,7 @@ retry:
 
 	if (!b) {
 		mutex_lock(&c->bucket_lock);
-		b = alloc_bucket(c, k, level, cl);
+		b = alloc_bucket(c, k, level, &op->cl);
 		mutex_unlock(&c->bucket_lock);
 
 		if (!b)
@@ -934,11 +928,6 @@ retry:
 
 	b->jiffies = jiffies;
 
-	if (!cl) {
-		rw_unlock(write, b);
-		return NULL;
-	}
-
 	for (int i = 0; i < 4 && b->tree[i].size; i++)
 		prefetch(b->tree[i].key);
 
@@ -951,6 +940,20 @@ retry:
 		BUG_ON(!b->written);
 
 	return b;
+}
+
+static void prefetch_bucket(struct cache_set *c, struct bkey *k, int level)
+{
+	struct btree *b;
+
+	mutex_lock(&c->bucket_lock);
+	b = alloc_bucket(c, k, level, NULL);
+	mutex_unlock(&c->bucket_lock);
+
+	if (!IS_ERR_OR_NULL(b)) {
+		btree_read(b);
+		rw_unlock(true, b);
+	}
 }
 
 void bcache_btree_cache_free(struct cache_set *c)
@@ -1463,7 +1466,7 @@ int btree_check(struct btree *b, struct btree_op *op)
 		while (k) {
 			struct bkey *p = next_recurse_key(b, k);
 			if (p)
-				get_bucket(b->c, p, b->level - 1, NULL);
+				prefetch_bucket(b->c, p, b->level - 1);
 
 			ret = btree(check, k, b, op);
 			if (ret)

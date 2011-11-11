@@ -452,8 +452,21 @@ struct btree_write {
 	struct closure		*owner;
 	atomic_t		*journal;
 
+	/* If btree_split() frees a btree node, it writes a new pointer to that
+	 * btree node indicating it was freed; it takes a refcount on
+	 * c->prio_blocked because we can't write the gens until the new
+	 * pointer is on disk. This allows btree_write_endio() to release the
+	 * refcount that btree_split() took.
+	 */
 	int			prio_blocked:30;
+
+	/* Btree writes normally use bounce buffers, so we don't have to keep
+	 * the node locked for the duration of the write. If the bounce buffer
+	 * allocation fails, this tells btree_write_endio() not to free pages.
+	 */
 	unsigned		nofree:1;
+
+	/* For container_of() in btree_write_endio() */
 	unsigned		index:1;
 };
 
@@ -503,6 +516,7 @@ struct btree {
 	 * protects b->bio
 	 */
 	atomic_t		io;
+	/* Gets transferred to w->prio_blocked - see the comment there */
 	int			prio_blocked;
 
 	/* Not actually an lru anymore - just for iterating */

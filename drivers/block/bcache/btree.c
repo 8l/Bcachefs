@@ -1602,10 +1602,7 @@ static bool check_old_keys(struct btree *b, struct bkey *k,
 			    memcmp(&j->key, &k->key, bkey_bytes(k) - 8))
 				goto wb_failed;
 
-			if (j < w->start)
-				cut_front(k, j);
-			else
-				cut_back(&START_KEY(k), j);
+			cut_front(k, j);
 			atomic_long_inc(&b->c->writeback_keys_done);
 			return false;
 		}

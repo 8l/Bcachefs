@@ -348,6 +348,7 @@ void bcache_writeback_init_cached_dev(struct cached_dev *d)
 	init_rwsem(&d->writeback_lock);
 
 	d->dirty			= RB_ROOT;
+	d->writeback_metadata		= true;
 	d->writeback_running		= true;
 	d->writeback_delay		= 30;
 }

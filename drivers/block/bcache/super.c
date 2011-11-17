@@ -1409,9 +1409,10 @@ SHOW(__cache_set)
 	sysfs_print(writeback_keys_failed,
 		    atomic_long_read(&c->writeback_keys_failed));
 
-	sysfs_print(io_error_limit,		c->error_limit);
 	/* See count_io_errors for why 88 */
-	sysfs_print(io_error_halflife,		c->error_decay * 88);
+	sysfs_print(io_error_halflife,	c->error_decay * 88);
+	sysfs_print(io_error_limit,	c->error_limit >> IO_ERROR_SHIFT);
+
 	sysfs_hprint(congested,
 		     ((uint64_t) get_congested(c)) << 9);
 	sysfs_print(congested_threshold_us,	c->congested_threshold_us);
@@ -1459,21 +1460,18 @@ STORE(__cache_set)
 		queue_work(bcache_wq, &c->gc_work);
 
 	if (attr == &sysfs_prune_cache) {
-		unsigned long v;
-		strict_strtoul(buf, 10, &v);
+		unsigned long v = strtoul_or_return(buf);
 		c->shrink.shrink(&c->shrink, v, NULL);
 	}
 
 	sysfs_strtoul(congested_threshold_us, c->congested_threshold_us);
 
-	sysfs_strtoul(io_error_limit, c->error_limit);
-	if (attr == &sysfs_io_error_halflife) {
-		long halflife = 0;
-		ssize_t ret = strtoul_safe(buf, halflife);
-		/* See count_io_errors for why 88 */
-		c->error_decay = halflife / 88;
-		return ret ?: (ssize_t) size;
-	}
+	if (attr == &sysfs_io_error_limit)
+		c->error_limit = strtoul_or_return(buf) << IO_ERROR_SHIFT;
+
+	/* See count_io_errors() for why 88 */
+	if (attr == &sysfs_io_error_halflife)
+		c->error_decay = strtoul_or_return(buf) / 88;
 
 	sysfs_strtoul(verify,			c->verify);
 	sysfs_strtoul(key_merging_disabled,	c->key_merging_disabled);

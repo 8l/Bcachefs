@@ -422,8 +422,8 @@ struct cache_set {
 	atomic_long_t		writeback_keys_failed;
 	atomic_long_t		btree_write_count;
 	atomic_long_t		keys_write_count;
-	int			error_limit;
-	int			error_decay;
+	unsigned		error_limit;
+	unsigned		error_decay;
 	unsigned		verify:1;
 	unsigned		key_merging_disabled:1;
 	unsigned		gc_always_rewrite:1;

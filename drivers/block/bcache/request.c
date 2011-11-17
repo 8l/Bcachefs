@@ -618,10 +618,17 @@ int get_congested(struct cache_set *c)
 {
 	static const unsigned fract_bits = 6;
 	unsigned fract;
-	int ret, i = atomic_read(&c->congested);
+	int ret, i;
 
-	i += local_clock_us() - c->congested_last_us;
+	if (!c->congested_threshold_us)
+		return 0;
 
+	i = local_clock_us() - c->congested_last_us;
+	if (i < 0)
+		return 0;
+
+	i /= 1024;
+	i += atomic_read(&c->congested);
 	if (i >= 0)
 		return 0;
 

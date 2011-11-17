@@ -506,7 +506,7 @@ struct bbio {
 
 static inline unsigned local_clock_us(void)
 {
-	return sched_clock() >> 10;
+	return local_clock() >> 10;
 }
 
 #define btree_prio		USHRT_MAX

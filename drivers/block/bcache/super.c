@@ -1704,7 +1704,6 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 				       BTREE_MAX_PAGES);
 
 	mutex_init(&c->bucket_lock);
-	spin_lock_init(&c->open_bucket_lock);
 	mutex_init(&c->gc_lock);
 	mutex_init(&c->fill_lock);
 	mutex_init(&c->sort_lock);
@@ -1715,8 +1714,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	INIT_LIST_HEAD(&c->devices);
 	INIT_LIST_HEAD(&c->lru);
 	INIT_LIST_HEAD(&c->freed);
-	INIT_LIST_HEAD(&c->open_buckets);
-	INIT_LIST_HEAD(&c->dirty_buckets);
+	INIT_LIST_HEAD(&c->data_buckets);
 
 	c->search = mempool_create_slab_pool(32, search_cache);
 	if (!c->search)

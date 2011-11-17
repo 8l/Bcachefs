@@ -412,9 +412,8 @@ struct cache_set {
 	struct mutex		sort_lock;
 	struct bset		*sort;
 
-	struct list_head	open_buckets;
-	struct list_head	dirty_buckets;
-	spinlock_t		open_bucket_lock;
+	struct list_head	data_buckets;
+	spinlock_t		data_bucket_lock;
 
 	struct journal		journal;
 

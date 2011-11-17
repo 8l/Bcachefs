@@ -291,9 +291,8 @@ void free_open_buckets(struct cache_set *c)
 {
 	struct open_bucket *b;
 
-	list_splice(&c->dirty_buckets, &c->open_buckets);
-	while (!list_empty(&c->open_buckets)) {
-		b = list_first_entry(&c->open_buckets,
+	while (!list_empty(&c->data_buckets)) {
+		b = list_first_entry(&c->data_buckets,
 				     struct open_bucket, list);
 		list_del(&b->list);
 		kfree(b);
@@ -302,14 +301,14 @@ void free_open_buckets(struct cache_set *c)
 
 int alloc_open_buckets(struct cache_set *c)
 {
-	for (int i = 0; i < 16; i++) {
+	spin_lock_init(&c->data_bucket_lock);
+
+	for (int i = 0; i < 6; i++) {
 		struct open_bucket *b = kzalloc(sizeof(*b), GFP_KERNEL);
 		if (!b)
 			return -ENOMEM;
 
-		list_add(&b->list, i & 1
-			 ? &c->open_buckets
-			 : &c->dirty_buckets);
+		list_add(&b->list, &c->data_buckets);
 	}
 
 	return 0;
@@ -348,7 +347,7 @@ static void put_data_bucket(struct open_bucket *b, struct cache_set *c,
 		SET_PTR_OFFSET(&b->key, i, PTR_OFFSET(&b->key, i) + split);
 	}
 
-	spin_unlock(&c->open_bucket_lock);
+	spin_unlock(&c->data_bucket_lock);
 }
 
 static struct open_bucket *get_data_bucket(struct bkey *search,
@@ -356,7 +355,6 @@ static struct open_bucket *get_data_bucket(struct bkey *search,
 {
 	struct closure cl, *w = NULL;
 	struct cache_set *c = s->op.d->c;
-	struct list_head *buckets = &c->open_buckets;
 	struct open_bucket *l, *ret, *ret_task;
 
 	BKEY_PADDED(key) alloc;
@@ -365,24 +363,24 @@ static struct open_bucket *get_data_bucket(struct bkey *search,
 	if (s->op.insert_type == INSERT_WRITEBACK) {
 		closure_init_stack(&cl);
 		w = &cl;
-		buckets = &c->dirty_buckets;
 	}
 again:
 	ret = ret_task = NULL;
 
-	spin_lock(&c->open_bucket_lock);
-	list_for_each_entry_reverse(l, buckets, list)
+	spin_lock(&c->data_bucket_lock);
+	list_for_each_entry_reverse(l, &c->data_buckets, list)
 		if (!bkey_cmp(&l->key, search)) {
 			ret = l;
 			goto found;
 		} else if (l->last == s->task)
 			ret_task = l;
 
-	ret = ret_task ?: list_first_entry(buckets, struct open_bucket, list);
+	ret = ret_task ?: list_first_entry(&c->data_buckets,
+					   struct open_bucket, list);
 found:
 	if (!ret->sectors_free) {
 		if (!k) {
-			spin_unlock(&c->open_bucket_lock);
+			spin_unlock(&c->data_bucket_lock);
 			k = &alloc.key;
 
 			if (pop_bucket_set(c, initial_prio, k, 1, w))
@@ -394,11 +392,6 @@ found:
 		bkey_copy(&ret->key, k);
 		k = NULL;
 
-		if (w)
-			for (unsigned i = 0; i < KEY_PTRS(&ret->key); i++)
-				PTR_BUCKET(c, &ret->key, i)->mark =
-					GC_MARK_DIRTY;
-
 		ret->sectors_free = c->sb.bucket_size;
 	} else
 		for (unsigned i = 0; i < KEY_PTRS(&ret->key); i++)
@@ -407,10 +400,14 @@ found:
 	if (k)
 		__bkey_put(c, k);
 
+	if (w)
+		for (unsigned i = 0; i < KEY_PTRS(&ret->key); i++)
+			PTR_BUCKET(c, &ret->key, i)->mark = GC_MARK_DIRTY;
+
 	ret->last = s->task;
 	bkey_copy_key(&ret->key, search);
 
-	list_move_tail(&ret->list, buckets);
+	list_move_tail(&ret->list, &c->data_buckets);
 	return ret;
 }
 

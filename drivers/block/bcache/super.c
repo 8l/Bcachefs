@@ -1299,9 +1299,11 @@ static const char *register_bdev(struct cache_sb *sb, struct page *sb_page,
 	d->disk->queue->limits.max_sectors	= UINT_MAX;
 	d->disk->queue->limits.max_segment_size	= UINT_MAX;
 	d->disk->queue->limits.max_segments	= BIO_MAX_PAGES;
+	d->disk->queue->limits.max_discard_sectors = UINT_MAX;
 	d->disk->queue->limits.logical_block_size  = block_bytes(d);
 	d->disk->queue->limits.physical_block_size = block_bytes(d);
-	set_bit(QUEUE_FLAG_NONROT, &d->disk->queue->queue_flags);
+	set_bit(QUEUE_FLAG_NONROT,	&d->disk->queue->queue_flags);
+	set_bit(QUEUE_FLAG_DISCARD,	&d->disk->queue->queue_flags);
 
 	d->disk->queue->backing_dev_info.congested_fn = bcache_congested;
 	d->disk->queue->backing_dev_info.congested_data = d;

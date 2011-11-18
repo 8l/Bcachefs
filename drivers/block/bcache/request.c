@@ -741,7 +741,8 @@ static void check_should_skip(struct search *s)
 	int cutoff;
 
 	if (atomic_read(&d->closing) ||
-	    d->c->gc_stats.in_use > CUTOFF_CACHE_ADD)
+	    d->c->gc_stats.in_use > CUTOFF_CACHE_ADD ||
+	    (bio->bi_rw & (1 << BIO_RW_DISCARD)))
 		goto skip;
 
 	if (bio->bi_sector   & (d->c->sb.block_size - 1) ||
@@ -1194,7 +1195,11 @@ skip:		s->cache_bio = s->orig_bio;
 		bio_get(s->cache_bio);
 
 		bio_invalidate(s);
-		if (closure_bio_submit(bio, &s->cl, s->op.d->c->bio_split))
+
+		if (bio->bi_rw & (1 << BIO_RW_DISCARD) &&
+		    !blk_queue_discard(bdev_get_queue(s->op.d->bdev)))
+			bio_endio(bio, 0);
+		else if (closure_bio_submit(bio, &s->cl, s->op.d->c->bio_split))
 			return_f(&s->op.cl, request_invalidate_resubmit);
 
 		closure_put(&s->op.cl, bcache_wq);
@@ -1270,6 +1275,14 @@ static void bio_passthrough_submit(struct closure *cl)
 static int bio_passthrough(struct cached_dev *d, struct bio *bio)
 {
 	struct bio_passthrough *s;
+
+	if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
+		if (!blk_queue_discard(bdev_get_queue(d->bdev))) {
+			bio_endio(bio, 0);
+			return 0;
+		} else
+			return 1;
+	}
 
 	if (bio_max_sectors(bio) << 9 >= bio->bi_size)
 		return 1;

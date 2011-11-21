@@ -1,6 +1,7 @@
 
 #include "bcache.h"
 #include "btree.h"
+#include "debug.h"
 
 /* Journalling */
 

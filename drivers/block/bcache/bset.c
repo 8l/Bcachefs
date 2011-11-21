@@ -1,6 +1,7 @@
 
 #include "bcache.h"
 #include "btree.h"
+#include "debug.h"
 
 #include <linux/random.h>
 
@@ -776,9 +777,6 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 
 	BUG_ON(remove_stale && fixup);
 
-	if (b->level)
-		fixup = false;
-
 	if (!fixup && !remove_stale)
 		oldsize = count_data(b);
 
@@ -801,7 +799,7 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 	}
 
 	while (!btree_iter_end(iter)) {
-		if (fixup)
+		if (fixup && !b->level)
 			btree_sort_fixup(iter);
 
 		k = btree_iter_next(iter);
@@ -819,6 +817,9 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 	}
 
 	out->keys = last ? (uint64_t *) next(last) - out->d : 0;
+
+	if (!fixup && !start && !remove_stale)
+		btree_verify(b, out);
 
 	if (new)
 		return;
@@ -848,7 +849,7 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 
 	pr_debug("sorted %i keys", b->sets[start]->keys);
 	check_key_order(b, b->sets[start]);
-	BUG_ON(!fixup && !remove_stale && count_data(b) < oldsize);
+	EBUG_ON(!fixup && !remove_stale && count_data(b) != oldsize);
 }
 
 void btree_sort(struct btree *b, int start, struct bset *new)

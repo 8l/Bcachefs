@@ -22,6 +22,7 @@
 
 #include "bcache.h"
 #include "btree.h"
+#include "debug.h"
 
 #include <linux/bitops.h>
 #include <linux/blkdev.h>

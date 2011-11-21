@@ -391,6 +391,11 @@ struct cache_set {
 
 	struct btree		*root;
 
+#ifdef CONFIG_BCACHE_DEBUG
+	struct btree		*verify_data;
+	struct mutex		verify_lock;
+#endif
+
 	int			nr_uuids;
 	struct uuid_entry	*uuids;
 	BKEY_PADDED(uuid_bucket);
@@ -419,6 +424,7 @@ struct cache_set {
 	atomic_long_t		keys_write_count;
 	int			error_limit;
 	int			error_decay;
+	unsigned		verify:1;
 
 #define BUCKET_HASH_BITS	12
 	struct hlist_head	bucket_hash[1 << BUCKET_HASH_BITS];
@@ -661,18 +667,6 @@ do {									\
 
 #define err_printk(...)	printk(KERN_ERR "bcache: " __VA_ARGS__)
 
-/* Btree/bkey debug printing */
-
-#define KEYHACK_SIZE 80
-struct keyprint_hack {
-	char s[KEYHACK_SIZE];
-};
-
-struct keyprint_hack bcache_pkey(const struct bkey *k);
-struct keyprint_hack bcache_pbtree(const struct btree *b);
-#define pkey(k)		(bcache_pkey(k).s)
-#define pbtree(b)	(bcache_pbtree(b).s)
-
 static inline void cached_dev_put(struct cached_dev *d)
 {
 	if (atomic_dec_and_test(&d->count))
@@ -708,24 +702,6 @@ static inline uint8_t gen_after(uint8_t a, uint8_t b)
 		__ATTR(n, S_IWUSR|S_IRUSR, show, store)
 
 /* Forward declarations */
-
-#ifdef CONFIG_BCACHE_EDEBUG
-
-unsigned count_data(struct btree *);
-void check_key_order_msg(struct btree *, struct bset *, const char *, ...);
-
-#define check_key_order(b, i)	check_key_order_msg(b, i, "keys out of order")
-#define EBUG_ON(cond)		BUG_ON(cond)
-
-#else /* EDEBUG */
-
-#define count_data(b)					0
-#define check_key_order(b, i)				do {} while (0)
-#define check_key_order_msg(b, i, ...)			do {} while (0)
-#define EBUG_ON(cond)		do {} while (0)
-
-#endif
-
 
 void btree_op_init_stack(struct btree_op *);
 
@@ -772,14 +748,7 @@ void free_open_buckets(struct cache_set *);
 int alloc_open_buckets(struct cache_set *);
 void free_btree_cache(struct cache_set *);
 int alloc_btree_cache(struct cache_set *);
-void bcache_debug_init_cache(struct cache *);
 void bcache_writeback_init_cached_dev(struct cached_dev *);
-
-#ifdef CONFIG_DEBUG_FS
-void bcache_debug_init_cache(struct cache *);
-#else
-static inline void bcache_debug_init_cache(struct cache *c) {}
-#endif
 
 void bcache_debug_exit(void);
 int bcache_debug_init(struct kobject *);

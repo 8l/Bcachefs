@@ -1,6 +1,7 @@
 
 #include "bcache.h"
 #include "btree.h"
+#include "debug.h"
 
 #include <linux/console.h>
 #include <linux/debugfs.h>
@@ -58,7 +59,9 @@ static void dump_bset(struct btree *b, struct bset *i)
 		printk(" %s\n", ptr_status(b->c, k));
 
 		if (next(k) != end(i) &&
-		    bkey_cmp(k, &START_KEY(next(k))) > 0)
+		    bkey_cmp(k, !b->level
+			     ? &START_KEY(next(k))
+			     : next(k)) > 0)
 			printk(KERN_ERR "Key skipped backwards\n");
 	}
 }
@@ -128,6 +131,87 @@ struct keyprint_hack bcache_pbtree(const struct btree *b)
 		 b->level, b->c->root ? b->c->root->level : -1);
 	return r;
 }
+
+#ifdef CONFIG_BCACHE_DEBUG
+
+void btree_verify(struct btree *b, struct bset *new)
+{
+	struct btree *v = b->c->verify_data;
+	struct closure cl;
+	closure_init_stack(&cl);
+
+	if (!b->c->verify)
+		return;
+
+	closure_wait_on(&b->wait, bcache_wq, &cl, atomic_read(&b->io) == -1);
+
+	mutex_lock(&b->c->verify_lock);
+
+	bkey_copy(&v->key, &b->key);
+	v->written = 0;
+	v->level = b->level;
+
+	closure_wait(&v->wait, &cl);
+	btree_read(v);
+	closure_sync(&cl);
+
+	if (new->keys != v->data->keys ||
+	    memcmp(new->start,
+		   v->data->start,
+		   (void *) end(new) - (void *) new->start)) {
+		struct bset *i;
+		unsigned j;
+
+		console_lock();
+
+		printk(KERN_ERR "*** original memory node:\n");
+		for_each_sorted_set(b, i)
+			dump_bset(b, i);
+
+		printk(KERN_ERR "*** sorted memory node:\n");
+		dump_bset(b, new);
+
+		printk(KERN_ERR "*** on disk node:\n");
+		dump_bset(v, v->data);
+
+		for (j = 0; j < new->keys; j++)
+			if (new->d[j] != v->data->d[j])
+				break;
+
+		console_unlock();
+		panic("verify failed at %u\n", j);
+	}
+
+	mutex_unlock(&b->c->verify_lock);
+	printk(KERN_INFO "verify succeeded\n");
+}
+
+void bcache_debug_cache_set_free(struct cache_set *c)
+{
+	if (c->verify_data) {
+		free_bucket_data(c->verify_data);
+		kfree(c->verify_data);
+	}
+}
+
+int bcache_debug_cache_set_alloc(struct cache_set *c)
+{
+	mutex_init(&c->verify_lock);
+
+	c->verify_data = __alloc_bucket(c, GFP_KERNEL);
+	if (!c->verify_data)
+		return -ENOMEM;
+
+	SET_KEY_SIZE(&c->verify_data->key, c->sb.bucket_size);
+
+	alloc_bucket_data(c->verify_data, GFP_KERNEL);
+	if (!c->verify_data->data)
+		return -ENOMEM;
+
+	return 0;
+}
+
+#endif
 
 #ifdef CONFIG_BCACHE_EDEBUG
 

@@ -1083,14 +1083,16 @@ static void cached_dev_free(struct kobject *kobj)
 	if (d->c)
 		kobject_put(&d->c->kobj);
 
-	if (d->bio_split)
-		bioset_free(d->bio_split);
-
 	if (!IS_ERR_OR_NULL(d->bdev)) {
 		bdevname(d->bdev, name);
 		blk_sync_queue(bdev_get_queue(d->bdev));
 		blkdev_put(d->bdev, FMODE_READ|FMODE_WRITE);
 	}
+
+	if (d->bio_split)
+		bioset_free(d->bio_split);
+	if (d->bio_passthrough)
+		mempool_destroy(d->bio_passthrough);
 
 	printk(KERN_INFO "bcache: Device %s unregistered\n", name);
 
@@ -1173,8 +1175,9 @@ static struct cached_dev *cached_dev_alloc(void)
 
 	bcache_writeback_init_cached_dev(d);
 
-	d->bio_split = bioset_create(4, offsetof(struct bbio, bio));
-	if (!d)
+	if (!(d->bio_split = bioset_create(4, offsetof(struct bbio, bio))) ||
+	    !(d->bio_passthrough =
+			mempool_create_slab_pool(32, passthrough_cache)))
 		goto err;
 
 	return d;
@@ -1292,10 +1295,10 @@ static const char *register_bdev(struct cache_sb *sb, struct page *sb_page,
 
 	d->disk->queue->unplug_fn		= bcache_unplug;
 	d->disk->queue->queuedata		= d;
-	d->disk->queue->limits.max_hw_sectors	= q->limits.max_hw_sectors;
-	d->disk->queue->limits.max_sectors	= q->limits.max_sectors;
-	d->disk->queue->limits.max_segment_size	= q->limits.max_segment_size;
-	d->disk->queue->limits.max_segments	= q->limits.max_segments;
+	d->disk->queue->limits.max_hw_sectors	= UINT_MAX;
+	d->disk->queue->limits.max_sectors	= UINT_MAX;
+	d->disk->queue->limits.max_segment_size	= UINT_MAX;
+	d->disk->queue->limits.max_segments	= BIO_MAX_PAGES;
 	d->disk->queue->limits.logical_block_size  = block_bytes(d);
 	d->disk->queue->limits.physical_block_size = block_bytes(d);
 	set_bit(QUEUE_FLAG_NONROT, &d->disk->queue->queue_flags);

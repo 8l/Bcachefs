@@ -183,6 +183,7 @@ struct cached_dev {
 	atomic_t		closing;
 	atomic_t		running;
 
+	mempool_t		*bio_passthrough;
 	struct bio_set		*bio_split;
 
 	struct rw_semaphore	writeback_lock;
@@ -751,7 +752,7 @@ void write_bdev_super(struct cached_dev *, struct closure *);
 bool cache_set_error(struct cache_set *, const char *, ...);
 int bcache_make_request(struct request_queue *, struct bio *);
 
-extern struct kmem_cache *search_cache;
+extern struct kmem_cache *search_cache, *passthrough_cache;
 extern struct workqueue_struct *bcache_wq;
 extern struct list_head cache_sets; /* only needed for old shrinker, will die */
 

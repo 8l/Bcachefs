@@ -14,6 +14,16 @@
 #define CUTOFF_WRITEBACK	50
 #define CUTOFF_WRITEBACK_SYNC	75
 
+struct bio_passthrough {
+	struct closure		cl;
+	struct cached_dev	*d;
+	struct bio		*bio;
+	bio_end_io_t		*bi_end_io;
+	void			*bi_private;
+};
+
+struct kmem_cache *passthrough_cache;
+
 struct search {
 	/* Stack frame for bio_complete */
 	struct closure		cl;
@@ -1203,6 +1213,74 @@ skip:		s->cache_bio = s->orig_bio;
 	bio_insert(&s->op.cl);
 }
 
+/* Split bios in passthrough mode */
+
+static void bio_passthrough_done(struct closure *cl)
+{
+	struct bio_passthrough *s = container_of(cl, struct bio_passthrough,
+						 cl);
+
+	s->bio->bi_end_io	= s->bi_end_io;
+	s->bio->bi_private	= s->bi_private;
+	bio_endio(s->bio, 0);
+
+	closure_del(&s->cl);
+	mempool_free(s, s->d->bio_passthrough);
+}
+
+static void bio_passthrough_endio(struct bio *bio, int error)
+{
+	struct closure *cl = bio->bi_private;
+	struct bio_passthrough *s = container_of(cl, struct bio_passthrough,
+						 cl);
+
+	if (error)
+		clear_bit(BIO_UPTODATE, &s->bio->bi_flags);
+
+	bio_put(bio);
+	closure_put(cl, NULL);
+}
+
+static void bio_passthrough_submit(struct closure *cl)
+{
+	struct bio_passthrough *s = container_of(cl, struct bio_passthrough,
+						 cl);
+	struct bio *bio = s->bio, *n;
+
+	s->cl.fn = bio_passthrough_done;
+
+	do {
+		n = bio_split_get(bio, bio_max_sectors(bio), s->d);
+		if (!n)
+			return_f(&s->cl, bio_passthrough_submit);
+
+		generic_make_request(n);
+	} while (n != bio);
+}
+
+static int bio_passthrough(struct cached_dev *d, struct bio *bio)
+{
+	struct bio_passthrough *s;
+
+	if (bio_max_sectors(bio) << 9 >= bio->bi_size)
+		return 1;
+
+	s = mempool_alloc(d->bio_passthrough, GFP_NOIO);
+
+	closure_init(&s->cl, NULL);
+	s->d		= d;
+	s->bio		= bio;
+	s->bi_end_io	= bio->bi_end_io;
+	s->bi_private	= bio->bi_private;
+
+	bio_get(bio);
+	bio->bi_end_io	= bio_passthrough_endio;
+	bio->bi_private	= &s->cl;
+
+	bio_passthrough_submit(&s->cl);
+	return 0;
+}
+
 /* The entry point */
 
 int bcache_make_request(struct request_queue *q, struct bio *bio)
@@ -1213,9 +1291,11 @@ int bcache_make_request(struct request_queue *q, struct bio *bio)
 	bio->bi_bdev = d->bdev;
 	bio->bi_sector += 16;
 
-	if (!bio_has_data(bio) ||
-	    !cached_dev_get(d))
+	if (!bio_has_data(bio))
 		return 1;
+
+	if (!cached_dev_get(d))
+		return bio_passthrough(d, bio);
 
 	s = do_bio_hook(bio, d);
 	check_should_skip(s);
@@ -1229,19 +1309,24 @@ void bcache_request_exit(void)
 #ifdef CONFIG_CGROUP_BCACHE
 	cgroup_unload_subsys(&bcache_subsys);
 #endif
+	if (passthrough_cache)
+		kmem_cache_destroy(passthrough_cache);
 	if (search_cache)
 		kmem_cache_destroy(search_cache);
 }
 
 int __init bcache_request_init(void)
 {
-	search_cache = KMEM_CACHE(search, 0);
-	if (!search_cache)
-		return -ENOMEM;
+	if (!(search_cache = KMEM_CACHE(search, 0)) ||
+	    !(passthrough_cache = KMEM_CACHE(bio_passthrough, 0)))
+		goto err;
 
 #ifdef CONFIG_CGROUP_BCACHE
 	cgroup_load_subsys(&bcache_subsys);
 	init_bcache_cgroup(&bcache_default_cgroup);
 #endif
 	return 0;
+err:
+	bcache_request_exit();
+	return -ENOMEM;
 }

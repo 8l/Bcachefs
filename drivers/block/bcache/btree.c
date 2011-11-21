@@ -169,12 +169,9 @@ struct bio *bbio_kmalloc(gfp_t gfp, int vecs)
 	return bio;
 }
 
-struct bio *bio_split_get(struct bio *bio, int len, struct cache_set *c)
+struct bio *__bio_split_get(struct bio *bio, int len, struct bio_set *bs)
 {
-	struct bio *ret;
-	struct bio_set *bs = c->bio_split;
-
-	ret = bio_split_front(bio, len, bbio_kmalloc, GFP_NOIO, bs);
+	struct bio *ret = bio_split_front(bio, len, bbio_kmalloc, GFP_NOIO, bs);
 
 	if (ret && ret != bio) {
 		closure_get(ret->bi_private);
@@ -190,14 +187,10 @@ void submit_bbio(struct bio *bio, struct cache_set *c,
 	struct bbio *b = container_of(bio, struct bbio, bio);
 	bkey_copy_single_ptr(&b->key, k, ptr);
 
-	BUG_ON(bio->bi_destructor &&
-	       (bio->bi_destructor != bbio_destructor) &&
-	       (bio->bi_destructor != (void *) c->bio_split));
-
 	bio->bi_sector	= PTR_OFFSET(&b->key, 0);
 	bio->bi_bdev	= PTR_CACHE(c, &b->key, 0)->bdev;
-	b->submit_time_us = local_clock_us();
 
+	b->submit_time_us = local_clock_us();
 	generic_make_request(bio);
 }
 
@@ -281,11 +274,6 @@ void bcache_endio(struct cache_set *c, struct bio *bio,
 {
 	struct bbio *b = container_of(bio, struct bbio, bio);
 	struct cache *ca = PTR_CACHE(c, &b->key, 0);
-
-	EBUG_ON(bio->bi_destructor &&
-		(bio->bi_destructor != bbio_destructor) &&
-		(bio->bi_destructor != (void *) c->bio_split));
-	EBUG_ON(KEY_PTRS(&b->key) != 1);
 
 	if (c->congested_threshold_us) {
 		unsigned t = local_clock_us();
@@ -2015,7 +2003,7 @@ static struct bio *cache_hit(struct btree *b, struct bio *bio,
 		sector += KEY_SIZE(k) - k->key + PTR_OFFSET(k, i);
 		sectors = min(sectors, __bio_max_sectors(bio, bdev, sector));
 
-		ret = bio_split_get(bio, sectors, b->c);
+		ret = bio_split_get(bio, sectors, op->d);
 		if (!ret) {
 			atomic_dec_bug(&g->pin);
 			return ERR_PTR(-ENOMEM);
@@ -2067,7 +2055,7 @@ static int btree_search_leaf(struct btree *b, struct btree_op *op,
 			int sectors = min_t(int, bio_max_sectors(bio),
 					    KEY_START(k) - bio->bi_sector);
 
-			struct bio *n = bio_split_get(bio, sectors, b->c);
+			struct bio *n = bio_split_get(bio, sectors, op->d);
 			if (!n)
 				return -ENOMEM;
 

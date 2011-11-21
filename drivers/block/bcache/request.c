@@ -480,7 +480,7 @@ static void bio_insert(struct closure *cl)
 
 		put_data_bucket(b, op->d->c, k, bio);
 
-		n = bio_split_get(bio, KEY_SIZE(k), op->d->c);
+		n = bio_split_get(bio, KEY_SIZE(k), op->d);
 		if (!n) {
 			__bkey_put(op->d->c, k);
 			return_f(cl, bio_insert);

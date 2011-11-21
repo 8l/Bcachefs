@@ -183,6 +183,8 @@ struct cached_dev {
 	atomic_t		closing;
 	atomic_t		running;
 
+	struct bio_set		*bio_split;
+
 	struct rw_semaphore	writeback_lock;
 	struct work_struct	refill;
 
@@ -349,7 +351,7 @@ struct cache_set {
 	struct closure		*sb_writer;
 
 	mempool_t		*search;
-	struct bio_set		*bio_split;
+	struct bio_set		*bio_split; /* Move to struct cache? */
 	struct shrinker		shrink;
 
 	/*
@@ -712,6 +714,9 @@ static inline uint8_t gen_after(uint8_t a, uint8_t b)
 	static struct kobj_attribute ksysfs_##n =			\
 		__ATTR(n, S_IWUSR|S_IRUSR, show, store)
 
+#define bio_split_get(bio, len, c)					\
+	__bio_split_get(bio, len, (c)->bio_split)
+
 /* Forward declarations */
 
 void btree_op_init_stack(struct btree_op *);
@@ -723,7 +728,7 @@ int get_congested(struct cache_set *);
 void count_io_errors(struct cache *, int, const char *);
 void bcache_endio(struct cache_set *, struct bio *, int, const char *);
 struct bio *bbio_kmalloc(gfp_t, int);
-struct bio *bio_split_get(struct bio *, int, struct cache_set *);
+struct bio *__bio_split_get(struct bio *, int, struct bio_set *);
 void submit_bbio(struct bio *, struct cache_set *, struct bkey *, unsigned);
 int submit_bbio_split(struct bio *, struct cache_set *,
 		      struct bkey *, unsigned);

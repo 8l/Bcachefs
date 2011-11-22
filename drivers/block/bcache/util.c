@@ -512,13 +512,12 @@ static struct dentry *debug;
 static int debug_seq_show(struct seq_file *f, void *data)
 {
 	struct closure *cl;
-
 	spin_lock_irq(&closure_lock);
 
 	list_for_each_entry(cl, &closures, all)
-		seq_printf(f, "%pf -> %p remaining %i "
-			   "waiting on %pf for %i ms\n",
-			   cl->fn, cl->parent, atomic_read(&cl->remaining),
+		seq_printf(f, "%p: fn %pf parent %p remaining %i "
+			   "waiting at %pF for %i ms\n",
+			   cl, cl->fn, cl->parent, atomic_read(&cl->remaining),
 			   (void *) cl->waiting_on, latency_ms(cl->wait_time));
 
 	spin_unlock_irq(&closure_lock);

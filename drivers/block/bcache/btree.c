@@ -1356,8 +1356,9 @@ static void shift_keys(struct bset *i, struct bkey *where, struct bkey *insert)
 	bkey_copy(where, insert);
 }
 
-static bool check_old_keys(struct btree *b, struct bkey *k,
-			   struct btree_iter *iter, struct btree_op *op)
+static bool fix_overlapping_extents(struct btree *b, struct bkey *k,
+				    struct btree_iter *iter,
+				    struct btree_op *op)
 {
 	void rebuild(struct bkey *j)
 	{
@@ -1478,7 +1479,7 @@ bool btree_insert_keys(struct btree *b, struct btree_op *op)
 
 			BUG_ON(!m || m < i->start);
 
-			if (check_old_keys(b, k, &iter, op))
+			if (fix_overlapping_extents(b, k, &iter, op))
 				continue;
 
 			while (m != end(i) && bkey_cmp(k, &START_KEY(m)) > 0)

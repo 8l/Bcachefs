@@ -65,9 +65,10 @@ static struct bcache_cgroup {
 
 static struct bcache_cgroup *cgroup_to_bcache(struct cgroup *cgroup)
 {
-	return cgroup
-		? container_of(cgroup_subsys_state(cgroup, bcache_subsys_id),
-			       struct bcache_cgroup, css)
+	struct cgroup_subsys_state *css;
+	return cgroup &&
+		(css = cgroup_subsys_state(cgroup, bcache_subsys_id))
+		? container_of(css, struct bcache_cgroup, css)
 		: &bcache_default_cgroup;
 }
 
@@ -116,18 +117,19 @@ static u64 bcache_cache_misses_read(struct cgroup *cgrp, struct cftype *cft)
 	return atomic_read(&bcachecg->cache_misses);
 }
 
-static u64 bcache_cache_bypass_hits_read(struct cgroup *cgrp, struct cftype *cft)
+static u64 bcache_cache_bypass_hits_read(struct cgroup *cgrp,
+					 struct cftype *cft)
 {
 	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
 	return atomic_read(&bcachecg->cache_bypass_hits);
 }
 
-static u64 bcache_cache_bypass_misses_read(struct cgroup *cgrp, struct cftype *cft)
+static u64 bcache_cache_bypass_misses_read(struct cgroup *cgrp,
+					   struct cftype *cft)
 {
 	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
 	return atomic_read(&bcachecg->cache_bypass_misses);
 }
-
 
 struct cftype bcache_files[] = {
 	{

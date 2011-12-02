@@ -15,8 +15,8 @@
 #ifndef REQ_WRITE
 
 #define REQ_WRITE		WRITE
-#define REQ_SYNC		(1U << BIO_RW_SYNCIO)
 #define REQ_UNPLUG		(1U << BIO_RW_UNPLUG)
+#define REQ_SYNC		((1U << BIO_RW_SYNCIO)|REQ_UNPLUG)
 #define REQ_META		(1U << BIO_RW_META)
 #define REQ_RAHEAD		(1U << BIO_RW_AHEAD)
 

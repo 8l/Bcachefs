@@ -1166,7 +1166,8 @@ static struct cached_dev *cached_dev_alloc(void)
 	d->sequential_cutoff		= 4 << 20;
 
 	INIT_LIST_HEAD(&d->io_lru);
-	d->sb_bio.bi_io_vec = d->sb_bio.bi_inline_vecs;
+	d->sb_bio.bi_max_vecs	= 1;
+	d->sb_bio.bi_io_vec	= d->sb_bio.bi_inline_vecs;
 
 	for (struct io *j = d->io; j < d->io + RECENT_IO; j++) {
 		list_add(&j->lru, &d->io_lru);

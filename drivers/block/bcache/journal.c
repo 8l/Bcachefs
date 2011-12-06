@@ -244,7 +244,7 @@ int bcache_journal_replay(struct cache_set *s, struct list_head *list,
 		if (last != i->j.seq)
 			err_printk("journal entries %llu-%llu "
 				   "missing! (replaying %llu-%llu)\n",
-				   last, i->j.seq, start, end);
+				   last, i->j.seq - 1, start, end);
 
 		for (struct bkey *k = i->j.start; k < end(&i->j); k = next(k)) {
 			pr_debug("%s", pkey(k));

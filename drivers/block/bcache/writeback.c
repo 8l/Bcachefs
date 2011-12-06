@@ -31,6 +31,7 @@ static void dirty_init(struct dirty *w)
 	bio_set_prio(bio, IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0));
 
 	bio->bi_size		= KEY_SIZE(&w->key) << 9;
+	bio->bi_max_vecs	= DIV_ROUND_UP(KEY_SIZE(&w->key), PAGE_SECTORS);
 	bio->bi_private		= w;
 	bio_map(bio, NULL);
 }

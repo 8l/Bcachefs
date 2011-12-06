@@ -496,7 +496,7 @@ static void journal_write(struct cache_set *s, struct journal_write *w)
 		bio_reset(bio);
 		bio->bi_sector	= PTR_OFFSET(&w->key, i);
 		bio->bi_bdev	= ca->bdev;
-		bio->bi_rw	= REQ_WRITE|REQ_SYNC|REQ_META;
+		bio->bi_rw	= REQ_WRITE|REQ_SYNC|REQ_META|REQ_FLUSH;
 		bio->bi_size	= set_blocks(w->data, s) * block_bytes(s);
 
 		bio->bi_end_io	= journal_write_endio;

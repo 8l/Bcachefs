@@ -19,6 +19,7 @@
 #define REQ_SYNC		((1U << BIO_RW_SYNCIO)|REQ_UNPLUG)
 #define REQ_META		(1U << BIO_RW_META)
 #define REQ_RAHEAD		(1U << BIO_RW_AHEAD)
+#define REQ_FLUSH		(1U << BIO_RW_BARRIER)
 
 #define console_lock()		acquire_console_sem()
 #define console_unlock()	release_console_sem()

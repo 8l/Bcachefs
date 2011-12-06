@@ -12,13 +12,12 @@
 #define BKEY_EXPONENT_BITS	7
 #define BKEY_MANTISSA_BITS	22
 #define BKEY_MANTISSA_MASK	((1 << BKEY_MANTISSA_BITS) - 1)
-#define BKEY_MANTISSA_SHIFT	63
 
 struct bkey_float {
-	unsigned	m:BKEY_MID_BITS;
 	unsigned	exponent:BKEY_EXPONENT_BITS;
+	unsigned	m:BKEY_MID_BITS;
 	unsigned	mantissa:BKEY_MANTISSA_BITS;
-};
+} __packed;
 
 /* Keylists */
 
@@ -460,11 +459,11 @@ static unsigned bfloat_mantissa(const struct bkey *k, struct bkey_float *f)
 	unsigned r;
 	BUG_ON(f->exponent == 127);
 
-	if (f->exponent < BKEY_MANTISSA_SHIFT)
+	if (f->exponent < 64)
 		r = (k->key >> f->exponent) |
-			(KEY_DEV(k) << (BKEY_MANTISSA_SHIFT - f->exponent));
+			(KEY_DEV(k) << (64 - f->exponent));
 	else
-		r = KEY_DEV(k) >> (f->exponent - BKEY_MANTISSA_SHIFT);
+		r = KEY_DEV(k) >> (f->exponent & 63);
 
 	return r & BKEY_MANTISSA_MASK;
 }
@@ -489,8 +488,7 @@ static void make_bfloat(struct bset *i, struct bset_tree *t, unsigned j)
 	BUG_ON(next(p) != m);
 
 	if (KEY_DEV(l) != KEY_DEV(r))
-		f->exponent = fls64(KEY_DEV(r) ^ KEY_DEV(l)) +
-			BKEY_MANTISSA_SHIFT;
+		f->exponent = fls64(KEY_DEV(r) ^ KEY_DEV(l)) + 64;
 	else if (l->key != r->key)
 		f->exponent = fls64(r->key ^ l->key);
 
@@ -640,6 +638,7 @@ struct bkey *__bset_search(struct btree *b, unsigned set,
 
 	while (1) {
 		bool cmp;
+		unsigned shifted_key;
 		struct bkey_float *f = &t->key[j];
 
 		if (j << 4 < t->size)
@@ -647,11 +646,18 @@ struct bkey *__bset_search(struct btree *b, unsigned set,
 
 		EBUG_ON(!KEY_IS_HEADER(cur()));
 
-		if (f->exponent < 127)
-			cmp = f->mantissa > bfloat_mantissa(search, f);
-		else
+		if (f->exponent < 64)
+			shifted_key = (search->key >> f->exponent) |
+				(KEY_DEV(search) << (64 - f->exponent));
+		else if (f->exponent < 127)
+			shifted_key = KEY_DEV(search) >> (f->exponent & 63);
+		else {
 			cmp = bkey_cmp(cur(), search) > 0;
+			goto cmp_done;
+		}
 
+		cmp = f->mantissa > (shifted_key & BKEY_MANTISSA_MASK);
+cmp_done:
 		if (cmp) {
 			EBUG_ON(cur() != end(i) &&
 				bkey_cmp(cur(), search) <= 0);

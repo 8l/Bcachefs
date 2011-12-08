@@ -30,6 +30,7 @@ struct search {
 	unsigned		bio_done:1;
 	unsigned		lookup_done:1;
 	unsigned		recoverable:1;
+	unsigned		allocated_vec:1;
 
 	/* IO error returned to s->bio */
 	short			error;
@@ -629,6 +630,9 @@ static void bio_complete(struct closure *cl)
 
 	__bio_complete(s);
 
+	if (s->allocated_vec)
+		kfree(s->bio.bio.bi_io_vec);
+
 	closure_del(&s->cl);
 	mempool_free(s, d->c->search);
 	cached_dev_put(d);
@@ -804,6 +808,7 @@ static void __do_bio_hook(struct search *s)
 
 static struct search *do_bio_hook(struct bio *bio, struct cached_dev *d)
 {
+	struct bio_vec *bv;
 	struct search *s = mempool_alloc(d->c->search, GFP_NOIO);
 	memset(s, 0, sizeof(struct search));
 
@@ -814,12 +819,24 @@ static struct search *do_bio_hook(struct bio *bio, struct cached_dev *d)
 	s->op.d			= d;
 	s->task			= get_current();
 	s->orig_bio		= bio;
-
-	/* We only recover bios that use whole pages. */
-	if (bio->bi_size == (bio->bi_vcnt - bio->bi_idx) * PAGE_SIZE)
-		s->recoverable = 1;
-
 	__do_bio_hook(s);
+
+	if (bio->bi_size == bio_segments(bio) * PAGE_SIZE)
+		goto recoverable;
+
+	pr_debug("bio with vecs not page aligned");
+
+	bv = kmemdup(bio_iovec(bio),
+		     sizeof(struct bio_vec) * bio_segments(bio),
+		     GFP_NOIO);
+	if (!bv)
+		goto nonrecoverable;
+
+	s->bio.bio.bi_io_vec	= bv;
+	s->allocated_vec	= 1;
+recoverable:
+	s->recoverable		= 1;
+nonrecoverable:
 	return s;
 }
 
@@ -871,6 +888,37 @@ static void request_read_done(struct closure *cl)
 	struct bio_vec *bv;
 	int i;
 
+	if (s->error) {
+		if (s->recoverable) {
+			/* The cache read failed, but we can retry from the backing
+			 * device.
+			 */
+			pr_debug("recovering at sector %llu",
+				 (uint64_t) s->orig_bio->bi_sector);
+
+			s->error = 0;
+			bv = s->bio.bio.bi_io_vec;
+			__do_bio_hook(s);
+			s->bio.bio.bi_io_vec = bv;
+
+			if (!s->allocated_vec)
+				bio_for_each_segment(bv, s->orig_bio, i)
+					bv->bv_offset = 0, bv->bv_len = PAGE_SIZE;
+			else
+				memcpy(s->bio.bio.bi_io_vec,
+				       bio_iovec(s->orig_bio),
+				       sizeof(struct bio_vec) *
+				       bio_segments(s->orig_bio));
+
+			/* XXX: invalidate cache */
+
+			closure_get(&s->cl);
+			closure_bio_submit(&s->bio.bio, &s->cl, s->op.d->c->bio_split);
+		}
+
+		return_f(cl, bio_complete);
+	}
+
 	/* s->cache_bio != NULL implies that we had a cache miss; cache_bio now
 	 * contains data ready to be inserted into the cache.
 	 *
@@ -878,7 +926,7 @@ static void request_read_done(struct closure *cl)
 	 * to the buffers the original bio pointed to:
 	 */
 
-	if (s->cache_bio && !s->error) {
+	if (s->cache_bio) {
 		struct bio_vec *src, *dst;
 		unsigned src_offset, dst_offset, bytes;
 		void *dst_ptr;
@@ -933,8 +981,9 @@ static void request_read_done(struct closure *cl)
 		char name[BDEVNAME_SIZE];
 		struct bio *check;
 
-		__bio_for_each_segment(bv, s->orig_bio, i, 0)
-			bv->bv_offset = 0, bv->bv_len = PAGE_SIZE;
+		if (!s->allocated_vec)
+			bio_for_each_segment(bv, s->orig_bio, i)
+				bv->bv_offset = 0, bv->bv_len = PAGE_SIZE;
 
 		check = bio_clone(s->orig_bio, GFP_NOIO);
 		if (!check)
@@ -976,27 +1025,9 @@ out_put:
 out:
 	__bio_complete(s);
 
-	if (s->cache_bio && !s->error && !atomic_read(&s->op.d->c->closing)) {
+	if (s->cache_bio && !atomic_read(&s->op.d->c->closing)) {
 		closure_init(&s->op.cl, &s->cl);
 		bio_insert(&s->op.cl);
-	} else if (s->error && s->recoverable) {
-		/* The cache read failed, but we can retry direct to the
-		 * backing device. */
-
-		pr_debug("recovering at sector %llu",
-			 (uint64_t) s->orig_bio->bi_sector);
-
-		s->error = 0;
-		__do_bio_hook(s);
-
-		/* XXX: invalidate cache */
-
-		/* We only recover bios that use whole pages. */
-		bio_for_each_segment(bv, &s->bio.bio, i)
-			bv->bv_offset = 0, bv->bv_len = PAGE_SIZE;
-
-		closure_get(&s->cl);
-		closure_bio_submit(&s->bio.bio, &s->cl, s->op.d->c->bio_split);
 	}
 
 	return_f(cl, bio_complete);

@@ -124,10 +124,11 @@ bool ptr_invalid(struct btree *b, const struct bkey *k)
 bool ptr_bad(struct btree *b, const struct bkey *k)
 {
 	struct bucket *g;
-	const char *err;
 	unsigned i, stale;
 
-	if (!bkey_cmp(k, &ZERO_KEY) || !KEY_PTRS(k) || ptr_invalid(b, k))
+	if (!bkey_cmp(k, &ZERO_KEY) ||
+	    !KEY_PTRS(k) ||
+	    ptr_invalid(b, k))
 		return true;
 
 	for (i = 0; i < KEY_PTRS(k); i++) {
@@ -146,33 +147,40 @@ bool ptr_bad(struct btree *b, const struct bkey *k)
 		if (stale)
 			return true;
 
+#ifdef CONFIG_BCACHE_EDEBUG
+		if (!mutex_trylock(&b->c->bucket_lock))
+			continue;
+
 		if (b->level) {
-			err = "btree";
 			if (KEY_DIRTY(k) ||
 			    g->prio != btree_prio ||
 			    (b->c->gc_mark_valid &&
 			     g->mark != GC_MARK_BTREE))
 				goto bug;
+
 		} else {
-			err = "data";
 			if (g->prio == btree_prio)
 				goto bug;
 
-			err = "dirty";
 			if (KEY_DIRTY(k) &&
 			    b->c->gc_mark_valid &&
 			    g->mark != GC_MARK_DIRTY)
 				goto bug;
 		}
+		mutex_unlock(&b->c->bucket_lock);
+#endif
 	}
 
 	return false;
+#ifdef CONFIG_BCACHE_EDEBUG
 bug:
-	btree_bug(b, "inconsistent %s pointer %s: bucket %li pin %i "
-		  "prio %i gen %i last_gc %i mark %i gc_gen %i", err, pkey(k),
+	mutex_unlock(&b->c->bucket_lock);
+	btree_bug(b, "inconsistent pointer %s: bucket %li pin %i "
+		  "prio %i gen %i last_gc %i mark %i gc_gen %i", pkey(k),
 		  PTR_BUCKET_NR(b->c, k, i), atomic_read(&g->pin),
 		  g->prio, g->gen, g->last_gc, g->mark, g->gc_gen);
 	return true;
+#endif
 }
 
 /* Key/pointer manipulation */

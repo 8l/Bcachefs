@@ -46,6 +46,7 @@ static struct bcache_cgroup {
 #ifdef CONFIG_CGROUP_BCACHE
 	struct cgroup_subsys_state	css;
 #endif
+	bool				verify;
 	bool				writeback;
 	bool				writethrough;
 	union {
@@ -74,6 +75,17 @@ static struct bcache_cgroup *cgroup_to_bcache(struct cgroup *cgroup)
 static struct bcache_cgroup *bio_to_cgroup(struct bio *bio)
 {
 	return cgroup_to_bcache(get_bio_cgroup(bio));
+}
+
+static u64 bcache_verify_read(struct cgroup *cgrp, struct cftype *cft)
+{
+	return cgroup_to_bcache(cgrp)->verify;
+}
+
+static int bcache_verify_write(struct cgroup *cgrp, struct cftype *cft, u64 val)
+{
+	cgroup_to_bcache(cgrp)->verify = val;
+	return 0;
 }
 
 static u64 bcache_writethrough_read(struct cgroup *cgrp, struct cftype *cft)
@@ -131,6 +143,11 @@ static u64 bcache_cache_bypass_misses_read(struct cgroup *cgrp,
 }
 
 struct cftype bcache_files[] = {
+	{
+		.name		= "verify",
+		.read_u64	= bcache_verify_read,
+		.write_u64	= bcache_verify_write,
+	},
 	{
 		.name		= "writethrough",
 		.read_u64	= bcache_writethrough_read,
@@ -209,6 +226,17 @@ static struct bcache_cgroup *bio_to_cgroup(struct bio *bio)
 }
 
 #endif
+
+static bool verify(struct search *s)
+{
+	if (s->op.d->verify)
+		return true;
+#ifdef CONFIG_CGROUP_BCACHE
+	return bio_to_cgroup(s->orig_bio)->verify;
+#else
+	return 0;
+#endif
+}
 
 static void btree_op_init(struct btree_op *op)
 {
@@ -899,9 +927,54 @@ static void request_read_done(struct closure *cl)
 			src_offset	+= bytes;
 			dst_offset	+= bytes;
 		}
-
-		__bio_complete(s);
 	}
+
+	if (verify(s) && s->recoverable) {
+		char name[BDEVNAME_SIZE];
+		struct bio *check;
+
+		__bio_for_each_segment(bv, s->orig_bio, i, 0)
+			bv->bv_offset = 0, bv->bv_len = PAGE_SIZE;
+
+		check = bio_clone(s->orig_bio, GFP_NOIO);
+		if (!check)
+			goto out;
+
+		if (bio_alloc_pages(check, GFP_NOIO))
+			goto out_put;
+
+		check->bi_rw		= READ_SYNC;
+		check->bi_private	= cl;
+		check->bi_end_io	= request_endio;
+
+		bio_get(check);
+		closure_get(cl);
+		closure_bio_submit(check, cl, s->op.d->c->bio_split);
+		closure_sync(cl);
+
+		bio_for_each_segment(bv, s->orig_bio, i) {
+			void *p1 = kmap(bv->bv_page);
+			void *p2 = kmap(check->bi_io_vec[i].bv_page);
+
+			if (memcmp(p1 + bv->bv_offset,
+				   p2 + bv->bv_offset,
+				   bv->bv_len))
+				printk(KERN_ERR "bcache (%s): verify failed"
+				       " at sector %llu\n",
+				       bdevname(s->op.d->bdev, name),
+				       (uint64_t) s->orig_bio->bi_sector);
+
+			kunmap(bv->bv_page);
+			kunmap(check->bi_io_vec[i].bv_page);
+		}
+
+		__bio_for_each_segment(bv, check, i, 0)
+			__free_page(bv->bv_page);
+out_put:
+		bio_put(check);
+	}
+out:
+	__bio_complete(s);
 
 	if (s->cache_bio && !s->error && !atomic_read(&s->op.d->c->closing)) {
 		closure_init(&s->op.cl, &s->cl);
@@ -938,7 +1011,7 @@ static void request_read_done_bh(struct closure *cl)
 		return_f(&s->op.cl, __request_read);
 	}
 
-	if (s->cache_bio || s->error) {
+	if (s->cache_bio || s->error || verify(s)) {
 		cl->fn = request_read_done;
 		closure_queue(cl, bcache_wq);
 	} else

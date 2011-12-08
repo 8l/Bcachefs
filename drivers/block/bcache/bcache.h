@@ -219,6 +219,7 @@ struct cached_dev {
 	unsigned long		sequential_cutoff;
 	unsigned		sequential_merge:1;
 
+	unsigned		verify:1;
 	unsigned		data_csum:1;
 
 	unsigned		writeback:1;

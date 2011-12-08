@@ -214,6 +214,7 @@ rw_attribute(label);
 rw_attribute(readahead);
 rw_attribute(io_error_limit);
 rw_attribute(io_error_halflife);
+rw_attribute(verify);
 
 read_attribute(cache_hits);
 read_attribute(cache_misses);
@@ -782,6 +783,7 @@ SHOW(__cached_dev)
 
 #define var(stat)		(d->stat)
 
+	var_printf(verify,		"%i");
 	var_printf(data_csum,		"%i");
 	var_printf(writeback,		"%i");
 	var_printf(writeback_metadata,	"%i");
@@ -819,6 +821,7 @@ STORE(__cached_dev)
 #define d_strtoul(var)		sysfs_strtoul(var, d->var)
 #define d_strtoi_h(var)		sysfs_hatoi(var, d->var)
 
+	d_strtoul(verify);
 	d_strtoul(data_csum);
 	d_strtoul(writeback_metadata);
 	d_strtoul(writeback_running);
@@ -1108,6 +1111,9 @@ static struct cached_dev *cached_dev_alloc(void)
 		&sysfs_state,
 		&sysfs_label,
 		&sysfs_readahead,
+#ifdef CONFIG_BCACHE_DEBUG
+		&sysfs_verify,
+#endif
 		NULL
 	};
 	KTYPE(cached_dev, cached_dev_free);

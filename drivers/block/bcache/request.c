@@ -21,6 +21,7 @@ struct search {
 
 	struct bio		*orig_bio;
 	struct bio		*cache_bio;
+	unsigned		cache_bio_sectors;
 	struct bbio		bio;
 
 	struct btree_op		op;
@@ -33,14 +34,11 @@ struct search {
 	/* IO error returned to s->bio */
 	short			error;
 
-	/* Starting vec in cache_bio after which we must free pages */
-	unsigned short		pages_from;
 };
 
 struct kmem_cache *search_cache;
 
 static void bio_invalidate(struct search *);
-static void __bio_complete(struct search *);
 static void __request_read(struct closure *);
 
 /* Cgroup interface */
@@ -527,10 +525,6 @@ void btree_insert_async(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 	struct search *s = container_of(op, struct search, op);
-
-	if (s->bio_done &&
-	    op->insert_type == INSERT_READ)
-		__bio_complete(s);
 again:
 	if (btree_insert(op, op->d->c)) {
 		s->error	= -ENOMEM;
@@ -574,8 +568,9 @@ static void bio_complete(struct closure *cl)
 		int i;
 		struct bio_vec *bv;
 
-		__bio_for_each_segment(bv, s->cache_bio, i, s->pages_from)
-			__free_page(bv->bv_page);
+		if (s->op.insert_type == INSERT_READ)
+			__bio_for_each_segment(bv, s->cache_bio, i, 0)
+				__free_page(bv->bv_page);
 		bio_put(s->cache_bio);
 	}
 
@@ -616,22 +611,6 @@ void cache_read_endio(struct bio *bio, int error)
 		s->error = error;
 
 	bcache_endio(s->op.d->c, bio, error, "reading from cache");
-	closure_put(cl, NULL);
-}
-
-static void readahead_endio(struct bio *bio, int error)
-{
-	struct closure *cl = bio->bi_private;
-
-	if (error) {
-		/* XXX: record stat */
-		struct search *s = container_of(cl, struct search, cl);
-		struct bio *p = xchg(&s->cache_bio, NULL);
-		if (p)
-			bio_put(p);
-	}
-
-	bio_put(bio);
 	closure_put(cl, NULL);
 }
 
@@ -778,7 +757,6 @@ static struct search *do_bio_hook(struct bio *bio, struct cached_dev *d)
 	s->op.d			= d;
 	s->task			= get_current();
 	s->orig_bio		= bio;
-	s->pages_from		= USHRT_MAX;
 
 	/* We only recover bios that use whole pages. */
 	if (bio->bi_size == (bio->bi_vcnt - bio->bi_idx) * PAGE_SIZE)
@@ -792,8 +770,7 @@ static struct search *do_bio_hook(struct bio *bio, struct cached_dev *d)
 
 static void do_readahead(struct search *s, struct bio *last_bio, sector_t reada)
 {
-	struct bio *bio = NULL;
-	unsigned pages, sectors = 0;
+	unsigned sectors = 0;
 
 	if (reada > bio_end(last_bio) &&
 	    !(last_bio->bi_rw & REQ_RAHEAD) &&
@@ -803,76 +780,106 @@ static void do_readahead(struct search *s, struct bio *last_bio, sector_t reada)
 				__bio_max_sectors(last_bio,
 						  last_bio->bi_bdev,
 						  bio_end(last_bio)));
+	if (sectors)
+		atomic_inc(&s->op.d->cache_readaheads);
 
-	pages = DIV_ROUND_UP(sectors, PAGE_SECTORS);
-	s->cache_bio = bbio_kmalloc(GFP_NOIO, last_bio->bi_max_vecs + pages);
+	sectors += bio_sectors(last_bio);
+	s->cache_bio_sectors = sectors;
+
+	s->cache_bio = bbio_kmalloc(GFP_NOIO,
+				    DIV_ROUND_UP(sectors, PAGE_SECTORS));
 	if (!s->cache_bio)
 		return;
 
-	__bio_clone(s->cache_bio, last_bio);
-	s->pages_from = s->cache_bio->bi_vcnt;
+	s->cache_bio->bi_sector	= last_bio->bi_sector;
+	s->cache_bio->bi_bdev	= last_bio->bi_bdev;
+	s->cache_bio->bi_size	= sectors << 9;
 
-	if (pages)
-		bio = bio_kmalloc(GFP_NOIO, pages);
-	if (!bio)
-		return;
+	s->cache_bio->bi_end_io	= request_endio;
+	s->cache_bio->bi_private = &s->cl;
 
-	bio->bi_sector	= bio_end(last_bio);
-	bio->bi_bdev	= last_bio->bi_bdev;
-	bio->bi_rw	= last_bio->bi_rw;
-	bio->bi_size	= sectors << 9;
-
-	bio->bi_end_io	= readahead_endio;
-	bio->bi_private	= &s->cl;
-
-	bio_map(bio, NULL);
-	if (bio_alloc_pages(bio, __GFP_NOWARN|GFP_NOIO)) {
-		bio_put(bio);
+	bio_map(s->cache_bio, NULL);
+	if (bio_alloc_pages(s->cache_bio, __GFP_NOWARN|GFP_NOIO)) {
+		bio_put(s->cache_bio);
+		s->cache_bio = NULL;
 		return;
 	}
 
-	memcpy(s->cache_bio->bi_io_vec + s->cache_bio->bi_vcnt,
-	       bio->bi_io_vec, bio->bi_max_vecs * sizeof(struct bio_vec));
-
-	s->cache_bio->bi_vcnt += bio->bi_vcnt;
-	s->cache_bio->bi_size += bio->bi_size;
-
-	pr_debug("reading %i + %i sectors", bio_sectors(last_bio),
-		 bio_sectors(bio));
-	atomic_inc(&s->op.d->cache_readaheads);
-
-	closure_get(&s->cl);
-	submit_bio(READ, bio);
+	bio_get(s->cache_bio);
 }
 
 static void request_read_done(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
 	struct bio_vec *bv;
+	int i;
 
-	if (s->cache_bio && !s->error && !atomic_read(&s->op.d->c->closing)) {
-		bv = bio_iovec_idx(s->cache_bio, s->pages_from);
+	/* s->cache_bio != NULL implies that we had a cache miss; cache_bio now
+	 * contains data ready to be inserted into the cache.
+	 *
+	 * First, we copy the data we just read from cache_bio's bounce buffers
+	 * to the buffers the original bio pointed to:
+	 */
 
-		while (s->pages_from) {
-			struct page *p = alloc_page(__GFP_NOWARN|GFP_NOIO);
-			if (!p)
-				goto insert;
+	if (s->cache_bio && !s->error) {
+		struct bio_vec *src, *dst;
+		unsigned src_offset, dst_offset, bytes;
+		void *dst_ptr;
 
-			s->pages_from--, bv--;
+		bio_reset(s->cache_bio);
+		bio_put(s->cache_bio);
+		s->cache_bio->bi_sector	= s->bio.bio.bi_sector;
+		s->cache_bio->bi_bdev	= s->bio.bio.bi_bdev;
+		s->cache_bio->bi_size	= s->cache_bio_sectors << 9;
+		bio_map(s->cache_bio, NULL);
 
-			memcpy(page_address(p), kmap(bv->bv_page), PAGE_SIZE);
-			kunmap(bv->bv_page);
-			bv->bv_page = p;
+		src = bio_iovec(s->cache_bio);
+		dst = bio_iovec(&s->bio.bio);
+		src_offset = src->bv_offset;
+		dst_offset = dst->bv_offset;
+		dst_ptr = kmap(dst->bv_page);
+
+		while (1) {
+			if (dst_offset == dst->bv_offset + dst->bv_len) {
+				kunmap(dst->bv_page);
+				dst++;
+				if (dst == bio_iovec_idx(&s->bio.bio,
+							 s->bio.bio.bi_vcnt))
+					break;
+
+				dst_offset = dst->bv_offset;
+				dst_ptr = kmap(dst->bv_page);
+			}
+
+			if (src_offset == src->bv_offset + src->bv_len) {
+				src++;
+				if (src == bio_iovec_idx(s->cache_bio,
+							 s->cache_bio->bi_vcnt))
+					BUG();
+
+				src_offset = src->bv_offset;
+			}
+
+			bytes = min(dst->bv_offset + dst->bv_len - dst_offset,
+				    src->bv_offset + src->bv_len - src_offset);
+
+			memcpy(dst_ptr + dst_offset,
+			       page_address(src->bv_page) + src_offset,
+			       bytes);
+
+			src_offset	+= bytes;
+			dst_offset	+= bytes;
 		}
 
 		__bio_complete(s);
-insert:
+	}
+
+	if (s->cache_bio && !s->error && !atomic_read(&s->op.d->c->closing)) {
 		closure_init(&s->op.cl, &s->cl);
 		bio_insert(&s->op.cl);
 	} else if (s->error && s->recoverable) {
 		/* The cache read failed, but we can retry direct to the
 		 * backing device. */
-		int i;
 
 		pr_debug("recovering at sector %llu",
 			 (uint64_t) s->orig_bio->bi_sector);
@@ -902,7 +909,7 @@ static void request_read_done_bh(struct closure *cl)
 		return_f(&s->op.cl, __request_read);
 	}
 
-	if (s->cache_bio) {
+	if (s->cache_bio || s->error) {
 		cl->fn = request_read_done;
 		closure_queue(cl, bcache_wq);
 	} else
@@ -913,7 +920,7 @@ static void request_resubmit(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 	struct search *s = container_of(op, struct search, op);
-	struct bio *bio = &s->bio.bio;
+	struct bio *bio = s->cache_bio ?: &s->bio.bio;
 
 	closure_bio_submit(bio, &s->cl, op->d->c->bio_split);
 	return_f(cl, NULL);
@@ -947,6 +954,7 @@ static void __request_read(struct closure *cl)
 
 	if (!op->cache_hit) {
 		op->cache_miss = true;
+		bio = s->cache_bio ?: &s->bio.bio;
 
 		if (closure_bio_submit(bio, &s->cl, op->d->c->bio_split))
 			return_f(cl, request_resubmit);

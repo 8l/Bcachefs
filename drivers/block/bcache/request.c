@@ -883,42 +883,45 @@ static void do_readahead(struct search *s, struct bio *last_bio, sector_t reada)
 	bio_get(s->cache_bio);
 }
 
-static void request_read_done(struct closure *cl)
+static void request_read_error(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
 	struct bio_vec *bv;
 	int i;
 
-	if (s->error) {
-		if (s->recoverable) {
-			/* The cache read failed, but we can retry from the backing
-			 * device.
-			 */
-			pr_debug("recovering at sector %llu",
-				 (uint64_t) s->orig_bio->bi_sector);
+	if (s->recoverable) {
+		/* The cache read failed, but we can retry from the backing
+		 * device.
+		 */
+		pr_debug("recovering at sector %llu",
+			 (uint64_t) s->orig_bio->bi_sector);
 
-			s->error = 0;
-			bv = s->bio.bio.bi_io_vec;
-			__do_bio_hook(s);
-			s->bio.bio.bi_io_vec = bv;
+		s->error = 0;
+		bv = s->bio.bio.bi_io_vec;
+		__do_bio_hook(s);
+		s->bio.bio.bi_io_vec = bv;
 
-			if (!s->allocated_vec)
-				bio_for_each_segment(bv, s->orig_bio, i)
-					bv->bv_offset = 0, bv->bv_len = PAGE_SIZE;
-			else
-				memcpy(s->bio.bio.bi_io_vec,
-				       bio_iovec(s->orig_bio),
-				       sizeof(struct bio_vec) *
-				       bio_segments(s->orig_bio));
+		if (!s->allocated_vec)
+			bio_for_each_segment(bv, s->orig_bio, i)
+				bv->bv_offset = 0, bv->bv_len = PAGE_SIZE;
+		else
+			memcpy(s->bio.bio.bi_io_vec,
+			       bio_iovec(s->orig_bio),
+			       sizeof(struct bio_vec) *
+			       bio_segments(s->orig_bio));
 
-			/* XXX: invalidate cache */
+		/* XXX: invalidate cache */
 
-			closure_get(&s->cl);
-			closure_bio_submit(&s->bio.bio, &s->cl, s->op.d->c->bio_split);
-		}
-
-		return_f(cl, bio_complete);
+		closure_get(&s->cl);
+		closure_bio_submit(&s->bio.bio, &s->cl, s->op.d->c->bio_split);
 	}
+
+	return_f(cl, bio_complete);
+}
+
+static void request_read_done(struct closure *cl)
+{
+	struct search *s = container_of(cl, struct search, cl);
 
 	/* s->cache_bio != NULL implies that we had a cache miss; cache_bio now
 	 * contains data ready to be inserted into the cache.
@@ -981,6 +984,8 @@ static void request_read_done(struct closure *cl)
 	if (verify(s) && s->recoverable) {
 		char name[BDEVNAME_SIZE];
 		struct bio *check;
+		struct bio_vec *bv;
+		int i;
 
 		if (!s->allocated_vec)
 			bio_for_each_segment(bv, s->orig_bio, i)
@@ -1043,7 +1048,10 @@ static void request_read_done_bh(struct closure *cl)
 		return_f(&s->op.cl, __request_read);
 	}
 
-	if (s->cache_bio || s->error || verify(s)) {
+	if (s->error) {
+		cl->fn = request_read_error;
+		closure_queue(cl, bcache_wq);
+	} else if (s->cache_bio || verify(s)) {
 		cl->fn = request_read_done;
 		closure_queue(cl, bcache_wq);
 	} else

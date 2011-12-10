@@ -2259,7 +2259,9 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 		goto err;
 
 	err = "failed to open device";
-	bdev = blkdev_get_by_path(strim(path), FMODE_READ|FMODE_WRITE, sb);
+	bdev = blkdev_get_by_path(strim(path),
+				  FMODE_READ|FMODE_WRITE|FMODE_EXCL,
+				  sb);
 	if (bdev == ERR_PTR(-EBUSY))
 		err = "device busy";
 

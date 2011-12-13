@@ -80,12 +80,6 @@ static inline void keylist_init(struct keylist *l)
 
 static inline void keylist_push(struct keylist *l)
 {
-#ifdef CONFIG_BCACHE_EDEBUG
-	uint64_t *i = (uint64_t *) l->top;
-	while (++i < (uint64_t *) next(l->top))
-		BUG_ON(KEY_IS_HEADER((struct bkey *) i));
-#endif
-	BUG_ON(!KEY_IS_HEADER(l->top));
 	l->top = next(l->top);
 }
 

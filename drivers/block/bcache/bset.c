@@ -69,13 +69,15 @@ int keylist_realloc(struct keylist *l, int nptrs, struct cache_set *c)
 
 struct bkey *keylist_pop(struct keylist *l)
 {
-	if (l->top == (struct bkey *) l->list)
+	struct bkey *k = l->bottom;
+
+	if (k == l->top)
 		return NULL;
 
-	l->top = prev(l->top);
-	BUG_ON((uint64_t *) l->top < l->list);
+	while (next(k) != l->top)
+		k = next(k);
 
-	return l->top;
+	return l->top = k;
 }
 
 /* Pointer validation */

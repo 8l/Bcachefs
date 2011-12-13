@@ -285,7 +285,7 @@ static int btree_dump(struct btree *b, struct btree_op *op, struct seq_file *f,
 	uint64_t last, biggest = 0;
 
 	for_each_key(b, k) {
-		int j = (uint64_t *) k - b->sets[_i].data->d;
+		int j = (uint64_t *) k - _t->data->d;
 		if (!j)
 			last = *prev;
 
@@ -298,8 +298,8 @@ static int btree_dump(struct btree *b, struct btree_op *op, struct seq_file *f,
 		else if (b->level && !ptr_bad(b, k))
 			btree(dump, k, b, op, f, tabs - 1, &last, sectors);
 
-		seq_printf(f, "%s%i %4i: %s %s\n",
-			   tabs, _i, j, pkey(k), buf);
+		seq_printf(f, "%s%zi %4i: %s %s\n",
+			   tabs, _t - b->sets, j, pkey(k), buf);
 
 		if (!b->level && !buf[0])
 			*sectors += KEY_SIZE(k);

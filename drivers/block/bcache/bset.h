@@ -129,10 +129,10 @@ struct bkey *next_recurse_key(struct btree *, struct bkey *);
 struct bkey *btree_iter_next(struct btree_iter *);
 void btree_iter_push(struct btree_iter *, struct bkey *, struct bkey *);
 struct bkey *__btree_iter_init(struct btree *, struct btree_iter *,
-			       struct bkey *, int);
+			       struct bkey *, struct bset_tree *);
 
 #define btree_iter_init(b, iter, search)			\
-	__btree_iter_init(b, iter, search, 0)
+	__btree_iter_init(b, iter, search, (b)->sets)
 
 #define BKEY_MID_BITS		3
 #define BKEY_MID_MAX		(~(~0 << (BKEY_MID_BITS - 1)))
@@ -157,12 +157,13 @@ struct bkey_float {
 #define bset_prev_bytes(b)	(bset_tree_bytes(b) >> 2)
 
 void bset_init(struct btree *, struct bset *);
-void bset_build_tree(struct btree *, unsigned);
+void bset_build_tree(struct btree *, struct bset_tree *);
 void bset_fix_invalidated_key(struct btree *, struct bkey *);
 
-struct bkey *__bset_search(struct btree *, unsigned, const struct bkey *);
-#define bset_search(b, i, search)				\
-	(search ? __bset_search(b, i, search) : b->sets[i].data->start)
+struct bkey *__bset_search(struct btree *, struct bset_tree *,
+			   const struct bkey *);
+#define bset_search(b, t, search)				\
+	((search) ? __bset_search(b, t, search) : (t)->data->start)
 
 bool bkey_try_merge(struct btree *, struct bkey *, struct bkey *);
 bool btree_sort_lazy(struct btree *);

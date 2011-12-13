@@ -30,10 +30,12 @@ static inline void set_gc_sectors(struct cache_set *c)
 #define all_keys(b, k)		0
 
 #define for_each_key_after_filter(b, k, search, filter)			\
-	for (int _i = 0; _i <= (b)->nsets; _i++)			\
-		for (k = bset_search(b, _i, search);			\
-		     (k = bkey_filter(b, (b)->sets[_i].data, k, filter))\
-			< end((b)->sets[_i].data);			\
+	for (struct bset_tree *_t = (b)->sets;				\
+	     _t <= &(b)->sets[(b)->nsets];				\
+	     _t++)							\
+		for (k = bset_search(b, _t, search);			\
+		     (k = bkey_filter(b, _t->data, k, filter))		\
+			< end(_t->data);				\
 		     k = next(k))
 
 #define for_each_key_filter(b, k, filter)				\

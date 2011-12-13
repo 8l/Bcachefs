@@ -1432,7 +1432,8 @@ static bool fix_overlapping_extents(struct btree *b, struct bkey *k,
 				struct bkey *m = j;
 
 				if (j < w->start) {
-					m = bset_search(b, b->nsets, k);
+					m = bset_search(b, &b->sets[b->nsets],
+							k);
 					shift_keys(w, m, j);
 				} else {
 					BKEY_PADDED(key) temp;
@@ -1532,7 +1533,7 @@ bool btree_insert_keys(struct btree *b, struct btree_op *op)
 					goto copy;
 			}
 		} else
-			m = bset_search(b, b->nsets, k);
+			m = bset_search(b, &b->sets[b->nsets], k);
 
 		shift_keys(i, m, k);
 copy:		bkey_copy(m, k);
@@ -1713,7 +1714,7 @@ static int btree_insert_recurse(struct btree *b, struct btree_op *op,
 
 		if (write_block(b) != b->sets[b->nsets].data) {
 			if (!btree_sort_lazy(b))
-				bset_build_tree(b, b->nsets);
+				bset_build_tree(b, &b->sets[b->nsets]);
 
 			bset_init(b, write_block(b));
 		}

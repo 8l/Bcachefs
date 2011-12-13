@@ -522,22 +522,18 @@ static void make_bfloat(struct bset_tree *t, unsigned j)
 		f->exponent = 127;
 }
 
-void bset_build_tree(struct btree *b, unsigned set)
+void bset_build_tree(struct btree *b, struct bset_tree *t)
 {
-	struct bset_tree *t	= &b->sets[set];
-	struct bkey *k		= t->data->start;
-
+	struct bkey *k = t->data->start;
 	unsigned j, cacheline = 1;
 
-	BUG_ON(set >= 4);
-
-	for (j = set; j < 5; j++)
-		b->sets[j].size = 0;
+	for (struct bset_tree *i = t; i < &b->sets[5]; i++)
+		i->size = 0;
 
 	if (!b->sets->tree)
 		return;
 
-	if (set) {
+	if (t != b->sets) {
 		j = roundup(t[-1].size, 64 / sizeof(struct bkey_float));
 
 		t->tree = t[-1].tree + j;
@@ -583,16 +579,14 @@ void bset_build_tree(struct btree *b, unsigned set)
 void bset_fix_invalidated_key(struct btree *b, struct bkey *k)
 {
 	struct bset_tree *t;
-	unsigned inorder, j = 1, set;
+	unsigned inorder, j = 1;
 
-	for (set = 0; set <= b->nsets; set++)
-		if (k < end(b->sets[set].data))
+	for (t = b->sets; t <= &b->sets[b->nsets]; t++)
+		if (k < end(t->data))
 			goto found_set;
 
 	BUG();
 found_set:
-	t = &b->sets[set];
-
 	if (!t->size)
 		return;
 
@@ -627,10 +621,9 @@ fix_right:	do {
 		} while (j < t->size);
 }
 
-struct bkey *__bset_search(struct btree *b, unsigned set,
+struct bkey *__bset_search(struct btree *b, struct bset_tree *t,
 			   const struct bkey *search)
 {
-	struct bset_tree *t	= &b->sets[set];
 	struct bkey *l, *r;
 	unsigned j = 1;
 
@@ -744,15 +737,15 @@ void btree_iter_push(struct btree_iter *iter, struct bkey *k, struct bkey *end)
 }
 
 struct bkey *__btree_iter_init(struct btree *b, struct btree_iter *iter,
-			       struct bkey *search, int start)
+			       struct bkey *search, struct bset_tree *start)
 {
 	struct bkey *ret = NULL;
 	iter->size = 8;
 	iter->used = 0;
 
-	for (int i = start; i <= b->nsets; i++) {
-		ret = bset_search(b, i, search);
-		btree_iter_push(iter, ret, end(b->sets[i].data));
+	for (; start <= &b->sets[b->nsets]; start++) {
+		ret = bset_search(b, start, search);
+		btree_iter_push(iter, ret, end(start->data));
 	}
 
 	return ret;
@@ -907,7 +900,7 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 	else
 		free_pages((unsigned long) out, order);
 
-	bset_build_tree(b, start);
+	bset_build_tree(b, &b->sets[start]);
 
 	pr_debug("sorted %i keys", b->sets[start].data->keys);
 	check_key_order(b, b->sets[start].data);
@@ -917,7 +910,7 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 void btree_sort(struct btree *b, int start, struct bset *new)
 {
 	struct btree_iter iter;
-	__btree_iter_init(b, &iter, NULL, start);
+	__btree_iter_init(b, &iter, NULL, &b->sets[start]);
 
 	__btree_sort(b, start, new, &iter, false);
 }

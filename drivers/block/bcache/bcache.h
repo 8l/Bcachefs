@@ -426,6 +426,7 @@ struct cache_set {
 	int			error_decay;
 	unsigned		verify:1;
 	unsigned		key_merging_disabled:1;
+	unsigned		gc_always_rewrite:1;
 
 #define BUCKET_HASH_BITS	12
 	struct hlist_head	bucket_hash[1 << BUCKET_HASH_BITS];

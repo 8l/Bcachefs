@@ -218,6 +218,7 @@ rw_attribute(io_error_limit);
 rw_attribute(io_error_halflife);
 rw_attribute(verify);
 rw_attribute(key_merging_disabled);
+rw_attribute(gc_always_rewrite);
 
 read_attribute(cache_hits);
 read_attribute(cache_misses);
@@ -1417,6 +1418,7 @@ SHOW(__cache_set)
 	sysfs_print(active_journal_entries,	fifo_used(&c->journal.pin));
 	sysfs_printf(verify,			"%i", c->verify);
 	sysfs_printf(key_merging_disabled,	"%i", c->key_merging_disabled);
+	sysfs_printf(gc_always_rewrite,		"%i", c->gc_always_rewrite);
 
 	if (attr == &sysfs_bset_tree_stats)
 		return bset_print_stats(c, buf);
@@ -1475,6 +1477,7 @@ STORE(__cache_set)
 
 	sysfs_strtoul(verify,			c->verify);
 	sysfs_strtoul(key_merging_disabled,	c->key_merging_disabled);
+	sysfs_strtoul(gc_always_rewrite,	c->gc_always_rewrite);
 
 	return size;
 }
@@ -1642,6 +1645,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 		&sysfs_verify,
 		&sysfs_key_merging_disabled,
 #endif
+		&sysfs_gc_always_rewrite,
 		NULL
 	};
 	KTYPE(cache_set_internal, unregister_fake);

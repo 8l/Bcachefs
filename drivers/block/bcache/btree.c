@@ -1258,7 +1258,8 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 		stale = btree_gc_mark(r, &keys, gc);
 
 		if (!b->written &&
-		    (r->level || stale > 10))
+		    (r->level || stale > 10 ||
+		     b->c->gc_always_rewrite))
 			r = alloc(r, k);
 
 		if (r->level)

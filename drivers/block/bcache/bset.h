@@ -49,16 +49,6 @@ static inline struct bkey *next(const struct bkey *k)
 	return (struct bkey *) (d + bkey_u64s(k));
 }
 
-static inline struct bkey *prev(const struct bkey *k)
-{
-	uint64_t *d = (void *) k;
-	do {
-		--d;
-	} while (!KEY_IS_HEADER((struct bkey *) d));
-
-	return (struct bkey *) d;
-}
-
 /* Keylists */
 
 struct keylist {

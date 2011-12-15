@@ -624,7 +624,6 @@ static inline unsigned local_clock_us(void)
 		k->ptr[i] |= v << offset;				\
 	}
 
-KEY_FIELD(KEY_IS_HEADER, header, 63, 1)
 KEY_FIELD(KEY_PTRS,	header, 60, 3)
 KEY_FIELD(HEADER_SIZE,	header, 58, 2)
 KEY_FIELD(KEY_CSUM,	header, 56, 2)

@@ -488,8 +488,6 @@ static void make_bfloat(struct bset_tree *t, unsigned j)
 		: tree_to_bkey(t, j >> (ffz(j) + 1));
 
 	BUG_ON(m < l || m > r);
-	BUG_ON(!KEY_IS_HEADER(m));
-	BUG_ON(!KEY_IS_HEADER(p));
 	BUG_ON(next(p) != m);
 
 	if (KEY_DEV(l) != KEY_DEV(r))
@@ -665,11 +663,6 @@ struct bkey *__bset_search(struct btree *b, struct bset_tree *t,
 	struct bkey *l = t->data->start, *r = end(t->data);
 	unsigned j = 1;
 
-	struct bkey *cur(void)
-	{
-		return tree_to_bkey(t, j);
-	}
-
 	if (!t->size)
 		goto linear_search;
 
@@ -707,24 +700,19 @@ struct bkey *__bset_search(struct btree *b, struct bset_tree *t,
 		if (j << 4 < t->size)
 			prefetch(&t->tree[j << 4]);
 
-		EBUG_ON(!KEY_IS_HEADER(cur()));
-
 		if (f->exponent < 64)
 			shifted_key = (search->key >> f->exponent) |
 				(KEY_DEV(search) << (64 - f->exponent));
 		else if (f->exponent < 127)
 			shifted_key = KEY_DEV(search) >> (f->exponent & 63);
 		else {
-			cmp = bkey_cmp(cur(), search) > 0;
+			cmp = bkey_cmp(tree_to_bkey(t, j), search) > 0;
 			goto cmp_done;
 		}
 
 		cmp = f->mantissa > (shifted_key & BKEY_MANTISSA_MASK);
 cmp_done:
 		if (cmp) {
-			EBUG_ON(cur() != end(t->data) &&
-				bkey_cmp(cur(), search) <= 0);
-
 			if (j * 2 >= t->size) {
 				unsigned inorder = to_inorder(j, t);
 				r = cacheline_to_bkey(t, inorder, f->m);
@@ -739,9 +727,6 @@ cmp_done:
 
 			j = j * 2;
 		} else {
-			EBUG_ON(cur() != t->data->start &&
-				bkey_cmp(prev(cur()), search) > 0);
-
 			if (j * 2 + 1 >= t->size) {
 				unsigned inorder = to_inorder(j, t);
 				l = cacheline_to_bkey(t, inorder, f->m);
@@ -758,6 +743,17 @@ cmp_done:
 		}
 	}
 linear_search:
+#ifdef CONFIG_BCACHE_EDEBUG
+	BUG_ON(r != end(t->data) &&
+	       bkey_cmp(r, search) <= 0);
+
+	BUG_ON(l != t->data->start &&
+	       t->data != write_block(b) &&
+	       bkey_cmp(tree_to_prev_bkey(t,
+			  inorder_to_tree(bkey_to_cacheline(t, l), t)),
+			search) > 0);
+#endif
+
 	while (l != r &&
 	       bkey_cmp(l, search) <= 0)
 		l = next(l);

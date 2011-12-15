@@ -933,6 +933,9 @@ err:
 		rw_unlock(true, b);
 	}
 retry:
+	if (current->bio_list)
+		return ERR_PTR(-EAGAIN);
+
 	b = ERR_PTR(-ENOMEM);
 
 	if (pages > c->btree_pages || !cl) {

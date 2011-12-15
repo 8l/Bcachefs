@@ -1367,19 +1367,11 @@ err:
 
 static void shift_keys(struct bset *i, struct bkey *where, struct bkey *insert)
 {
-	unsigned n = bkey_u64s(insert);
-	uint64_t *src = i->d + i->keys;
-	uint64_t *dst = i->d + i->keys + n;
+	memmove((uint64_t *) where + bkey_u64s(insert),
+		where,
+		(void *) end(i) - (void *) where);
 
-	while (src > (uint64_t *) where) {
-		src -= 2;
-		dst -= 2;
-
-		dst[0] = src[0];
-		dst[1] = src[1];
-	}
-
-	i->keys += n;
+	i->keys += bkey_u64s(insert);
 	bkey_copy(where, insert);
 }
 

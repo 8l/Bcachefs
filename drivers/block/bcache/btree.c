@@ -333,13 +333,6 @@ static void btree_write_endio(struct bio *bio, int error)
 				   msecs_to_jiffies(30000));
 }
 
-/* Locking: this function must be called with either
- *   a write lock held on the btree node, or
- *   a read lock held but while running out of btree_wq, which is
- *   singlethreaded.
- *
- * This is what protects b->write, b->written, and possibly other stuff.
- */
 static int __btree_write(struct btree *b)
 {
 	int j;
@@ -407,11 +400,13 @@ err:		closure_init_stack(&wait);
 	pr_debug("%s block %i keys %i", pbtree(b), b->written, i->keys);
 
 	BUG_ON(b->sets[b->nsets].data != write_block(b));
-	smp_wmb();
 
 	b->written += set_blocks(i, b->c);
 	atomic_long_add(set_blocks(i, b->c) * b->c->sb.block_size,
 			&PTR_CACHE(b->c, &b->key, 0)->btree_sectors_written);
+
+	if (!btree_sort_lazy(b))
+		bset_build_tree(b, &b->sets[b->nsets]);
 	return 0;
 }
 
@@ -419,12 +414,12 @@ static void btree_write_work(struct work_struct *w)
 {
 	struct btree *b = container_of(to_delayed_work(w), struct btree, work);
 
-	down_read(&b->lock);
+	down_write(&b->lock);
 	pr_latency(b->wait_time, "btree_write_work");
 
 	if (b->write)
 		__btree_write(b);
-	up_read(&b->lock);
+	up_write(&b->lock);
 }
 
 void btree_write(struct btree *b, bool now, struct btree_op *op)
@@ -1712,12 +1707,8 @@ static int btree_insert_recurse(struct btree *b, struct btree_op *op,
 			return btree_split(b, op);
 		}
 
-		if (write_block(b) != b->sets[b->nsets].data) {
-			if (!btree_sort_lazy(b))
-				bset_build_tree(b, &b->sets[b->nsets]);
-
+		if (write_block(b) != b->sets[b->nsets].data)
 			bset_init(b, write_block(b));
-		}
 
 		if (btree_insert_keys(b, op))
 			btree_write(b, false, op);

@@ -530,9 +530,6 @@ void bset_build_tree(struct btree *b, struct bset_tree *t)
 	for (struct bset_tree *i = t; i < &b->sets[5]; i++)
 		i->size = 0;
 
-	if (!b->sets->tree)
-		return;
-
 	if (t != b->sets) {
 		j = roundup(t[-1].size, 64 / sizeof(struct bkey_float));
 
@@ -900,7 +897,8 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 	else
 		free_pages((unsigned long) out, order);
 
-	bset_build_tree(b, &b->sets[start]);
+	if (!new && b->written)
+		bset_build_tree(b, &b->sets[start]);
 
 	pr_debug("sorted %i keys", b->sets[start].data->keys);
 	check_key_order(b, b->sets[start].data);

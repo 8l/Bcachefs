@@ -788,7 +788,7 @@ struct bkey *__btree_iter_init(struct btree *b, struct btree_iter *iter,
 			       struct bkey *search, struct bset_tree *start)
 {
 	struct bkey *ret = NULL;
-	iter->size = 8;
+	iter->size = ARRAY_SIZE(iter->data);
 	iter->used = 0;
 
 	for (; start <= &b->sets[b->nsets]; start++) {
@@ -984,7 +984,8 @@ bool btree_sort_lazy(struct btree *b)
 			keys -= b->sets[j].data->keys;
 		}
 
-		if (b->nsets > 2 - b->level) {
+		/* Must sort if b->nsets == 3 or we'll overflow */
+		if (b->nsets >= 3 - b->level) {
 			btree_sort(b, 0, NULL);
 			return true;
 		}

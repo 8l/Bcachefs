@@ -134,6 +134,28 @@ struct bkey *__btree_iter_init(struct btree *, struct btree_iter *,
 #define btree_iter_init(b, iter, search)			\
 	__btree_iter_init(b, iter, search, 0)
 
+#define BKEY_MID_BITS		3
+#define BKEY_MID_MAX		(~(~0 << (BKEY_MID_BITS - 1)))
+#define BKEY_MID_MIN		(-1 - BKEY_MID_MAX)
+
+#define BKEY_EXPONENT_BITS	7
+#define BKEY_MANTISSA_BITS	22
+#define BKEY_MANTISSA_MASK	((1 << BKEY_MANTISSA_BITS) - 1)
+
+struct bkey_float {
+	unsigned	exponent:BKEY_EXPONENT_BITS;
+	unsigned	m:BKEY_MID_BITS;
+	unsigned	mantissa:BKEY_MANTISSA_BITS;
+} __packed;
+
+#define BSET_CACHELINE		128
+#define BSET_CACHELINE_BITS	ilog2(BSET_CACHELINE)
+
+#define bset_tree_space(b)	(btree_data_space(b) >> BSET_CACHELINE_BITS)
+
+#define bset_tree_bytes(b)	(bset_tree_space(b) * sizeof(struct bkey_float))
+#define bset_prev_bytes(b)	(bset_tree_bytes(b) >> 2)
+
 void bset_init(struct btree *, struct bset *);
 void bset_build_tree(struct btree *, unsigned);
 void bset_fix_invalidated_key(struct btree *, struct bkey *);

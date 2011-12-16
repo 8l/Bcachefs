@@ -5,20 +5,6 @@
 
 #include <linux/random.h>
 
-#define BKEY_MID_BITS		3
-#define BKEY_MID_MAX		(~(~0 << (BKEY_MID_BITS - 1)))
-#define BKEY_MID_MIN		(-1 - BKEY_MID_MAX)
-
-#define BKEY_EXPONENT_BITS	7
-#define BKEY_MANTISSA_BITS	22
-#define BKEY_MANTISSA_MASK	((1 << BKEY_MANTISSA_BITS) - 1)
-
-struct bkey_float {
-	unsigned	exponent:BKEY_EXPONENT_BITS;
-	unsigned	m:BKEY_MID_BITS;
-	unsigned	mantissa:BKEY_MANTISSA_BITS;
-} __packed;
-
 /* Keylists */
 
 void keylist_copy(struct keylist *dest, struct keylist *src)
@@ -443,17 +429,45 @@ void inorder_test(void)
 }
 #endif
 
-static struct bkey *inorder_to_bkey(struct bset *i, struct bkey_float *f,
-				    unsigned inorder)
+/*
+ * Cacheline/offset <-> bkey pointer arithmatic:
+ *
+ * t->tree is a binary search tree in an array; each node corresponds to a key
+ * in one cacheline in t->set (BSET_CACHELINE bytes).
+ *
+ * This means we don't have to store the full index of the key that a node in
+ * the binary tree points to; to_inorder() gives us the cacheline, and then
+ * bkey_float->m gives us the offset within that cacheline, in units of 8 bytes.
+ *
+ * cacheline_to_bkey() and friends abstract out all the pointer arithmatic to
+ * make this work.
+ *
+ * To construct the bfloat for an arbitrary key we need to know what the key
+ * immediately preceding it is: we have to check if the two keys differ in the
+ * bits we're going to store in bkey_float->mantissa. t->prev[j] stores the size
+ * of the previous key so we can walk backwards to it from t->tree[j]'s key.
+ */
+
+static struct bkey *cacheline_to_bkey(struct bset *i, unsigned cacheline,
+				      unsigned offset)
 {
-	void *cacheline = ((void *) i) + 64 * inorder;
-	return cacheline + f->m * sizeof(uint64_t);
+	return ((void *) i) + cacheline * BSET_CACHELINE + offset * 8;
+}
+
+static unsigned bkey_to_cacheline(struct bset *i, struct bkey *k)
+{
+	return ((void *) k - (void *) i) / BSET_CACHELINE;
+}
+
+static unsigned bkey_to_cacheline_offset(struct bkey *k)
+{
+	return ((size_t) k & (BSET_CACHELINE - 1)) / sizeof(uint64_t);
 }
 
 static struct bkey *tree_to_bkey(struct bset *i, unsigned j,
 				 struct bset_tree *t)
 {
-	return inorder_to_bkey(i, &t->key[j], to_inorder(j, t));
+	return cacheline_to_bkey(i, to_inorder(j, t), t->key[j].m);
 }
 
 static struct bkey *tree_to_prev_bkey(struct bset *i, unsigned j,
@@ -514,11 +528,9 @@ void bset_build_tree(struct btree *b, unsigned set)
 {
 	struct bset *i		= b->sets[set];
 	struct bset_tree *t	= &b->tree[set];
-	struct bkey_float *end	= b->tree->key + bset_tree_space(b);
 	struct bkey *k		= i->start;
 
-	unsigned j;
-	size_t cacheline = (((size_t) i) >> 6) + 1;
+	unsigned j, cacheline = 1;
 
 	BUG_ON(set >= 4);
 
@@ -529,17 +541,15 @@ void bset_build_tree(struct btree *b, unsigned set)
 		return;
 
 	if (set) {
-		struct bset_tree *p = &b->tree[set - 1];
-		unsigned n = roundup(p->size, 64 / sizeof(struct bkey_float));
+		j = roundup(t[-1].size, 64 / sizeof(struct bkey_float));
 
-		t->key = p->key + n;
-		t->prev = p->prev + n;
+		t->key	= t[-1].key + j;
+		t->prev = t[-1].prev + j;
 	}
 
-	t->size = ((size_t) end(i) - (size_t) i) / 64;
-
-	if (t->size > (size_t) (end - t->key))
-		t->size = end - t->key;
+	t->size = min_t(unsigned,
+			bkey_to_cacheline(i, end(i)),
+			b->tree->key + bset_tree_space(b) - t->key);
 
 	if (t->size < 2) {
 		t->size = 0;
@@ -552,13 +562,13 @@ void bset_build_tree(struct btree *b, unsigned set)
 	for (j = inorder_next(0, t->size);
 	     j;
 	     j = inorder_next(j, t->size)) {
-		while ((((size_t) next(k)) >> 6) != cacheline)
+		while (bkey_to_cacheline(i, k) != cacheline)
 			k = next(k);
 
 		t->prev[j] = bkey_u64s(k);
 		k = next(k);
 		cacheline++;
-		t->key[j].m = ((size_t) k & 63) / sizeof(uint64_t);
+		t->key[j].m = bkey_to_cacheline_offset(k);
 	}
 
 	while (next(k) != end(i))
@@ -587,10 +597,11 @@ void bset_fix_invalidated_key(struct btree *b, struct bkey *k)
 found_set:
 	t = &b->tree[set];
 	i = b->sets[set];
-	inorder = ((size_t) k - (size_t) i) >> 6;
 
 	if (!t->size)
 		return;
+
+	inorder = bkey_to_cacheline(i, k);
 
 	if (k == i->start)
 		goto fix_left;
@@ -676,11 +687,11 @@ cmp_done:
 
 			if (j * 2 >= t->size) {
 				unsigned inorder = to_inorder(j, t);
-				r = inorder_to_bkey(i, f, inorder);
+				r = cacheline_to_bkey(i, inorder, f->m);
 
 				if (--inorder) {
 					f = &t->key[inorder_prev(j, t->size)];
-					l = inorder_to_bkey(i, f, inorder);
+					l = cacheline_to_bkey(i, inorder, f->m);
 				} else
 					l = i->start;
 
@@ -694,11 +705,11 @@ cmp_done:
 
 			if (j * 2 + 1 >= t->size) {
 				unsigned inorder = to_inorder(j, t);
-				l = inorder_to_bkey(i, f, inorder);
+				l = cacheline_to_bkey(i, inorder, f->m);
 
 				if (++inorder != t->size) {
 					f = &t->key[inorder_next(j, t->size)];
-					r = inorder_to_bkey(i, f, inorder);
+					r = cacheline_to_bkey(i, inorder, f->m);
 				} else
 					r = end(i);
 

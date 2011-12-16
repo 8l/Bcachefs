@@ -493,15 +493,27 @@ struct btree {
 
 	/* We construct a binary tree in an array as if the array started at 1,
 	 * so that things line up on the same cachelines better
+	 * better: see comments in bset.c at cacheline_to_bkey() for
+	 * details
 	 */
 	struct bset_tree {
+		/* size of the binary tree and prev array */
 		unsigned	size;
+
+		/* function of size - precalculated for to_inorder() */
 		unsigned	extra;
+
+		/* copy of the last key in the set */
 		struct bkey	end;
 		struct bkey_float *key;
 
-		/* The nodes in the bset tree point to specific keys - this
+		/*
+		 * The nodes in the bset tree point to specific keys - this
 		 * array holds the sizes of the previous key.
+		 *
+		 * Conceptually it's a member of struct bkey_float, but we want
+		 * to keep bkey_float to 4 bytes and prev isn't used in the fast
+		 * path.
 		 */
 		uint8_t		*prev;
 	}			tree[4];
@@ -575,11 +587,6 @@ static inline unsigned local_clock_us(void)
 	((size_t) (((void *) i - (void *) (b)->data) / block_bytes(b->c)))
 
 #define btree_data_space(b)	(PAGE_SIZE << (b)->page_order)
-#define bset_tree_space(b)	(btree_data_space(b) / 16)
-#define bset_prev_space(b)	(bset_tree_space(b) / 4)
-
-#define bset_tree_order(b)	(b->page_order - 4)
-#define bset_prev_order(b)	(b->page_order - 6)
 
 #define prios_per_bucket(c)				\
 	((bucket_bytes(c) - sizeof(struct prio_set)) /	\

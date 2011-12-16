@@ -490,15 +490,17 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 
 void free_bucket_data(struct btree *b)
 {
-	if (bset_prev_space(b) < PAGE_SIZE)
+	if (bset_prev_bytes(b) < PAGE_SIZE)
 		kfree(b->tree->prev);
 	else
-		free_pages((unsigned long) b->tree->prev, bset_prev_order(b));
+		free_pages((unsigned long) b->tree->prev,
+			   get_order(bset_prev_bytes(b)));
 
-	if (bset_tree_space(b) < PAGE_SIZE)
+	if (bset_tree_bytes(b) < PAGE_SIZE)
 		kfree(b->tree->key);
 	else
-		free_pages((unsigned long) b->tree->key, bset_tree_order(b));
+		free_pages((unsigned long) b->tree->key,
+			   get_order(bset_tree_bytes(b)));
 
 	free_pages((unsigned long) b->data, b->page_order);
 
@@ -617,15 +619,15 @@ static void alloc_bucket_data(struct btree *b, struct bkey *k, gfp_t gfp)
 	if (!b->data)
 		goto err;
 
-	b->tree->key = bset_tree_space(b) < PAGE_SIZE
-		? kmalloc(bset_tree_space(b), gfp)
-		: (void *) __get_free_pages(gfp, bset_tree_order(b));
+	b->tree->key = bset_tree_bytes(b) < PAGE_SIZE
+		? kmalloc(bset_tree_bytes(b), gfp)
+		: (void *) __get_free_pages(gfp, get_order(bset_tree_bytes(b)));
 	if (!b->tree->key)
 		goto err;
 
-	b->tree->prev = bset_prev_space(b) < PAGE_SIZE
-		? kmalloc(bset_prev_space(b), gfp)
-		: (void *) __get_free_pages(gfp, bset_prev_order(b));
+	b->tree->prev = bset_prev_bytes(b) < PAGE_SIZE
+		? kmalloc(bset_prev_bytes(b), gfp)
+		: (void *) __get_free_pages(gfp, get_order(bset_prev_bytes(b)));
 	if (!b->tree->prev)
 		goto err;
 

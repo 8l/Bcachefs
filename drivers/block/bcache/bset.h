@@ -159,6 +159,7 @@ struct bkey_float {
 void bset_init(struct btree *, struct bset *);
 void bset_build_tree(struct btree *, struct bset_tree *);
 void bset_fix_invalidated_key(struct btree *, struct bkey *);
+void bset_fix_lookup_table(struct btree *, struct bkey *);
 
 struct bkey *__bset_search(struct btree *, struct bset_tree *,
 			   const struct bkey *);

@@ -286,32 +286,6 @@ void bset_init(struct btree *b, struct bset *i)
 	i->keys		= 0;
 }
 
-/* Bset binary search */
-
-static struct bkey *bset_bsearch(struct bset *i, const struct bkey *search)
-{
-	unsigned l = 0, r = i->keys;
-
-	/* Returns the smallest key greater than the search key.
-	 * This is because we index by the end, not the beginning
-	 */
-	while (l < r) {
-		unsigned m = (l + r) >> 1;
-		while (!KEY_IS_HEADER(node(i, m)))
-			m--;
-
-		if (m == l && next(node(i, m)) != node(i, r))
-			m += bkey_u64s(node(i, m));
-
-		if (bkey_cmp(node(i, m), search) > 0)
-			r = m;
-		else
-			l = m + bkey_u64s(node(i, m));
-	}
-
-	return node(i, l);
-}
-
 /* Binary tree stuff for auxiliary search trees */
 
 static unsigned inorder_next(unsigned j, unsigned size)
@@ -474,6 +448,15 @@ static struct bkey *tree_to_prev_bkey(struct bset_tree *t, unsigned j)
 	return (void *) (((uint64_t *) tree_to_bkey(t, j)) - t->prev[j]);
 }
 
+/*
+ * For the write set - the one we're currently inserting keys into - we don't
+ * maintain a full search tree, we just keep a simple lookup table in t->prev.
+ */
+struct bkey *table_to_bkey(struct bset_tree *t, unsigned cacheline)
+{
+	return cacheline_to_bkey(t, cacheline, t->prev[cacheline]);
+}
+
 /* Auxiliary search trees */
 
 static unsigned bfloat_mantissa(const struct bkey *k, struct bkey_float *f)
@@ -537,6 +520,16 @@ void bset_build_tree(struct btree *b, struct bset_tree *t)
 		t->prev = t[-1].prev + j;
 	}
 
+	if (t->data == write_block(b)) {
+		BUG_ON(t->data->keys);
+
+		if (t->tree != b->sets->tree + bset_tree_space(b)) {
+			t->prev[0] = bkey_to_cacheline_offset(t->data->start);
+			t->size = 1;
+		}
+		return;
+	}
+
 	t->size = min_t(unsigned,
 			bkey_to_cacheline(t, end(t->data)),
 			b->sets->tree + bset_tree_space(b) - t->tree);
@@ -584,7 +577,7 @@ void bset_fix_invalidated_key(struct btree *b, struct bkey *k)
 
 	BUG();
 found_set:
-	if (!t->size)
+	if (t->data == write_block(b) || !t->size)
 		return;
 
 	inorder = bkey_to_cacheline(t, k);
@@ -618,10 +611,58 @@ fix_right:	do {
 		} while (j < t->size);
 }
 
+void bset_fix_lookup_table(struct btree *b, struct bkey *k)
+{
+	struct bset_tree *t = &b->sets[b->nsets];
+	unsigned shift = bkey_u64s(k);
+	unsigned j = bkey_to_cacheline(t, k);
+
+	/* We're getting called from btree_split() or btree_gc, just bail out */
+	if (!t->size)
+		return;
+
+	/* k is the key we just inserted; we need to find the entry in the
+	 * lookup table for the first key that is strictly greater than k:
+	 * it's either k's cacheline or the next one
+	 */
+	if (j < t->size &&
+	    table_to_bkey(t, j) <= k)
+		j++;
+
+	/* Adjust all the lookup table entries, and find a new key for any that
+	 * have gotten too big
+	 */
+	for (; j < t->size; j++) {
+		t->prev[j] += shift;
+
+		if (t->prev[j] > 7) {
+			k = table_to_bkey(t, j - 1);
+
+			while (k < cacheline_to_bkey(t, j, 0))
+				k = next(k);
+
+			t->prev[j] = bkey_to_cacheline_offset(k);
+		}
+	}
+
+	if (t->size == b->sets->tree + bset_tree_space(b) - t->tree)
+		return;
+
+	/* Possibly add a new entry to the end of the lookup table */
+
+	for (k = table_to_bkey(t, t->size - 1);
+	     k != end(t->data);
+	     k = next(k))
+		if (t->size == bkey_to_cacheline(t, k)) {
+			t->prev[t->size] = bkey_to_cacheline_offset(k);
+			t->size++;
+		}
+}
+
 struct bkey *__bset_search(struct btree *b, struct bset_tree *t,
 			   const struct bkey *search)
 {
-	struct bkey *l, *r;
+	struct bkey *l = t->data->start, *r = end(t->data);
 	unsigned j = 1;
 
 	struct bkey *cur(void)
@@ -630,9 +671,25 @@ struct bkey *__bset_search(struct btree *b, struct bset_tree *t,
 	}
 
 	if (!t->size)
-		return bset_bsearch(t->data, search);
+		goto linear_search;
 
-	BUG_ON(t->data == write_block(b));
+	if (t->data == write_block(b)) {
+		unsigned li = 0, ri = t->size;
+
+		while (li + 1 != ri) {
+			unsigned m = (li + ri) >> 1;
+
+			if (bkey_cmp(table_to_bkey(t, m), search) > 0)
+				ri = m;
+			else
+				li = m;
+		}
+
+		l = table_to_bkey(t, li);
+		if (ri < t->size)
+			r = table_to_bkey(t, ri);
+		goto linear_search;
+	}
 
 	/* prev(end(i)) won't be in the cache */
 	if (bkey_cmp(search, &t->end) >= 0)
@@ -675,8 +732,7 @@ cmp_done:
 				if (--inorder) {
 					f = &t->tree[inorder_prev(j, t->size)];
 					l = cacheline_to_bkey(t, inorder, f->m);
-				} else
-					l = t->data->start;
+				}
 
 				break;
 			}
@@ -693,8 +749,7 @@ cmp_done:
 				if (++inorder != t->size) {
 					f = &t->tree[inorder_next(j, t->size)];
 					r = cacheline_to_bkey(t, inorder, f->m);
-				} else
-					r = end(t->data);
+				}
 
 				break;
 			}
@@ -702,7 +757,7 @@ cmp_done:
 			j = j * 2 + 1;
 		}
 	}
-
+linear_search:
 	while (l != r &&
 	       bkey_cmp(l, search) <= 0)
 		l = next(l);

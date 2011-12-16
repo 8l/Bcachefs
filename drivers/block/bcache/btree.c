@@ -972,6 +972,7 @@ static int btree_gc_mark(struct btree *b, size_t *keys, struct gc_stat *gc)
 
 	for (struct bset_tree *t = b->sets; t <= &b->sets[b->nsets]; t++)
 		btree_bug_on(t->size &&
+			     t->data != write_block(b) &&
 			     bkey_cmp(&b->key, &t->end) < 0,
 			     b, "found short btree key in gc");
 
@@ -1371,14 +1372,17 @@ err:
 
 /* Btree insertion */
 
-static void shift_keys(struct bset *i, struct bkey *where, struct bkey *insert)
+static void shift_keys(struct btree *b, struct bkey *where, struct bkey *insert)
 {
+	struct bset *i = b->sets[b->nsets].data;
+
 	memmove((uint64_t *) where + bkey_u64s(insert),
 		where,
 		(void *) end(i) - (void *) where);
 
 	i->keys += bkey_u64s(insert);
 	bkey_copy(where, insert);
+	bset_fix_lookup_table(b, where);
 }
 
 static bool fix_overlapping_extents(struct btree *b, struct bkey *k,
@@ -1431,11 +1435,11 @@ static bool fix_overlapping_extents(struct btree *b, struct bkey *k,
 				if (j < w->start) {
 					m = bset_search(b, &b->sets[b->nsets],
 							k);
-					shift_keys(w, m, j);
+					shift_keys(b, m, j);
 				} else {
 					BKEY_PADDED(key) temp;
 					bkey_copy(&temp.key, j);
-					shift_keys(w, m, &temp.key);
+					shift_keys(b, m, &temp.key);
 					m = next(j);
 				}
 
@@ -1532,7 +1536,7 @@ bool btree_insert_keys(struct btree *b, struct btree_op *op)
 		} else
 			m = bset_search(b, &b->sets[b->nsets], k);
 
-		shift_keys(i, m, k);
+		shift_keys(b, m, k);
 copy:		bkey_copy(m, k);
 merged:		ret = true;
 
@@ -1711,8 +1715,10 @@ static int btree_insert_recurse(struct btree *b, struct btree_op *op,
 			return btree_split(b, op);
 		}
 
-		if (write_block(b) != b->sets[b->nsets].data)
+		if (write_block(b) != b->sets[b->nsets].data) {
 			bset_init(b, write_block(b));
+			bset_build_tree(b, &b->sets[b->nsets]);
+		}
 
 		if (btree_insert_keys(b, op))
 			btree_write(b, false, op);

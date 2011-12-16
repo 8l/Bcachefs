@@ -25,16 +25,8 @@
 #include "debug.h"
 
 #include <linux/bitops.h>
-#include <linux/blkdev.h>
-#include <linux/console.h>
-#include <linux/ctype.h>
-#include <linux/delay.h>
-#include <linux/device.h>
 #include <linux/hash.h>
-#include <linux/ratelimit.h>
 #include <linux/rcupdate.h>
-#include <linux/string.h>
-#include <linux/swap.h>
 
 /*
  * Todo:

@@ -3,8 +3,8 @@
 #define _BCACHE_UTIL_H
 
 #include <linux/errno.h>
-#include <linux/ctype.h>
 #include <linux/kernel.h>
+#include <linux/ratelimit.h>
 #include <linux/workqueue.h>
 
 #ifndef USHRT_MAX

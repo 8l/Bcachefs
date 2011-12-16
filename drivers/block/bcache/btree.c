@@ -85,14 +85,9 @@
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Kent Overstreet <kent.overstreet@gmail.com>");
 
-const char *insert_type(struct btree_op *op)
-{
-	static const char * const insert_types[] = {
-		"read", "write", NULL, "writeback", "undirty", NULL, "replay"
-	};
-
-	return insert_types[op->insert_type];
-}
+const char * const bcache_insert_types[] = {
+	"read", "write", NULL, "writeback", "undirty", NULL, "replay"
+};
 
 #define MAX_NEED_GC		64
 #define MAX_SAVE_PRIO		72
@@ -473,11 +468,14 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 	BUG_ON(!b->written);
 }
 
-/* Btree cache */
+/*
+ * Btree in memory cache - allocation/freeing
+ * mca -> memory cache
+ */
 
-#define btree_reserve(c)	((c->root ? c->root->level : 1) * 4 + 4)
+#define mca_reserve(c)	((c->root ? c->root->level : 1) * 4 + 4)
 
-void free_bucket_data(struct btree *b)
+static void mca_data_free(struct btree *b)
 {
 	struct bset_tree *t = b->sets;
 
@@ -502,7 +500,7 @@ void free_bucket_data(struct btree *b)
 	b->c->bucket_cache_used--;
 }
 
-static void free_bucket(struct btree *b)
+static void mca_bucket_free(struct btree *b)
 {
 	BUG_ON(b->write);
 
@@ -510,99 +508,9 @@ static void free_bucket(struct btree *b)
 	hlist_del_init_rcu(&b->hash);
 }
 
-static int reap_bucket(struct btree *b, struct closure *cl)
-{
-	lockdep_assert_held(&b->c->bucket_lock);
-
-	if (!down_write_trylock(&b->lock))
-		return -1;
-
-	BUG_ON(b->write && !b->sets[0].data);
-
-	if (cl && b->write)
-		btree_write(b, true, NULL);
-
-	if (cl)
-		closure_wait_on_async(&b->wait, bcache_wq, cl,
-				      atomic_read(&b->io) == -1);
-
-	if (b->write ||
-	    atomic_read(&b->io) != -1 ||
-	    work_pending(&b->work.work)) {
-		rw_unlock(true, b);
-		return -EAGAIN;
-	}
-
-	return 0;
-}
-
-static int shrink_buckets(struct shrinker *shrink, struct shrink_control *sc)
-{
-	struct btree *oldest_bucket(struct cache_set *c)
-	{
-		struct btree *ret = NULL, *b;
-		list_for_each_entry(b, &c->lru, lru)
-			if (!ret || time_after(ret->jiffies, b->jiffies))
-				ret = b;
-		return ret;
-	}
-
-	struct cache_set *c = container_of(shrink, struct cache_set, shrink);
-	struct btree *b;
-	int nr = sc->nr_to_scan, ret = 0, reserve = btree_reserve(c);
-
-	if (!nr) {
-		ret = max_t(int, c->bucket_cache_used - reserve, 0);
-		return ret * c->btree_pages;
-	}
-
-	if (!mutex_trylock(&c->bucket_lock))
-		return -1;
-
-	nr /= c->btree_pages;
-	ret = max_t(int, c->bucket_cache_used - reserve, 0);
-
-	while (nr && ret && !c->try_harder) {
-		b = oldest_bucket(c);
-		if (reap_bucket(b, NULL))
-			break;
-
-		free_bucket_data(b);
-		free_bucket(b);
-		rw_unlock(true, b);
-		nr--, ret--;
-	}
-
-	mutex_unlock(&c->bucket_lock);
-	return ret * c->btree_pages;
-}
-
-static struct hlist_head *hash_bucket(struct cache_set *c, struct bkey *k)
-{
-	return &c->bucket_hash[hash_32(PTR_HASH(c, k), BUCKET_HASH_BITS)];
-}
-
-static struct btree *find_bucket(struct cache_set *c, struct bkey *k)
-{
-	struct hlist_node *cursor;
-	struct btree *b;
-
-	rcu_read_lock();
-	hlist_for_each_entry_rcu(b, cursor, hash_bucket(c, k), hash)
-		if (PTR_HASH(c, &b->key) == PTR_HASH(c, k))
-			goto out;
-	b = NULL;
-out:
-	rcu_read_unlock();
-	return b;
-}
-
-static void alloc_bucket_data(struct btree *b, struct bkey *k, gfp_t gfp)
+static void mca_data_alloc(struct btree *b, struct bkey *k, gfp_t gfp)
 {
 	struct bset_tree *t = b->sets;
-
-	gfp |= GFP_NOIO;
-	lockdep_assert_held(&b->c->bucket_lock);
 	BUG_ON(t->data);
 
 	b->page_order = ilog2(max_t(unsigned, b->c->btree_pages,
@@ -628,12 +536,13 @@ static void alloc_bucket_data(struct btree *b, struct bkey *k, gfp_t gfp)
 	b->c->bucket_cache_used++;
 	return;
 err:
-	free_bucket_data(b);
+	mca_data_free(b);
 }
 
-struct btree *__alloc_bucket(struct cache_set *c, struct bkey *k, gfp_t gfp)
+static struct btree *mca_bucket_alloc(struct cache_set *c,
+				      struct bkey *k, gfp_t gfp)
 {
-	struct btree *b = kzalloc(sizeof(struct btree), GFP_NOIO|gfp);
+	struct btree *b = kzalloc(sizeof(struct btree), gfp);
 	if (!b)
 		return NULL;
 
@@ -645,8 +554,150 @@ struct btree *__alloc_bucket(struct cache_set *c, struct bkey *k, gfp_t gfp)
 	b->writes[0].index	= 0;
 	b->writes[1].index	= 1;
 
-	alloc_bucket_data(b, k, gfp);
+	mca_data_alloc(b, k, gfp);
 	return b->sets[0].data ? b : NULL;
+}
+
+static int mca_reap(struct btree *b, struct closure *cl)
+{
+	lockdep_assert_held(&b->c->bucket_lock);
+
+	if (!down_write_trylock(&b->lock))
+		return -1;
+
+	BUG_ON(b->write && !b->sets[0].data);
+
+	if (cl && b->write)
+		btree_write(b, true, NULL);
+
+	if (cl)
+		closure_wait_on_async(&b->wait, bcache_wq, cl,
+				      atomic_read(&b->io) == -1);
+
+	if (b->write ||
+	    atomic_read(&b->io) != -1 ||
+	    work_pending(&b->work.work)) {
+		rw_unlock(true, b);
+		return -EAGAIN;
+	}
+
+	return 0;
+}
+
+static int bcache_shrink_buckets(struct shrinker *shrink,
+				 struct shrink_control *sc)
+{
+	struct btree *oldest_bucket(struct cache_set *c)
+	{
+		struct btree *ret = NULL, *b;
+		list_for_each_entry(b, &c->lru, lru)
+			if (!ret || time_after(ret->jiffies, b->jiffies))
+				ret = b;
+		return ret;
+	}
+
+	struct cache_set *c = container_of(shrink, struct cache_set, shrink);
+	struct btree *b;
+	int nr = sc->nr_to_scan, ret = 0, reserve = mca_reserve(c);
+
+	if (!nr) {
+		ret = max_t(int, c->bucket_cache_used - reserve, 0);
+		return ret * c->btree_pages;
+	}
+
+	if (!mutex_trylock(&c->bucket_lock))
+		return -1;
+
+	nr /= c->btree_pages;
+	ret = max_t(int, c->bucket_cache_used - reserve, 0);
+
+	while (nr && ret && !c->try_harder) {
+		b = oldest_bucket(c);
+		if (mca_reap(b, NULL))
+			break;
+
+		mca_data_free(b);
+		mca_bucket_free(b);
+		rw_unlock(true, b);
+		nr--, ret--;
+	}
+
+	mutex_unlock(&c->bucket_lock);
+	return ret * c->btree_pages;
+}
+
+void bcache_btree_cache_free(struct cache_set *c)
+{
+	struct btree *b;
+
+	if (c->shrink.list.next)
+		unregister_shrinker(&c->shrink);
+
+	mutex_lock(&c->bucket_lock);
+
+#ifdef CONFIG_BCACHE_DEBUG
+	if (c->verify_data)
+		list_move_tail(&c->verify_data->lru, &c->lru);
+#endif
+
+	while (!list_empty(&c->lru))
+		mca_data_free(list_first_entry(&c->lru, struct btree, lru));
+
+	while (!list_empty(&c->freed)) {
+		b = list_first_entry(&c->freed, struct btree, lru);
+		list_del(&b->lru);
+		cancel_delayed_work_sync(&b->work);
+		kfree(b);
+	}
+
+	mutex_unlock(&c->bucket_lock);
+}
+
+int bcache_btree_cache_alloc(struct cache_set *c)
+{
+	INIT_WORK(&c->gc_work, btree_gc_work);
+
+	for (int i = 0; i < mca_reserve(c); i++)
+		mca_bucket_alloc(c, &ZERO_KEY, GFP_KERNEL);
+
+#ifdef CONFIG_BCACHE_DEBUG
+	mutex_init(&c->verify_lock);
+
+	c->verify_data = mca_bucket_alloc(c, &ZERO_KEY, GFP_KERNEL);
+
+	if (c->verify_data && !c->verify_data->sets[0].data)
+		c->verify_data = NULL;
+	else
+		list_del_init(&c->verify_data->lru);
+#endif
+
+	c->shrink.shrink = bcache_shrink_buckets;
+	c->shrink.seeks = 3;
+	register_shrinker(&c->shrink);
+
+	return 0;
+}
+
+/* Btree in memory cache - hash table */
+
+static struct hlist_head *hash_bucket(struct cache_set *c, struct bkey *k)
+{
+	return &c->bucket_hash[hash_32(PTR_HASH(c, k), BUCKET_HASH_BITS)];
+}
+
+static struct btree *find_bucket(struct cache_set *c, struct bkey *k)
+{
+	struct hlist_node *cursor;
+	struct btree *b;
+
+	rcu_read_lock();
+	hlist_for_each_entry_rcu(b, cursor, hash_bucket(c, k), hash)
+		if (PTR_HASH(c, &b->key) == PTR_HASH(c, k))
+			goto out;
+	b = NULL;
+out:
+	rcu_read_unlock();
+	return b;
 }
 
 static struct btree *alloc_bucket(struct cache_set *c, struct bkey *k,
@@ -667,15 +718,15 @@ retry:
 	b = list_entry(c->lru.prev, struct btree, lru);
 	if (page_order <= b->page_order &&
 	    !b->key.ptr[0] &&
-	    !reap_bucket(b, NULL))
+	    !mca_reap(b, NULL))
 		goto out;
 
 	/* We never free struct btree itself, just the memory that holds the on
 	 * disk node. Check the freed list before allocating a new one:
 	 */
 	list_for_each_entry(b, &c->freed, lru)
-		if (!reap_bucket(b, NULL)) {
-			alloc_bucket_data(b, k, __GFP_NOWARN);
+		if (!mca_reap(b, NULL)) {
+			mca_data_alloc(b, k, __GFP_NOWARN|GFP_NOIO);
 			if (!b->sets[0].data) {
 				rw_unlock(true, b);
 				goto err;
@@ -683,7 +734,7 @@ retry:
 				goto out;
 		}
 
-	b = __alloc_bucket(c, k, __GFP_NOWARN);
+	b = mca_bucket_alloc(c, k, __GFP_NOWARN|GFP_NOIO);
 	if (!b)
 		goto err;
 
@@ -726,7 +777,7 @@ err:
 
 	list_for_each_entry_reverse(i, &c->lru, lru)
 		if (page_order <= i->page_order) {
-			int e = reap_bucket(i, cl);
+			int e = mca_reap(i, cl);
 			if (e == -EAGAIN)
 				b = ERR_PTR(-EAGAIN);
 			if (!e) {
@@ -810,44 +861,6 @@ static void prefetch_bucket(struct cache_set *c, struct bkey *k, int level)
 	}
 }
 
-void bcache_btree_cache_free(struct cache_set *c)
-{
-	struct btree *b;
-
-	if (c->shrink.list.next)
-		unregister_shrinker(&c->shrink);
-
-	mutex_lock(&c->bucket_lock);
-
-	while (!list_empty(&c->lru))
-		free_bucket_data(list_first_entry(&c->lru, struct btree, lru));
-
-	while (!list_empty(&c->freed)) {
-		b = list_first_entry(&c->freed, struct btree, lru);
-		list_del(&b->lru);
-		cancel_delayed_work_sync(&b->work);
-		kfree(b);
-	}
-
-	mutex_unlock(&c->bucket_lock);
-}
-
-int bcache_btree_cache_alloc(struct cache_set *c)
-{
-	INIT_WORK(&c->gc_work, btree_gc_work);
-
-	mutex_lock(&c->bucket_lock);
-	for (int i = 0; i < btree_reserve(c); i++)
-		__alloc_bucket(c, &ZERO_KEY, 0);
-	mutex_unlock(&c->bucket_lock);
-
-	c->shrink.shrink = shrink_buckets;
-	c->shrink.seeks = 3;
-	register_shrinker(&c->shrink);
-
-	return 0;
-}
-
 /* Btree alloc */
 
 static void btree_free(struct btree *b, struct btree_op *op)
@@ -881,7 +894,7 @@ static void btree_free(struct btree *b, struct btree_op *op)
 	}
 
 	unpop_bucket(b->c, &b->key);
-	free_bucket(b);
+	mca_bucket_free(b);
 	list_move_tail(&b->lru, &b->c->lru);
 	mutex_unlock(&b->c->bucket_lock);
 }

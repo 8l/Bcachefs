@@ -1574,7 +1574,6 @@ static void cache_set_free(struct kobject *kobj)
 	for_each_cache(ca, c)
 		kobject_put(&ca->kobj);
 
-	bcache_debug_cache_set_free(c);
 	free_open_buckets(c);
 	bcache_btree_cache_free(c);
 	free_journal(c);
@@ -1735,8 +1734,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	    !(c->uuids = alloc_bucket_pages(GFP_KERNEL, c)) ||
 	    alloc_journal(c) ||
 	    bcache_btree_cache_alloc(c) ||
-	    alloc_open_buckets(c) ||
-	    bcache_debug_cache_set_alloc(c))
+	    alloc_open_buckets(c))
 		goto err;
 
 	c->fill_iter->size = sb->bucket_size / sb->block_size;

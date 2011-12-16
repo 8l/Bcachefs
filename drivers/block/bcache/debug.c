@@ -185,29 +185,6 @@ void btree_verify(struct btree *b, struct bset *new)
 	mutex_unlock(&b->c->verify_lock);
 }
 
-void bcache_debug_cache_set_free(struct cache_set *c)
-{
-	if (c->verify_data)
-		list_move_tail(&c->verify_data->lru, &c->lru);
-}
-
-int bcache_debug_cache_set_alloc(struct cache_set *c)
-{
-	int ret = 0;
-	mutex_init(&c->verify_lock);
-
-	mutex_lock(&c->bucket_lock);
-	c->verify_data = __alloc_bucket(c, &ZERO_KEY, 0);
-
-	if (!c->verify_data || !c->verify_data->sets[0].data)
-		ret = -ENOMEM;
-	else
-		list_del_init(&c->verify_data->lru);
-
-	mutex_unlock(&c->bucket_lock);
-	return ret;
-}
-
 #endif
 
 #ifdef CONFIG_BCACHE_EDEBUG

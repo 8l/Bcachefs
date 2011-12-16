@@ -35,15 +35,10 @@ void check_keys(struct btree *, const char *, ...);
 #ifdef CONFIG_BCACHE_DEBUG
 
 void btree_verify(struct btree *, struct bset *);
-void bcache_debug_cache_set_free(struct cache_set *);
-int bcache_debug_cache_set_alloc(struct cache_set *);
 
 #else /* DEBUG */
 
 static inline void btree_verify(struct btree *b, struct bset *i) {}
-static inline void bcache_debug_cache_set_free(struct cache_set *c) {}
-static inline int bcache_debug_cache_set_alloc(struct cache_set *c)
-{ return 0; }
 
 #endif
 

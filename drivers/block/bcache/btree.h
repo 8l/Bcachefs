@@ -129,6 +129,13 @@ static inline bool should_split(struct btree *b)
 		 > btree_blocks(b));
 }
 
+extern const char * const bcache_insert_types[];
+
+static inline const char *insert_type(struct btree_op *op)
+{
+	return bcache_insert_types[op->insert_type];
+}
+
 /* Hack around symbol collisions */
 #define btree_alloc(x, y, z)	bcache_btree_alloc(x, y, z)
 #define btree_insert(x, y)	bcache_btree_insert(x, y)
@@ -143,7 +150,6 @@ void set_new_root(struct btree *);
 struct btree *get_bucket(struct cache_set *, struct bkey *,
 			 int, struct btree_op *);
 
-const char *insert_type(struct btree_op *);
 size_t btree_gc_finish(struct cache_set *);
 int btree_check(struct cache_set *, struct btree_op *);
 void __btree_mark_key(struct cache_set *, int, struct bkey *);
@@ -152,8 +158,5 @@ void btree_read_work(struct work_struct *);
 void btree_read(struct btree *);
 void btree_write(struct btree *b, bool now, struct btree_op *op);
 bool btree_insert_keys(struct btree *, struct btree_op *);
-
-void free_bucket_data(struct btree *);
-struct btree *__alloc_bucket(struct cache_set *, struct bkey *, gfp_t);
 
 #endif

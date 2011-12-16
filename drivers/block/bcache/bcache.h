@@ -588,7 +588,6 @@ static inline unsigned local_clock_us(void)
 
 #define node(i, j)		((struct bkey *) ((i)->d + (j)))
 #define end(i)			node(i, (i)->keys)
-#define last_key(i)		(i->keys ? prev(node(i, (i)->keys)) : NULL)
 
 #define index(i, b)							\
 	((size_t) (((void *) i - (void *) (b)->sets[0].data) /		\

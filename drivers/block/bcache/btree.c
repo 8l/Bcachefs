@@ -197,10 +197,6 @@ void btree_read_work(struct work_struct *w)
 		if (i != b->sets[0].data && !i->keys)
 			goto err;
 
-		err = "short btree key";
-		if (i->keys && bkey_cmp(&b->key, last_key(i)) < 0)
-			goto err;
-
 		btree_iter_push(iter, i->start, end(i));
 
 		b->written += set_blocks(i, b->c);
@@ -215,6 +211,12 @@ void btree_read_work(struct work_struct *w)
 
 	__btree_sort(b, 0, NULL, iter, true);
 
+	i = b->sets[0].data;
+	err = "short btree key";
+	if (b->sets[0].size &&
+	    bkey_cmp(&b->key, &b->sets[0].end) < 0)
+		goto err;
+
 	pr_latency(b->wait_time, "btree_read");
 
 	smp_wmb(); /* b->nread is our write lock */
@@ -222,7 +224,7 @@ void btree_read_work(struct work_struct *w)
 
 	if (0) {
 err:		atomic_set(&b->nread, -1);
-		cache_set_error(b->c, "%s at bucket %lu, block %i, %i keys",
+		cache_set_error(b->c, "%s at bucket %lu, block %zu, %u keys",
 				err, PTR_BUCKET_NR(b->c, &b->key, 0),
 				index(i, b), i->keys);
 	}
@@ -966,11 +968,11 @@ void __btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 static int btree_gc_mark(struct btree *b, size_t *keys, struct gc_stat *gc)
 {
 	uint8_t ret = 0;
-	struct bset *i;
 	struct bkey *k;
 
-	for_each_sorted_set(b, i)
-		btree_bug_on(i->keys && bkey_cmp(&b->key, last_key(i)) < 0,
+	for (struct bset_tree *t = b->sets; t <= &b->sets[b->nsets]; t++)
+		btree_bug_on(t->size &&
+			     bkey_cmp(&b->key, &t->end) < 0,
 			     b, "found short btree key in gc");
 
 	gc->nodes++;
@@ -1589,6 +1591,9 @@ static int btree_split(struct btree *b, struct btree_op *op)
 		while (keys < (n1->sets[0].data->keys * 3) / 5)
 			keys += bkey_u64s(node(n1->sets[0].data, keys));
 
+		bkey_copy_key(&n1->key, node(n1->sets[0].data, keys));
+		keys += bkey_u64s(node(n1->sets[0].data, keys));
+
 		n2->sets[0].data->keys = n1->sets[0].data->keys - keys;
 		n1->sets[0].data->keys = keys;
 
@@ -1596,7 +1601,6 @@ static int btree_split(struct btree *b, struct btree_op *op)
 		       end(n1->sets[0].data),
 		       n2->sets[0].data->keys * sizeof(uint64_t));
 
-		bkey_copy_key(&n1->key, last_key(n1->sets[0].data));
 		bkey_copy_key(&n2->key, &b->key);
 
 		keylist_add(&op->keys, &n2->key);

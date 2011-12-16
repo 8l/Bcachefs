@@ -5,7 +5,7 @@
 
 static inline struct bset *write_block(struct btree *b)
 {
-	 return ((void *) b->data) + b->written * block_bytes(b->c);
+	 return ((void *) b->sets[0].data) + b->written * block_bytes(b->c);
 }
 
 static inline void set_gc_sectors(struct cache_set *c)
@@ -16,7 +16,7 @@ static inline void set_gc_sectors(struct cache_set *c)
 /* Looping macros */
 
 #define for_each_sorted_set_start(b, i, start)				\
-	for (int _i = start; i = (b)->sets[_i], _i <= (b)->nsets; _i++)
+	for (int _i = start; i = (b)->sets[_i].data, _i <= (b)->nsets; _i++)
 
 #define for_each_sorted_set(b, i)	for_each_sorted_set_start(b, i, 0)
 
@@ -32,8 +32,8 @@ static inline void set_gc_sectors(struct cache_set *c)
 #define for_each_key_after_filter(b, k, search, filter)			\
 	for (int _i = 0; _i <= (b)->nsets; _i++)			\
 		for (k = bset_search(b, _i, search);			\
-		     (k = bkey_filter(b, (b)->sets[_i], k, filter))	\
-			< end((b)->sets[_i]);				\
+		     (k = bkey_filter(b, (b)->sets[_i].data, k, filter))\
+			< end((b)->sets[_i].data);			\
 		     k = next(k))
 
 #define for_each_key_filter(b, k, filter)				\
@@ -122,7 +122,7 @@ static inline bool should_split(struct btree *b)
 {
 	struct bset *i = write_block(b);
 	return b->written >= btree_blocks(b) ||
-		(i->seq == b->data->seq &&
+		(i->seq == b->sets[0].data->seq &&
 		 b->written + __set_blocks(i, i->keys + 15, b->c)
 		 > btree_blocks(b));
 }

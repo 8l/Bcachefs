@@ -491,12 +491,21 @@ struct btree {
 	unsigned		next_write:1;
 	unsigned		page_order:7;
 
-	/* We construct a binary tree in an array as if the array started at 1,
-	 * so that things line up on the same cachelines better
-	 * better: see comments in bset.c at cacheline_to_bkey() for
-	 * details
+	/*
+	 * Set of sorted keys - the real btree node - plus a binary search tree
+	 *
+	 * sets[0] is special; set[0]->tree, set[0]->prev and set[0]->data point
+	 * to the memory we have allocated for this btree node. Additionally,
+	 * set[0]->data points to the entire btree node as it exists on disk.
 	 */
 	struct bset_tree {
+		/*
+		 * We construct a binary tree in an array as if the array
+		 * started at 1, so that things line up on the same cachelines
+		 * better: see comments in bset.c at cacheline_to_bkey() for
+		 * details
+		 */
+
 		/* size of the binary tree and prev array */
 		unsigned	size;
 
@@ -505,7 +514,7 @@ struct btree {
 
 		/* copy of the last key in the set */
 		struct bkey	end;
-		struct bkey_float *key;
+		struct bkey_float *tree;
 
 		/*
 		 * The nodes in the bset tree point to specific keys - this
@@ -516,15 +525,13 @@ struct btree {
 		 * path.
 		 */
 		uint8_t		*prev;
-	}			tree[4];
 
-	/* The actual btree node, with pointers to each sorted set */
-	union {
+		/* The actual btree node, with pointers to each sorted set */
 		struct bset	*data;
-		struct bset	*sets[5];
+
 		/* Has to be 1 greater than the normal max for coalescing in
 		 * btree_gc_recurse() */
-	};
+	}			sets[5];
 
 	/* Points to one of writes[] iff there is data to write */
 	struct btree_write	*write;
@@ -584,7 +591,8 @@ static inline unsigned local_clock_us(void)
 #define last_key(i)		(i->keys ? prev(node(i, (i)->keys)) : NULL)
 
 #define index(i, b)							\
-	((size_t) (((void *) i - (void *) (b)->data) / block_bytes(b->c)))
+	((size_t) (((void *) i - (void *) (b)->sets[0].data) /		\
+		   block_bytes(b->c)))
 
 #define btree_data_space(b)	(PAGE_SIZE << (b)->page_order)
 

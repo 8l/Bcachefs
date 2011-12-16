@@ -275,11 +275,11 @@ bool bkey_try_merge(struct btree *b, struct bkey *l, struct bkey *r)
 
 void bset_init(struct btree *b, struct bset *i)
 {
-	if (i != b->data) {
-		b->sets[++b->nsets] = i;
-		i->seq = b->data->seq;
+	if (i != b->sets[0].data) {
+		b->sets[++b->nsets].data = i;
+		i->seq = b->sets[0].data->seq;
 	} else
-		get_random_bytes(&b->data->seq, sizeof(uint64_t));
+		get_random_bytes(&i->seq, sizeof(uint64_t));
 
 	i->magic	= bset_magic(b->c);
 	i->version	= 0;
@@ -448,15 +448,15 @@ void inorder_test(void)
  * of the previous key so we can walk backwards to it from t->tree[j]'s key.
  */
 
-static struct bkey *cacheline_to_bkey(struct bset *i, unsigned cacheline,
+static struct bkey *cacheline_to_bkey(struct bset_tree *t, unsigned cacheline,
 				      unsigned offset)
 {
-	return ((void *) i) + cacheline * BSET_CACHELINE + offset * 8;
+	return ((void *) t->data) + cacheline * BSET_CACHELINE + offset * 8;
 }
 
-static unsigned bkey_to_cacheline(struct bset *i, struct bkey *k)
+static unsigned bkey_to_cacheline(struct bset_tree *t, struct bkey *k)
 {
-	return ((void *) k - (void *) i) / BSET_CACHELINE;
+	return ((void *) k - (void *) t->data) / BSET_CACHELINE;
 }
 
 static unsigned bkey_to_cacheline_offset(struct bkey *k)
@@ -464,16 +464,14 @@ static unsigned bkey_to_cacheline_offset(struct bkey *k)
 	return ((size_t) k & (BSET_CACHELINE - 1)) / sizeof(uint64_t);
 }
 
-static struct bkey *tree_to_bkey(struct bset *i, unsigned j,
-				 struct bset_tree *t)
+static struct bkey *tree_to_bkey(struct bset_tree *t, unsigned j)
 {
-	return cacheline_to_bkey(i, to_inorder(j, t), t->key[j].m);
+	return cacheline_to_bkey(t, to_inorder(j, t), t->tree[j].m);
 }
 
-static struct bkey *tree_to_prev_bkey(struct bset *i, unsigned j,
-				      struct bset_tree *t)
+static struct bkey *tree_to_prev_bkey(struct bset_tree *t, unsigned j)
 {
-	return (void *) (((uint64_t *) tree_to_bkey(i, j, t)) - t->prev[j]);
+	return (void *) (((uint64_t *) tree_to_bkey(t, j)) - t->prev[j]);
 }
 
 /* Auxiliary search trees */
@@ -492,19 +490,19 @@ static unsigned bfloat_mantissa(const struct bkey *k, struct bkey_float *f)
 	return r & BKEY_MANTISSA_MASK;
 }
 
-static void make_bfloat(struct bset *i, struct bset_tree *t, unsigned j)
+static void make_bfloat(struct bset_tree *t, unsigned j)
 {
-	struct bkey_float *f = &t->key[j];
-	struct bkey *m = tree_to_bkey(i, j, t);
-	struct bkey *p = tree_to_prev_bkey(i, j, t);
+	struct bkey_float *f = &t->tree[j];
+	struct bkey *m = tree_to_bkey(t, j);
+	struct bkey *p = tree_to_prev_bkey(t, j);
 
 	struct bkey *l = is_power_of_2(j)
-		? i->start
-		: tree_to_prev_bkey(i, j >> ffs(j), t);
+		? t->data->start
+		: tree_to_prev_bkey(t, j >> ffs(j));
 
 	struct bkey *r = is_power_of_2(j + 1)
-		? node(i, i->keys - bkey_u64s(&t->end))
-		: tree_to_bkey(i, j >> (ffz(j) + 1), t);
+		? node(t->data, t->data->keys - bkey_u64s(&t->end))
+		: tree_to_bkey(t, j >> (ffz(j) + 1));
 
 	BUG_ON(m < l || m > r);
 	BUG_ON(!KEY_IS_HEADER(m));
@@ -526,30 +524,29 @@ static void make_bfloat(struct bset *i, struct bset_tree *t, unsigned j)
 
 void bset_build_tree(struct btree *b, unsigned set)
 {
-	struct bset *i		= b->sets[set];
-	struct bset_tree *t	= &b->tree[set];
-	struct bkey *k		= i->start;
+	struct bset_tree *t	= &b->sets[set];
+	struct bkey *k		= t->data->start;
 
 	unsigned j, cacheline = 1;
 
 	BUG_ON(set >= 4);
 
-	for (j = set; j < 4; j++)
-		b->tree[j].size = 0;
+	for (j = set; j < 5; j++)
+		b->sets[j].size = 0;
 
-	if (!b->tree->key)
+	if (!b->sets->tree)
 		return;
 
 	if (set) {
 		j = roundup(t[-1].size, 64 / sizeof(struct bkey_float));
 
-		t->key	= t[-1].key + j;
+		t->tree = t[-1].tree + j;
 		t->prev = t[-1].prev + j;
 	}
 
 	t->size = min_t(unsigned,
-			bkey_to_cacheline(i, end(i)),
-			b->tree->key + bset_tree_space(b) - t->key);
+			bkey_to_cacheline(t, end(t->data)),
+			b->sets->tree + bset_tree_space(b) - t->tree);
 
 	if (t->size < 2) {
 		t->size = 0;
@@ -562,16 +559,16 @@ void bset_build_tree(struct btree *b, unsigned set)
 	for (j = inorder_next(0, t->size);
 	     j;
 	     j = inorder_next(j, t->size)) {
-		while (bkey_to_cacheline(i, k) != cacheline)
+		while (bkey_to_cacheline(t, k) != cacheline)
 			k = next(k);
 
 		t->prev[j] = bkey_u64s(k);
 		k = next(k);
 		cacheline++;
-		t->key[j].m = bkey_to_cacheline_offset(k);
+		t->tree[j].m = bkey_to_cacheline_offset(k);
 	}
 
-	while (next(k) != end(i))
+	while (next(k) != end(t->data))
 		k = next(k);
 
 	t->end = *k;
@@ -580,33 +577,31 @@ void bset_build_tree(struct btree *b, unsigned set)
 	for (j = inorder_next(0, t->size);
 	     j;
 	     j = inorder_next(j, t->size))
-		make_bfloat(i, t, j);
+		make_bfloat(t, j);
 }
 
 void bset_fix_invalidated_key(struct btree *b, struct bkey *k)
 {
 	struct bset_tree *t;
-	struct bset *i;
 	unsigned inorder, j = 1, set;
 
 	for (set = 0; set <= b->nsets; set++)
-		if (k < end(b->sets[set]))
+		if (k < end(b->sets[set].data))
 			goto found_set;
 
 	BUG();
 found_set:
-	t = &b->tree[set];
-	i = b->sets[set];
+	t = &b->sets[set];
 
 	if (!t->size)
 		return;
 
-	inorder = bkey_to_cacheline(i, k);
+	inorder = bkey_to_cacheline(t, k);
 
-	if (k == i->start)
+	if (k == t->data->start)
 		goto fix_left;
 
-	if (next(k) == end(i)) {
+	if (next(k) == end(t->data)) {
 		t->end = *k;
 		goto fix_right;
 	}
@@ -615,9 +610,9 @@ found_set:
 
 	if (j &&
 	    j < t->size &&
-	    k == tree_to_bkey(i, j, t))
+	    k == tree_to_bkey(t, j))
 fix_left:	do {
-			make_bfloat(i, t, j);
+			make_bfloat(t, j);
 			j = j * 2;
 		} while (j < t->size);
 
@@ -625,9 +620,9 @@ fix_left:	do {
 
 	if (j &&
 	    j < t->size &&
-	    k == tree_to_prev_bkey(i, j, t))
+	    k == tree_to_prev_bkey(t, j))
 fix_right:	do {
-			make_bfloat(i, t, j);
+			make_bfloat(t, j);
 			j = j * 2 + 1;
 		} while (j < t->size);
 }
@@ -635,37 +630,35 @@ fix_right:	do {
 struct bkey *__bset_search(struct btree *b, unsigned set,
 			   const struct bkey *search)
 {
-	struct bset *i		= b->sets[set];
-	struct bset_tree *t	= &b->tree[set];
-
+	struct bset_tree *t	= &b->sets[set];
 	struct bkey *l, *r;
 	unsigned j = 1;
 
 	struct bkey *cur(void)
 	{
-		return tree_to_bkey(i, j, t);
+		return tree_to_bkey(t, j);
 	}
 
 	if (!t->size)
-		return bset_bsearch(i, search);
+		return bset_bsearch(t->data, search);
 
-	BUG_ON(i == write_block(b));
+	BUG_ON(t->data == write_block(b));
 
 	/* prev(end(i)) won't be in the cache */
 	if (bkey_cmp(search, &t->end) >= 0)
-		return end(i);
+		return end(t->data);
 
 	/* i->start will be in cache since it's right next to the header */
-	if (bkey_cmp(search, i->start) < 0)
-		return i->start;
+	if (bkey_cmp(search, t->data->start) < 0)
+		return t->data->start;
 
 	while (1) {
 		bool cmp;
 		unsigned shifted_key;
-		struct bkey_float *f = &t->key[j];
+		struct bkey_float *f = &t->tree[j];
 
 		if (j << 4 < t->size)
-			prefetch(&t->key[j << 4]);
+			prefetch(&t->tree[j << 4]);
 
 		EBUG_ON(!KEY_IS_HEADER(cur()));
 
@@ -682,36 +675,36 @@ struct bkey *__bset_search(struct btree *b, unsigned set,
 		cmp = f->mantissa > (shifted_key & BKEY_MANTISSA_MASK);
 cmp_done:
 		if (cmp) {
-			EBUG_ON(cur() != end(i) &&
+			EBUG_ON(cur() != end(t->data) &&
 				bkey_cmp(cur(), search) <= 0);
 
 			if (j * 2 >= t->size) {
 				unsigned inorder = to_inorder(j, t);
-				r = cacheline_to_bkey(i, inorder, f->m);
+				r = cacheline_to_bkey(t, inorder, f->m);
 
 				if (--inorder) {
-					f = &t->key[inorder_prev(j, t->size)];
-					l = cacheline_to_bkey(i, inorder, f->m);
+					f = &t->tree[inorder_prev(j, t->size)];
+					l = cacheline_to_bkey(t, inorder, f->m);
 				} else
-					l = i->start;
+					l = t->data->start;
 
 				break;
 			}
 
 			j = j * 2;
 		} else {
-			EBUG_ON(cur() != i->start &&
+			EBUG_ON(cur() != t->data->start &&
 				bkey_cmp(prev(cur()), search) > 0);
 
 			if (j * 2 + 1 >= t->size) {
 				unsigned inorder = to_inorder(j, t);
-				l = cacheline_to_bkey(i, inorder, f->m);
+				l = cacheline_to_bkey(t, inorder, f->m);
 
 				if (++inorder != t->size) {
-					f = &t->key[inorder_next(j, t->size)];
-					r = cacheline_to_bkey(i, inorder, f->m);
+					f = &t->tree[inorder_next(j, t->size)];
+					r = cacheline_to_bkey(t, inorder, f->m);
 				} else
-					r = end(i);
+					r = end(t->data);
 
 				break;
 			}
@@ -759,7 +752,7 @@ struct bkey *__btree_iter_init(struct btree *b, struct btree_iter *iter,
 
 	for (int i = start; i <= b->nsets; i++) {
 		ret = bset_search(b, i, search);
-		btree_iter_push(iter, ret, end(b->sets[i]));
+		btree_iter_push(iter, ret, end(b->sets[i].data));
 	}
 
 	return ret;
@@ -897,15 +890,15 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 
 	if (!start && order == b->page_order) {
 		out->magic	= bset_magic(b->c);
-		out->seq	= b->data->seq;
-		out->version	= b->data->version;
-		swap(out, b->data);
+		out->seq	= b->sets[0].data->seq;
+		out->version	= b->sets[0].data->version;
+		swap(out, b->sets[0].data);
 
-		if (b->c->sort == b->data)
+		if (b->c->sort == b->sets[0].data)
 			b->c->sort = out;
 	} else {
-		b->sets[start]->keys = out->keys;
-		memcpy(b->sets[start]->start, out->start,
+		b->sets[start].data->keys = out->keys;
+		memcpy(b->sets[start].data->start, out->start,
 		       (void *) end(out) - (void *) out->start);
 	}
 
@@ -916,8 +909,8 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 
 	bset_build_tree(b, start);
 
-	pr_debug("sorted %i keys", b->sets[start]->keys);
-	check_key_order(b, b->sets[start]);
+	pr_debug("sorted %i keys", b->sets[start].data->keys);
+	check_key_order(b, b->sets[start].data);
 	EBUG_ON(!fixup && !remove_stale && count_data(b) != oldsize);
 }
 
@@ -946,7 +939,7 @@ bool btree_sort_lazy(struct btree *b)
 				return true;
 			}
 
-			keys -= b->sets[j]->keys;
+			keys -= b->sets[j].data->keys;
 		}
 
 		if (b->nsets > 2 - b->level) {
@@ -969,18 +962,18 @@ static int btree_bset_stats(struct btree *b, struct btree_op *op,
 {
 	struct bkey *k;
 
-	if (write_block(b) == b->sets[b->nsets])
+	if (write_block(b) == b->sets[b->nsets].data)
 		stats->writes++;
 	stats->sets		+= b->nsets + 1;
 	stats->tree_space	+= bset_tree_space(b);
 
-	for (int i = 0; i < 4 && b->tree[i].size; i++) {
+	for (int i = 0; i < 4 && b->sets[i].size; i++) {
 		stats->trees++;
-		stats->keys	+= b->sets[i]->keys * sizeof(uint64_t);
-		stats->floats	+= b->tree[i].size - 1;
+		stats->keys	+= b->sets[i].data->keys * sizeof(uint64_t);
+		stats->floats	+= b->sets[i].size - 1;
 
-		for (size_t j = 1; j < b->tree[i].size; j++)
-			if (b->tree[i].key[j].exponent == 127)
+		for (size_t j = 1; j < b->sets[i].size; j++)
+			if (b->sets[i].tree[j].exponent == 127)
 				stats->failed++;
 	}
 

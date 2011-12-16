@@ -155,7 +155,7 @@ static void btree_bio_init(struct btree *b)
 void btree_read_work(struct work_struct *w)
 {
 	struct btree *b = container_of(to_delayed_work(w), struct btree, work);
-	struct bset *i = b->data;
+	struct bset *i = b->sets[0].data;
 	struct btree_iter *iter = b->c->fill_iter;
 	const char *err = "bad btree header";
 	BUG_ON(b->nsets || b->written);
@@ -163,11 +163,11 @@ void btree_read_work(struct work_struct *w)
 	mutex_lock(&b->c->fill_lock);
 	iter->used = 0;
 
-	if (!b->data->seq)
+	if (!i->seq)
 		goto err;
 
-	for (i = b->data;
-	     b->written < btree_blocks(b) && i->seq == b->data->seq;
+	for (;
+	     b->written < btree_blocks(b) && i->seq == b->sets[0].data->seq;
 	     i = write_block(b)) {
 		err = "unsupported bset version";
 		if (i->version > BCACHE_BSET_VERSION)
@@ -194,7 +194,7 @@ void btree_read_work(struct work_struct *w)
 		}
 
 		err = "empty set";
-		if (i != b->data && !i->keys)
+		if (i != b->sets[0].data && !i->keys)
 			goto err;
 
 		err = "short btree key";
@@ -210,7 +210,7 @@ void btree_read_work(struct work_struct *w)
 	for (i = write_block(b);
 	     index(i, b) < btree_blocks(b);
 	     i = ((void *) i) + block_bytes(b->c))
-		if (i->seq == b->data->seq)
+		if (i->seq == b->sets[0].data->seq)
 			goto err;
 
 	__btree_sort(b, 0, NULL, iter, true);
@@ -269,7 +269,7 @@ void btree_read(struct btree *b)
 	b->bio->bi_end_io	= btree_read_endio;
 	b->bio->bi_private	= b;
 
-	bio_map(b->bio, b->data);
+	bio_map(b->bio, b->sets[0].data);
 
 	if (bio_submit_split(b->bio, &b->io, b->c->bio_split)) {
 		PREPARE_DELAYED_WORK(&b->work, btree_bio_resubmit);
@@ -406,7 +406,7 @@ err:		closure_init_stack(&wait);
 
 	pr_debug("%s block %i keys %i", pbtree(b), b->written, i->keys);
 
-	BUG_ON(b->sets[b->nsets] != write_block(b));
+	BUG_ON(b->sets[b->nsets].data != write_block(b));
 	smp_wmb();
 
 	b->written += set_blocks(i, b->c);
@@ -434,7 +434,7 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 	BUG_ON(!now && !op);
 	BUG_ON(b->written &&
 	       (b->written >= btree_blocks(b) ||
-		i->seq != b->data->seq ||
+		i->seq != b->sets[0].data->seq ||
 		!i->keys));
 
 	if (!b->write) {
@@ -490,23 +490,25 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 
 void free_bucket_data(struct btree *b)
 {
+	struct bset_tree *t = b->sets;
+
 	if (bset_prev_bytes(b) < PAGE_SIZE)
-		kfree(b->tree->prev);
+		kfree(t->prev);
 	else
-		free_pages((unsigned long) b->tree->prev,
+		free_pages((unsigned long) t->prev,
 			   get_order(bset_prev_bytes(b)));
 
 	if (bset_tree_bytes(b) < PAGE_SIZE)
-		kfree(b->tree->key);
+		kfree(t->tree);
 	else
-		free_pages((unsigned long) b->tree->key,
+		free_pages((unsigned long) t->tree,
 			   get_order(bset_tree_bytes(b)));
 
-	free_pages((unsigned long) b->data, b->page_order);
+	free_pages((unsigned long) t->data, b->page_order);
 
-	b->tree->prev	= NULL;
-	b->tree->key	= NULL;
-	b->data		= NULL;
+	t->prev = NULL;
+	t->tree = NULL;
+	t->data = NULL;
 	list_move_tail(&b->lru, &b->c->freed);
 	b->c->bucket_cache_used--;
 }
@@ -526,7 +528,7 @@ static int reap_bucket(struct btree *b, struct closure *cl)
 	if (!down_write_trylock(&b->lock))
 		return -1;
 
-	BUG_ON(b->write && !b->data);
+	BUG_ON(b->write && !b->sets[0].data);
 
 	if (cl && b->write)
 		btree_write(b, true, NULL);
@@ -608,27 +610,29 @@ out:
 
 static void alloc_bucket_data(struct btree *b, struct bkey *k, gfp_t gfp)
 {
+	struct bset_tree *t = b->sets;
+
 	gfp |= GFP_NOIO;
 	lockdep_assert_held(&b->c->bucket_lock);
-	BUG_ON(b->data);
+	BUG_ON(t->data);
 
 	b->page_order = ilog2(max_t(unsigned, b->c->btree_pages,
 				    KEY_SIZE(k) / PAGE_SECTORS ?: 1));
 
-	b->data = (void *) __get_free_pages(gfp, b->page_order);
-	if (!b->data)
+	t->data = (void *) __get_free_pages(gfp, b->page_order);
+	if (!t->data)
 		goto err;
 
-	b->tree->key = bset_tree_bytes(b) < PAGE_SIZE
+	t->tree = bset_tree_bytes(b) < PAGE_SIZE
 		? kmalloc(bset_tree_bytes(b), gfp)
 		: (void *) __get_free_pages(gfp, get_order(bset_tree_bytes(b)));
-	if (!b->tree->key)
+	if (!t->tree)
 		goto err;
 
-	b->tree->prev = bset_prev_bytes(b) < PAGE_SIZE
+	t->prev = bset_prev_bytes(b) < PAGE_SIZE
 		? kmalloc(bset_prev_bytes(b), gfp)
 		: (void *) __get_free_pages(gfp, get_order(bset_prev_bytes(b)));
-	if (!b->tree->prev)
+	if (!t->prev)
 		goto err;
 
 	list_move_tail(&b->lru, &b->c->lru);
@@ -653,7 +657,7 @@ struct btree *__alloc_bucket(struct cache_set *c, struct bkey *k, gfp_t gfp)
 	b->writes[1].index	= 1;
 
 	alloc_bucket_data(b, k, gfp);
-	return b->data ? b : NULL;
+	return b->sets[0].data ? b : NULL;
 }
 
 static struct btree *alloc_bucket(struct cache_set *c, struct bkey *k,
@@ -683,7 +687,7 @@ retry:
 	list_for_each_entry(b, &c->freed, lru)
 		if (!reap_bucket(b, NULL)) {
 			alloc_bucket_data(b, k, __GFP_NOWARN);
-			if (!b->data) {
+			if (!b->sets[0].data) {
 				rw_unlock(true, b);
 				goto err;
 			} else
@@ -709,9 +713,9 @@ out:
 	b->written	= 0;
 	b->nsets	= 0;
 	for (int i = 0; i < 5; i++)
-		b->tree[i].size = 0;
+		b->sets[i].size = 0;
 	for (int i = 1; i < 5; i++)
-		b->sets[i] = NULL;
+		b->sets[i].data = NULL;
 
 	return b;
 err:
@@ -789,8 +793,8 @@ retry:
 
 	b->jiffies = jiffies;
 
-	for (int i = 0; i < 4 && b->tree[i].size; i++)
-		prefetch(b->tree[i].key);
+	for (int i = 0; i < 4 && b->sets[i].size; i++)
+		prefetch(b->sets[i].tree);
 
 	nread = closure_wait_on(&b->wait, bcache_wq, &op->cl,
 				atomic_read(&b->nread));
@@ -918,7 +922,7 @@ retry:
 
 	atomic_set(&b->nread, 1);
 	b->jiffies = jiffies;
-	bset_init(b, b->data);
+	bset_init(b, b->sets[0].data);
 
 	mutex_unlock(&c->bucket_lock);
 	return b;
@@ -1012,7 +1016,7 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 		struct btree *n = btree_alloc(r->c, r->level, NULL);
 
 		if (!IS_ERR_OR_NULL(n)) {
-			btree_sort(r, 0, n->data);
+			btree_sort(r, 0, n->sets[0].data);
 			bkey_copy_key(&n->key, &r->key);
 			swap(r, n);
 
@@ -1073,24 +1077,25 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 			break;
 		}
 
-		pkeys = __set_blocks(b->data, pkeys + keys, b->c);
+		pkeys = __set_blocks(b->sets[0].data, pkeys + keys, b->c);
 		if (p && pkeys < (btree_blocks(b) * 2) / 3) {
 			if (r->written)
 				r = alloc(r, k);
 
 			if (!r->written) {
 				pr_debug("coalescing");
-				r->nsets += p->nsets + 1;
-				memcpy(&r->sets[1],
-				       &p->sets[0],
-				       sizeof(void *) * (p->nsets + 1));
+
+				for (unsigned i = 0; i <= p->nsets; i++)
+					r->sets[++r->nsets].data =
+						p->sets[i].data;
+
 				btree_sort(r, 0, NULL);
 
 				btree_free(p, op);
 				rw_unlock(true, p);
 
 				p = NULL;
-				keys = r->data->keys;
+				keys = r->sets[0].data->keys;
 				gc->nodes--;
 			}
 		}
@@ -1137,7 +1142,7 @@ static int btree_gc_root(struct btree *b, struct btree_op *op,
 
 	if (!IS_ERR_OR_NULL(n)) {
 		swap(b, n);
-		btree_sort(n, 0, b->data);
+		btree_sort(n, 0, b->sets[0].data);
 		bkey_copy_key(&b->key, &n->key);
 	}
 
@@ -1558,14 +1563,17 @@ static int btree_split(struct btree *b, struct btree_op *op)
 	if (IS_ERR(n1))
 		goto err;
 
-	btree_sort(b, 0, n1->data);
+	btree_sort(b, 0, n1->sets[0].data);
 	bkey_copy_key(&n1->key, &b->key);
 
-	split = set_blocks(n1->data, n1->c) > (btree_blocks(b) * 4) / 5;
+	split = set_blocks(n1->sets[0].data, n1->c) > (btree_blocks(b) * 4) / 5;
+
 	pr_debug("%ssplitting at %s keys %i", split ? "" : "not ",
-		 pbtree(b), n1->data->keys);
+		 pbtree(b), n1->sets[0].data->keys);
 
 	if (split) {
+		unsigned keys = 0;
+
 		n2 = btree_alloc(b->c, b->level, &op->cl);
 		if (IS_ERR(n2))
 			goto err_free1;
@@ -1578,19 +1586,21 @@ static int btree_split(struct btree *b, struct btree_op *op)
 
 		btree_insert_keys(n1, op);
 
-		n2->data->keys = (n1->data->keys * 2) / 5;
+		/* Has to be a linear search because we don't have an auxiliary
+		 * search tree yet
+		 */
 
-		while (!KEY_IS_HEADER(node(n1->data, n1->data->keys
-					   - n2->data->keys)))
-			n2->data->keys++;
+		while (keys < (n1->sets[0].data->keys * 3) / 5)
+			keys += bkey_u64s(node(n1->sets[0].data, keys));
 
-		n1->data->keys -= n2->data->keys;
+		n2->sets[0].data->keys = n1->sets[0].data->keys - keys;
+		n1->sets[0].data->keys = keys;
 
-		memcpy(n2->data->start,
-		       end(n1->data),
-		       n2->data->keys * sizeof(uint64_t));
+		memcpy(n2->sets[0].data->start,
+		       end(n1->sets[0].data),
+		       n2->sets[0].data->keys * sizeof(uint64_t));
 
-		bkey_copy_key(&n1->key, last_key(n1->data));
+		bkey_copy_key(&n1->key, last_key(n1->sets[0].data));
 		bkey_copy_key(&n2->key, &b->key);
 
 		keylist_add(&op->keys, &n2->key);
@@ -1701,7 +1711,7 @@ static int btree_insert_recurse(struct btree *b, struct btree_op *op,
 			return btree_split(b, op);
 		}
 
-		if (write_block(b) != b->sets[b->nsets]) {
+		if (write_block(b) != b->sets[b->nsets].data) {
 			if (!btree_sort_lazy(b))
 				bset_build_tree(b, b->nsets);
 

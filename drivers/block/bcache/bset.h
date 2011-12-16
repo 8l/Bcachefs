@@ -162,7 +162,7 @@ void bset_fix_invalidated_key(struct btree *, struct bkey *);
 
 struct bkey *__bset_search(struct btree *, unsigned, const struct bkey *);
 #define bset_search(b, i, search)				\
-	(search ? __bset_search(b, i, search) : b->sets[i]->start)
+	(search ? __bset_search(b, i, search) : b->sets[i].data->start)
 
 bool bkey_try_merge(struct btree *, struct bkey *, struct bkey *);
 bool btree_sort_lazy(struct btree *);

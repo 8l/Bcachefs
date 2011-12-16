@@ -155,9 +155,9 @@ void btree_verify(struct btree *b, struct bset *new)
 	btree_read(v);
 	closure_sync(&cl);
 
-	if (new->keys != v->data->keys ||
+	if (new->keys != v->sets[0].data->keys ||
 	    memcmp(new->start,
-		   v->data->start,
+		   v->sets[0].data->start,
 		   (void *) end(new) - (void *) new->start)) {
 		struct bset *i;
 		unsigned j;
@@ -172,10 +172,10 @@ void btree_verify(struct btree *b, struct bset *new)
 		dump_bset(b, new);
 
 		printk(KERN_ERR "*** on disk node:\n");
-		dump_bset(v, v->data);
+		dump_bset(v, v->sets[0].data);
 
 		for (j = 0; j < new->keys; j++)
-			if (new->d[j] != v->data->d[j])
+			if (new->d[j] != v->sets[0].data->d[j])
 				break;
 
 		console_unlock();
@@ -199,7 +199,7 @@ int bcache_debug_cache_set_alloc(struct cache_set *c)
 	mutex_lock(&c->bucket_lock);
 	c->verify_data = __alloc_bucket(c, &ZERO_KEY, 0);
 
-	if (!c->verify_data || !c->verify_data->data)
+	if (!c->verify_data || !c->verify_data->sets[0].data)
 		ret = -ENOMEM;
 	else
 		list_del_init(&c->verify_data->lru);
@@ -285,7 +285,7 @@ static int btree_dump(struct btree *b, struct btree_op *op, struct seq_file *f,
 	uint64_t last, biggest = 0;
 
 	for_each_key(b, k) {
-		int j = (uint64_t *) k - b->sets[_i]->d;
+		int j = (uint64_t *) k - b->sets[_i].data->d;
 		if (!j)
 			last = *prev;
 
@@ -362,8 +362,9 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 {
 	void dump(struct btree *b)
 	{
-		for (struct bset *i = b->data;
-		     index(i, b) < btree_blocks(b) && i->seq == b->data->seq;
+		for (struct bset *i = b->sets[0].data;
+		     index(i, b) < btree_blocks(b) &&
+		     i->seq == b->sets[0].data->seq;
 		     i = ((void *) i) + set_blocks(i, b->c) * block_bytes(b->c))
 			dump_bset(b, i);
 	}
@@ -403,7 +404,7 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 		for (int i = 0; i < 3; i++)
 			all[i]->written = all[i]->nsets = 0;
 
-		bset_init(b, b->data);
+		bset_init(b, b->sets[0].data);
 
 		while (1) {
 			struct bset *i = write_block(b);
@@ -444,21 +445,22 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 			}
 		}
 
-		memcpy(orig->data,
-		       fill->data,
+		memcpy(orig->sets[0].data,
+		       fill->sets[0].data,
 		       btree_bytes(c));
 
 		btree_sort(b, 0, NULL);
 		fill->written = 0;
 		btree_read_work(&fill->work.work);
 
-		if (b->data->keys != fill->data->keys ||
-		    memcmp(b->data->start,
-			   fill->data->start,
-			   b->data->keys * sizeof(uint64_t))) {
-			struct bset *i = b->data;
+		if (b->sets[0].data->keys != fill->sets[0].data->keys ||
+		    memcmp(b->sets[0].data->start,
+			   fill->sets[0].data->start,
+			   b->sets[0].data->keys * sizeof(uint64_t))) {
+			struct bset *i = b->sets[0].data;
 
-			for (struct bkey *k = i->start, *j = fill->data->start;
+			for (struct bkey *k = i->start,
+			     *j = fill->sets[0].data->start;
 			     k < end(i);
 			     k = next(k), j = next(j))
 				if (bkey_cmp(k, j) ||
@@ -475,7 +477,7 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 		}
 
 		printk(KERN_DEBUG "bcache: fuzz complete: %i keys\n",
-		       b->data->keys);
+		       b->sets[0].data->keys);
 	}
 }
 

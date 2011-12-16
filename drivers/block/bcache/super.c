@@ -1560,8 +1560,9 @@ static void cache_set_free(struct kobject *kobj)
 			btree_write(b, true, &op);
 
 	for_each_cache(ca, c)
-		closure_wait_on(&c->bucket_wait, bcache_wq, &op.cl,
-				atomic_read(&ca->prio_written) >= 0);
+		if (ca)
+			closure_wait_on(&c->bucket_wait, bcache_wq, &op.cl,
+					atomic_read(&ca->prio_written) >= 0);
 
 	if (c->journal.cur)
 		bcache_journal_wait(c, &op.cl);
@@ -1572,7 +1573,8 @@ static void cache_set_free(struct kobject *kobj)
 	cancel_work_sync(&c->journal.work);
 
 	for_each_cache(ca, c)
-		kobject_put(&ca->kobj);
+		if (ca)
+			kobject_put(&ca->kobj);
 
 	free_open_buckets(c);
 	bcache_btree_cache_free(c);

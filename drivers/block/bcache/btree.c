@@ -706,8 +706,10 @@ out:
 	b->level	= level;
 	b->written	= 0;
 	b->nsets	= 0;
-	for (int i = 0; i < 4; i++)
+	for (int i = 0; i < 5; i++)
 		b->tree[i].size = 0;
+	for (int i = 1; i < 5; i++)
+		b->sets[i] = NULL;
 
 	return b;
 err:

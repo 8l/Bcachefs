@@ -595,8 +595,10 @@ found_set:
 	if (k == i->start)
 		goto fix_left;
 
-	if (k == node(i, i->keys - bkey_u64s(&t->end)))
+	if (next(k) == end(i)) {
+		t->end = *k;
 		goto fix_right;
+	}
 
 	j = inorder_to_tree(inorder, t);
 

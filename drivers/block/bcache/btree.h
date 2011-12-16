@@ -124,7 +124,7 @@ static inline void rw_unlock(bool w, struct btree *b)
 									\
 	if ((c)->try_harder == &(op)->cl) {				\
 		(c)->try_harder = NULL;					\
-		closure_run_wait(&(c)->try_wait);			\
+		__closure_wake_up(&(c)->try_wait);			\
 	}								\
 	_r;								\
 })

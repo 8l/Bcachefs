@@ -593,7 +593,7 @@ static void prio_write_done(struct closure *cl)
 	atomic_set(&c->prio_written, 1);
 	mutex_unlock(&c->set->bucket_lock);
 
-	closure_run_wait(&c->set->bucket_wait);
+	closure_wake_up(&c->set->bucket_wait);
 }
 
 static void prio_write_journal(struct closure *cl)
@@ -1606,8 +1606,8 @@ static void cache_set_free(struct kobject *kobj)
 	 */
 	for_each_cache(ca, c)
 		if (ca)
-			closure_wait_on(&c->bucket_wait, &op.cl,
-					atomic_read(&ca->prio_written) >= 0);
+			closure_wait_event(&c->bucket_wait, &op.cl,
+					   atomic_read(&ca->prio_written) >= 0);
 
 	closure_sync(&op.cl);
 

@@ -479,27 +479,27 @@ struct closure {
 #endif
 };
 
-void closure_put(struct closure *s);
-void closure_queue(struct closure *c);
-void closure_init(struct closure *c, struct closure *parent);
-void closure_run_wait(closure_list_t *list);
-bool closure_wait(closure_list_t *list, struct closure *c);
-void closure_sync(struct closure *c);
+void closure_put(struct closure *cl);
+void closure_queue(struct closure *cl);
+void closure_init(struct closure *cl, struct closure *parent);
+void __closure_wake_up(closure_list_t *list);
+bool closure_wait(closure_list_t *list, struct closure *cl);
+void closure_sync(struct closure *cl);
 
 #ifdef CONFIG_BCACHE_CLOSURE_DEBUG
 extern struct list_head closures;
 extern spinlock_t closure_lock;
 
-static inline void closure_del(struct closure *c)
+static inline void closure_del(struct closure *cl)
 {
 	unsigned long flags;
 	spin_lock_irqsave(&closure_lock, flags);
-	list_del(&c->all);
+	list_del(&cl->all);
 	spin_unlock_irqrestore(&closure_lock, flags);
 }
 
 #else
-static inline void closure_del(struct closure *c) {}
+static inline void closure_del(struct closure *cl) {}
 #endif
 
 static inline void closure_init_stack(struct closure *cl)
@@ -542,7 +542,28 @@ static inline void set_closure_blocking(struct closure *cl)
 		atomic_add(CLOSURE_BLOCKING, &cl->remaining);
 }
 
-#define __closure_wait_on(list, c, condition, _block)			\
+static inline void closure_wake_up(closure_list_t *list)
+{
+	smp_mb();
+	__closure_wake_up(list);
+}
+
+/*
+ * Wait on an event, synchronously or asynchronously - analagous to wait_event()
+ * but for closures.
+ *
+ * The loop is oddly structured so as to avoid a race; we must check the
+ * condition again after we've added ourself to the waitlist. We know if we were
+ * already on the waitlist because closure_wait() returns false; thus, we only
+ * schedule or break if closure_wait() returns false. If it returns true, we
+ * just loop again - rechecking the condition.
+ *
+ * The __closure_wake_up() is necessary because we may race with the event
+ * becoming true; i.e. we see event false -> wait -> recheck condition, but the
+ * thread that made the event true may have called closure_wake_up() before we
+ * added ourself to the wait list.
+ */
+#define __closure_wait_event(list, cl, condition, _block)		\
 ({									\
 	__label__ out;							\
 	bool block = _block;						\
@@ -550,25 +571,25 @@ static inline void set_closure_blocking(struct closure *cl)
 									\
 	while (!(ret = (condition))) {					\
 		if (block)						\
-			__closure_start_sleep(c);			\
-		if (!closure_wait(list, c)) {				\
+			__closure_start_sleep(cl);			\
+		if (!closure_wait(list, cl)) {				\
 			if (!block)					\
 				goto out;				\
 			schedule();					\
 		}							\
 	}								\
-	closure_run_wait(list);						\
+	__closure_wake_up(list);					\
 	if (block)							\
-		__closure_end_sleep(c);					\
+		__closure_end_sleep(cl);				\
 out:									\
 	ret;								\
 })
 
-#define closure_wait_on(list, c, condition)				\
-	__closure_wait_on(list, c, condition, closure_blocking(c))
+#define closure_wait_event(list, cl, condition)				\
+	__closure_wait_event(list, cl, condition, closure_blocking(cl))
 
-#define closure_wait_on_async(list, c, condition)			\
-	__closure_wait_on(list, c, condition, false)
+#define closure_wait_event_async(list, cl, condition)			\
+	__closure_wait_event(list, cl, condition, false)
 
 static inline void set_closure_fn(struct closure *cl, closure_fn *fn,
 				  struct workqueue_struct *wq)

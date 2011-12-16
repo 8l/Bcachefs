@@ -107,7 +107,7 @@ static void discard_finish(struct work_struct *w)
 	mutex_unlock(&c->set->bucket_lock);
 
 	if (run)
-		closure_run_wait(&c->set->bucket_wait);
+		closure_wake_up(&c->set->bucket_wait);
 }
 
 static void discard_endio(struct bio *bio, int error)
@@ -461,9 +461,9 @@ again:
 		if (closure_blocking(cl))
 			mutex_unlock(&c->set->bucket_lock);
 
-		closure_wait_on(&c->set->bucket_wait, cl,
-				atomic_read(&c->prio_written) > 0 ||
-				can_save_prios(c));
+		closure_wait_event(&c->set->bucket_wait, cl,
+				   atomic_read(&c->prio_written) > 0 ||
+				   can_save_prios(c));
 
 		if (closure_blocking(cl)) {
 			mutex_lock(&c->set->bucket_lock);

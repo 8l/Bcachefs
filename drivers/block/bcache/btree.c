@@ -220,7 +220,7 @@ err:		atomic_set(&b->nread, -1);
 	mutex_unlock(&b->c->fill_lock);
 
 	atomic_set(&b->io, -1);
-	closure_run_wait(&b->wait);
+	closure_wake_up(&b->wait);
 }
 
 static void btree_read_endio(struct bio *bio, int error)
@@ -243,7 +243,7 @@ static void btree_read_endio(struct bio *bio, int error)
 
 	if (atomic_read(&b->nread) == -1) {
 		atomic_set(&b->io, -1);
-		closure_run_wait(&b->wait);
+		closure_wake_up(&b->wait);
 	} else
 		BUG_ON(!schedule_work(&b->work.work));
 }
@@ -273,11 +273,11 @@ static void btree_complete_write(struct btree *b, struct btree_write *w)
 {
 	if (w->prio_blocked &&
 	    !atomic_sub_return(w->prio_blocked, &b->c->prio_blocked))
-		closure_run_wait(&b->c->bucket_wait);
+		closure_wake_up(&b->c->bucket_wait);
 
 	if (w->journal) {
 		atomic_dec_bug(w->journal);
-		closure_run_wait(&b->c->journal.wait);
+		__closure_wake_up(&b->c->journal.wait);
 		if (journal_full(&b->c->journal))
 			schedule_work(&b->c->journal.work);
 	}
@@ -317,7 +317,7 @@ static void btree_write_endio(struct bio *bio, int error)
 	/* Between last use of bio and atomic_set(&b->io) */
 	smp_mb();
 	atomic_set(&b->io, -1);
-	closure_run_wait(&b->wait);
+	closure_wake_up(&b->wait);
 
 	if (b->write)
 		queue_delayed_work(btree_wq, &b->work,
@@ -378,7 +378,7 @@ static void __btree_write(struct btree *b)
 		trace_bcache_btree_write(b->bio);
 		bio_submit_split(b->bio, &b->io, b->c->bio_split);
 
-		closure_wait_on(&b->wait, &wait, atomic_read(&b->io) == -1);
+		closure_wait_event(&b->wait, &wait, atomic_read(&b->io) == -1);
 	}
 
 	if (b->written) {
@@ -569,7 +569,8 @@ static int mca_reap(struct btree *b, struct closure *cl)
 		btree_write(b, true, NULL);
 
 	if (cl)
-		closure_wait_on_async(&b->wait, cl, atomic_read(&b->io) == -1);
+		closure_wait_event_async(&b->wait, cl,
+					 atomic_read(&b->io) == -1);
 
 	if (b->write ||
 	    atomic_read(&b->io) != -1 ||
@@ -774,7 +775,7 @@ err:
 		return ERR_PTR(-ENOMEM);
 
 	if (c->try_harder && c->try_harder != cl) {
-		closure_wait_on_async(&c->try_wait, cl, !c->try_harder);
+		closure_wait_event_async(&c->try_wait, cl, !c->try_harder);
 		return ERR_PTR(-EAGAIN);
 	}
 
@@ -843,7 +844,7 @@ retry:
 	for (int i = 0; i < MAX_BSETS && b->sets[i].size; i++)
 		prefetch(b->sets[i].tree);
 
-	nread = closure_wait_on(&b->wait, &op->cl, atomic_read(&b->nread));
+	nread = closure_wait_event(&b->wait, &op->cl, atomic_read(&b->nread));
 	if (nread != 1) {
 		rw_unlock(write, b);
 		b = ERR_PTR(nread ? -EIO : -EAGAIN);
@@ -884,7 +885,7 @@ static void btree_free(struct btree *b, struct btree_op *op)
 
 	if (b->prio_blocked &&
 	    !atomic_sub_return(b->prio_blocked, &b->c->prio_blocked))
-		closure_run_wait(&b->c->bucket_wait);
+		closure_wake_up(&b->c->bucket_wait);
 
 	b->prio_blocked = 0;
 
@@ -1412,7 +1413,7 @@ static void btree_gc(struct cache_set *c)
 	blktrace_msg_all(c, "Finished gc");
 out:
 	trace_bcache_gc_end(c->sb.set_uuid);
-	closure_run_wait(&c->bucket_wait);
+	closure_wake_up(&c->bucket_wait);
 }
 
 static void btree_gc_work(struct work_struct *w)
@@ -1913,9 +1914,9 @@ int btree_insert(struct btree_op *op, struct cache_set *c)
 			free_some_buckets(ca);
 			mutex_unlock(&c->bucket_lock);
 
-			closure_wait_on(&c->bucket_wait, &op->cl,
-					ca->need_save_prio <= MAX_SAVE_PRIO ||
-					can_save_prios(ca));
+			closure_wait_event(&c->bucket_wait, &op->cl,
+				ca->need_save_prio <= MAX_SAVE_PRIO ||
+				can_save_prios(ca));
 		}
 
 	while (!keylist_empty(&stack_keys) ||

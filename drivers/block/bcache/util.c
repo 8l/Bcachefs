@@ -396,19 +396,19 @@ EXPORT_SYMBOL(closure_lock);
 #define SET_WAITING(s, f)	do {} while (0)
 #endif
 
-void closure_init(struct closure *c, struct closure *parent)
+void closure_init(struct closure *cl, struct closure *parent)
 {
-	memset(c, 0, sizeof(struct closure));
-	INIT_WORK(&c->work, NULL);
-	atomic_set(&c->remaining, 1);
-	set_wait(c);
-	c->parent = parent;
+	memset(cl, 0, sizeof(struct closure));
+	INIT_WORK(&cl->work, NULL);
+	atomic_set(&cl->remaining, 1);
+	set_wait(cl);
+	cl->parent = parent;
 	if (parent)
 		closure_get(parent);
 
 #ifdef CONFIG_BCACHE_CLOSURE_DEBUG
 	spin_lock_irq(&closure_lock);
-	list_add(&c->all, &closures);
+	list_add(&cl->all, &closures);
 	spin_unlock_irq(&closure_lock);
 #endif
 }
@@ -462,19 +462,19 @@ again:
 }
 EXPORT_SYMBOL_GPL(closure_put);
 
-void closure_run_wait(closure_list_t *list)
+void __closure_wake_up(closure_list_t *list)
 {
-	struct closure *c, *next;
+	struct closure *cl, *next;
 	smp_mb();
-	for (c = xchg(&list->head, NULL); c; c = next) {
-		next = c->next;
-		SET_WAITING(c, 0);
+	for (cl = xchg(&list->head, NULL); cl; cl = next) {
+		next = cl->next;
+		SET_WAITING(cl, 0);
 
-		atomic_sub(CLOSURE_WAITING, &c->remaining);
-		closure_put(c);
+		atomic_sub(CLOSURE_WAITING, &cl->remaining);
+		closure_put(cl);
 	}
 }
-EXPORT_SYMBOL_GPL(closure_run_wait);
+EXPORT_SYMBOL_GPL(__closure_wake_up);
 
 bool closure_wait(closure_list_t *list, struct closure *cl)
 {
@@ -502,19 +502,19 @@ bool closure_wait(closure_list_t *list, struct closure *cl)
 }
 EXPORT_SYMBOL_GPL(closure_wait);
 
-void closure_sync(struct closure *c)
+void closure_sync(struct closure *cl)
 {
 	while (1) {
-		__closure_start_sleep(c);
+		__closure_start_sleep(cl);
 
-		if ((atomic_read(&c->remaining) &
+		if ((atomic_read(&cl->remaining) &
 		     CLOSURE_REMAINING_MASK) == 1)
 			break;
 
 		schedule();
 	}
 
-	__closure_end_sleep(c);
+	__closure_end_sleep(cl);
 }
 EXPORT_SYMBOL_GPL(closure_sync);
 

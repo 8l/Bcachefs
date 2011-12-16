@@ -396,7 +396,7 @@ static void journal_alloc(struct cache_set *c)
 		c->journal.blocks_free = c->sb.bucket_size >> c->block_bits;
 
 	if (!journal_full(&c->journal))
-		closure_run_wait(&c->journal.wait);
+		__closure_wake_up(&c->journal.wait);
 }
 
 #define last_seq(j)	((j)->seq - fifo_used(&(j)->pin) + 1)
@@ -477,7 +477,7 @@ static void journal_write_endio(struct bio *bio, int error)
 	if (!atomic_dec_and_test(&w->c->journal.io))
 		return;
 
-	closure_run_wait(&w->wait);
+	__closure_wake_up(&w->wait);
 	/* atomic_set() unlocks this journal_write */
 	smp_mb();
 	atomic_set(&w->c->journal.io, -1);

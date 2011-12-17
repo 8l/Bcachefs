@@ -322,7 +322,7 @@ static void btree_write_endio(struct bio *bio, int error)
 				   msecs_to_jiffies(30000));
 }
 
-static int __btree_write(struct btree *b)
+static void __btree_write(struct btree *b)
 {
 	int j;
 	struct bio_vec *bv;
@@ -333,10 +333,9 @@ static int __btree_write(struct btree *b)
 	BUG_ON(current->bio_list);
 
 	if (atomic_cmpxchg(&b->io, -1, 1) != -1) {
-		if (b->write)
-			queue_delayed_work(btree_wq, &b->work,
-					   msecs_to_jiffies(30000));
-		return -1;
+		if (!queue_delayed_work(btree_wq, &b->work, 0))
+			mod_timer_pending(&b->work.timer, jiffies);
+		return;
 	}
 
 	/* Between cmpxchg and first use of bio */
@@ -396,7 +395,6 @@ err:		closure_init_stack(&wait);
 
 	if (!btree_sort_lazy(b))
 		bset_build_tree(b, &b->sets[b->nsets]);
-	return 0;
 }
 
 static void btree_write_work(struct work_struct *w)
@@ -461,9 +459,7 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 			closure_get(&op->cl);
 		}
 
-		if (__btree_write(b) &&
-		    b->work.timer.function)
-			mod_timer_pending(&b->work.timer, jiffies);
+		__btree_write(b);
 	}
 	BUG_ON(!b->written);
 }
@@ -1307,8 +1303,8 @@ static void btree_gc_work(struct work_struct *w)
 
 /* Initial partial gc */
 
-int btree_check_recurse(struct btree *b, struct btree_op *op,
-			unsigned long **seen)
+static int btree_check_recurse(struct btree *b, struct btree_op *op,
+			       unsigned long **seen)
 {
 	int ret;
 	struct bkey *k;

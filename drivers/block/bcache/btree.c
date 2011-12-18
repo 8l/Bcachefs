@@ -1386,84 +1386,106 @@ static void shift_keys(struct btree *b, struct bkey *where, struct bkey *insert)
 	bset_fix_lookup_table(b, where);
 }
 
-static bool fix_overlapping_extents(struct btree *b, struct bkey *k,
+static bool fix_overlapping_extents(struct btree *b,
+				    struct bkey *check,
 				    struct btree_iter *iter,
 				    struct btree_op *op)
 {
-	struct bset *w = write_block(b);
-
 	while (1) {
-		struct bkey *j = btree_iter_next(iter);
-		if (!j || bkey_cmp(k, &START_KEY(j)) <= 0)
+		struct bkey *k = btree_iter_next(iter);
+		if (!k ||
+		    bkey_cmp(check, &START_KEY(k)) <= 0)
 			break;
 
-		if (bkey_cmp(j, &START_KEY(k)) <= 0)
+		if (bkey_cmp(k, &START_KEY(check)) <= 0)
 			continue;
 
 		if (op->insert_type == INSERT_READ &&
-		    KEY_SIZE(j) &&
-		    (!KEY_PTRS(j) ||
-		     !ptr_bad(b, j))) {
-			/* Could split this key in two if necessary: since we
+		    KEY_SIZE(k) &&
+		    (!KEY_PTRS(k) ||
+		     !ptr_bad(b, k))) {
+			/*
+			 * Could split this key in two if necessary: since we
 			 * don't, we have to check if we can use the start of
 			 * the key we're inserting first. Otherwise, we could
 			 * adjust a stale key that hasn't been written to disk
 			 * and not insert anything in its place.
 			 */
-			if (bkey_cmp(&START_KEY(j), &START_KEY(k)) > 0)
-				cut_back(&START_KEY(j), k);
-			else if (bkey_cmp(j, k) < 0)
-				cut_front(j, k);
+			if (bkey_cmp(&START_KEY(k), &START_KEY(check)) > 0)
+				cut_back(&START_KEY(k), check);
+			else if (bkey_cmp(k, check) < 0)
+				cut_front(k, check);
 			else {
 				atomic_inc(&op->d->cache_miss_collisions);
 				return true;
 			}
 
-			BUG_ON(!KEY_SIZE(k));
+			BUG_ON(!KEY_SIZE(check));
 			continue;
 		}
 
 		if (op->insert_type == INSERT_UNDIRTY) {
-			if (j->header != (k->header | PTR_DIRTY_BIT) ||
-			    memcmp(&j->key, &k->key, bkey_bytes(k) - 8))
+			if (k->header != (check->header | PTR_DIRTY_BIT) ||
+			    memcmp(&k->key, &check->key, bkey_bytes(check) - 8))
 				goto wb_failed;
 
-			cut_front(k, j);
+			cut_front(check, k);
 			atomic_long_inc(&b->c->writeback_keys_done);
 			return false;
 		}
 
-		if (bkey_cmp(k, j) < 0) {
-			if (bkey_cmp(&START_KEY(k), &START_KEY(j)) > 0) {
-				struct bkey *m = j;
+		if (bkey_cmp(check, k) < 0 &&
+		    bkey_cmp(&START_KEY(check), &START_KEY(k)) > 0) {
+			/*
+			 * We overlapped in the middle of an existing key: that
+			 * means we have to split the old key. But we have to do
+			 * slightly different things depending on whether the
+			 * old key has been written out yet.
+			 */
 
-				if (j < w->start) {
-					m = bset_search(b, &b->sets[b->nsets],
-							k);
-					shift_keys(b, m, j);
-				} else {
-					BKEY_PADDED(key) temp;
-					bkey_copy(&temp.key, j);
-					shift_keys(b, m, &temp.key);
-					m = next(j);
-				}
+			struct bkey *top;
 
-				cut_front(k, m);
-				cut_back(&START_KEY(k), j);
-				bset_fix_invalidated_key(b, j);
-				return false;
+			if (k < write_block(b)->start) {
+				/*
+				 * We insert a new key to cover the top of the
+				 * old key, and the old key is modified in place
+				 * to represent the bottom split.
+				 *
+				 * It's completely arbitrary whether the new key
+				 * is the top or the bottom, but it has to match
+				 * up with what btree_sort_fixup() does - it
+				 * doesn't check for this kind of overlap, it
+				 * depends on us inserting a new key for the top
+				 * here.
+				 */
+				top = bset_search(b, &b->sets[b->nsets], check);
+				shift_keys(b, top, k);
+			} else {
+				BKEY_PADDED(key) temp;
+				bkey_copy(&temp.key, k);
+				shift_keys(b, k, &temp.key);
+				top = next(k);
 			}
 
-			cut_front(k, j);
-		} else {
-			if (j < w->start &&
-			    bkey_cmp(&START_KEY(k), &START_KEY(j)) <= 0)
-				/* Completely overwrote, so we don't have to
-				 * invalidate the binary search tree */
-				cut_front(j, j);
+			cut_front(check, top);
+			cut_back(&START_KEY(check), k);
+			bset_fix_invalidated_key(b, k);
+			return false;
+		}
+
+		if (bkey_cmp(check, k) < 0)
+			cut_front(check, k);
+		else {
+			if (k < write_block(b)->start &&
+			    bkey_cmp(&START_KEY(check), &START_KEY(k)) <= 0)
+				/*
+				 * Completely overwrote, so we don't have to
+				 * invalidate the binary search tree
+				 */
+				cut_front(k, k);
 			else {
-				__cut_back(&START_KEY(k), j);
-				bset_fix_invalidated_key(b, j);
+				__cut_back(&START_KEY(check), k);
+				bset_fix_invalidated_key(b, k);
 			}
 		}
 	}

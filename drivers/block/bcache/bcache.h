@@ -504,6 +504,7 @@ struct btree {
 	 * to the memory we have allocated for this btree node. Additionally,
 	 * set[0]->data points to the entire btree node as it exists on disk.
 	 */
+#define MAX_BSETS	4
 	struct bset_tree {
 		/*
 		 * We construct a binary tree in an array as if the array
@@ -534,10 +535,7 @@ struct btree {
 
 		/* The actual btree node, with pointers to each sorted set */
 		struct bset	*data;
-
-		/* Has to be 1 greater than the normal max for coalescing in
-		 * btree_gc_recurse() */
-	}			sets[5];
+	}			sets[MAX_BSETS];
 
 	/* Points to one of writes[] iff there is data to write */
 	struct btree_write	*write;

@@ -750,9 +750,9 @@ out:
 	b->level	= level;
 	b->written	= 0;
 	b->nsets	= 0;
-	for (int i = 0; i < 5; i++)
+	for (int i = 0; i < MAX_BSETS; i++)
 		b->sets[i].size = 0;
-	for (int i = 1; i < 5; i++)
+	for (int i = 1; i < MAX_BSETS; i++)
 		b->sets[i].data = NULL;
 
 	return b;
@@ -831,7 +831,7 @@ retry:
 
 	b->jiffies = jiffies;
 
-	for (int i = 0; i < 4 && b->sets[i].size; i++)
+	for (int i = 0; i < MAX_BSETS && b->sets[i].size; i++)
 		prefetch(b->sets[i].tree);
 
 	nread = closure_wait_on(&b->wait, bcache_wq, &op->cl,

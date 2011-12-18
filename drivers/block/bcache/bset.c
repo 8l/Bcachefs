@@ -985,7 +985,7 @@ bool btree_sort_lazy(struct btree *b)
 		}
 
 		/* Must sort if b->nsets == 3 or we'll overflow */
-		if (b->nsets >= 3 - b->level) {
+		if (b->nsets >= (MAX_BSETS - 1) - b->level) {
 			btree_sort(b, 0, NULL);
 			return true;
 		}
@@ -1010,7 +1010,7 @@ static int btree_bset_stats(struct btree *b, struct btree_op *op,
 	stats->sets		+= b->nsets + 1;
 	stats->tree_space	+= bset_tree_space(b);
 
-	for (int i = 0; i < 4 && b->sets[i].size; i++) {
+	for (int i = 0; i < MAX_BSETS && b->sets[i].size; i++) {
 		stats->trees++;
 		stats->keys	+= b->sets[i].data->keys * sizeof(uint64_t);
 		stats->floats	+= b->sets[i].size - 1;

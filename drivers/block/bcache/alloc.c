@@ -193,6 +193,10 @@ int alloc_discards(struct cache *ca)
 
 bool bucket_add_unused(struct cache *c, struct bucket *b)
 {
+	if (c->prio_alloc == prio_buckets(c) &&
+	    c->cache_replacement_policy)
+		return false;
+
 	b->prio = 0;
 
 	if (bucket_gc_gen(b) < 96U &&
@@ -205,7 +209,27 @@ bool bucket_add_unused(struct cache *c, struct bucket *b)
 	return false;
 }
 
-static void invalidate_buckets(struct cache *c)
+static bool can_invalidate_bucket(struct cache *c, struct bucket *b)
+{
+	return b->mark >= 0 &&
+		!atomic_read(&b->pin) &&
+		bucket_gc_gen(b) < 96U &&
+		bucket_disk_gen(b) < 64U;
+}
+
+static void invalidate_one_bucket(struct cache *c, struct bucket *b)
+{
+	inc_gen(c, b);
+	smp_mb();
+
+	if (!atomic_read(&b->pin)) {
+		b->prio = initial_prio;
+		atomic_inc(&b->pin);
+		fifo_push(&c->free_inc, b - c->buckets);
+	}
+}
+
+static void invalidate_buckets_lru(struct cache *c)
 {
 	unsigned bucket_prio(struct bucket *b)
 	{
@@ -223,28 +247,14 @@ static void invalidate_buckets(struct cache *c)
 	}
 
 	struct bucket *b;
-	size_t pinned = 0, gc_gen = 0, disk_gen = 0;
-
-	/* free_some_buckets() may just need to write priorities to keep gens
-	 * from wrapping around
-	 */
-	if (!c->set->gc_mark_valid ||
-	    c->invalidate_needs_gc)
-		return;
 
 	c->heap.used = 0;
 
 	for_each_bucket(b, c) {
-		if (b->mark < 0)
+		if (!can_invalidate_bucket(c, b))
 			continue;
 
-		if (atomic_read(&b->pin))
-			pinned++;
-		else if (bucket_gc_gen(b) >= 96U)
-			gc_gen++;
-		else if (bucket_disk_gen(b) >= 64U)
-			disk_gen++;
-		else if (!b->mark) {
+		if (!b->mark) {
 			if (!bucket_add_unused(c, b))
 				return;
 		} else {
@@ -257,12 +267,8 @@ static void invalidate_buckets(struct cache *c)
 		}
 	}
 
-	if (c->heap.used * 2 < c->heap.size) {
+	if (c->heap.used * 2 < c->heap.size)
 		queue_work(bcache_wq, &c->set->gc_work);
-		pr_debug("heap %zu/%llu: pinned %zu gc_gen %zu disk_gen %zu",
-			 c->heap.used, c->sb.nbuckets,
-			 pinned, gc_gen, disk_gen);
-	}
 
 	for (ssize_t i = c->heap.used / 2 - 1; i >= 0; --i)
 		heap_sift(&c->heap, i, bucket_min_cmp);
@@ -273,19 +279,50 @@ static void invalidate_buckets(struct cache *c)
 			 * multiple times when it can't do anything
 			 */
 			c->invalidate_needs_gc = 1;
+			queue_work(bcache_wq, &c->set->gc_work);
 			return;
 		}
 
-		inc_gen(c, b);
-		smp_mb();
-
-		if (atomic_read(&b->pin))
-			continue;
-
-		b->prio = initial_prio;
-		atomic_inc(&b->pin);
-		fifo_push(&c->free_inc, b - c->buckets);
+		invalidate_one_bucket(c, b);
 	}
+}
+
+static void invalidate_buckets_fifo(struct cache *c)
+{
+	struct bucket *b;
+	size_t checked = 0;
+
+	while (!fifo_full(&c->free_inc)) {
+		if (c->fifo_last_bucket <  c->sb.first_bucket ||
+		    c->fifo_last_bucket >= c->sb.nbuckets)
+			c->fifo_last_bucket = c->sb.first_bucket;
+
+		b = c->buckets + c->fifo_last_bucket++;
+
+		if (can_invalidate_bucket(c, b))
+			invalidate_one_bucket(c, b);
+
+		if (++checked >= c->sb.nbuckets) {
+			c->invalidate_needs_gc = 1;
+			queue_work(bcache_wq, &c->set->gc_work);
+			return;
+		}
+	}
+}
+
+static void invalidate_buckets(struct cache *c)
+{
+	/* free_some_buckets() may just need to write priorities to keep gens
+	 * from wrapping around
+	 */
+	if (!c->set->gc_mark_valid ||
+	    c->invalidate_needs_gc)
+		return;
+
+	if (c->cache_replacement_policy)
+		invalidate_buckets_fifo(c);
+	else
+		invalidate_buckets_lru(c);
 }
 
 bool can_save_prios(struct cache *c)

@@ -219,6 +219,7 @@ rw_attribute(verify);
 rw_attribute(key_merging_disabled);
 rw_attribute(gc_always_rewrite);
 rw_attribute(freelist_percent);
+rw_attribute(cache_replacement_policy);
 
 read_attribute(cache_hits);
 read_attribute(cache_misses);
@@ -1956,6 +1957,11 @@ err:
 
 /* Cache device */
 
+const char * const cache_replacement_policies[] = {
+	"lru",
+	"fifo"
+};
+
 SHOW(__cache)
 {
 	struct cache *c = container_of(kobj, struct cache, kobj);
@@ -1975,6 +1981,21 @@ SHOW(__cache)
 		    atomic_read(&c->io_errors) >> IO_ERROR_SHIFT);
 
 	sysfs_print(freelist_percent, c->free.size * 100 / c->sb.nbuckets);
+
+	if (attr == &sysfs_cache_replacement_policy) {
+		char *out = buf;
+
+		for (unsigned i = 0;
+		     i < ARRAY_SIZE(cache_replacement_policies);
+		     i++)
+			out += sprintf(out,
+				       i == c->cache_replacement_policy
+				       ? "[%s] " : "%s ",
+				       cache_replacement_policies[i]);
+
+		out[-1] = '\n';
+		return out - buf;
+	}
 
 	if (attr == &sysfs_priority_stats) {
 		int cmp(const void *l, const void *r)
@@ -2051,6 +2072,28 @@ STORE(__cache)
 
 	if (blk_queue_discard(bdev_get_queue(c->bdev)))
 		sysfs_strtoul(discard, c->discard);
+
+	if (attr == &sysfs_cache_replacement_policy) {
+		unsigned i;
+		char *s, *d = kstrndup(buf, PAGE_SIZE - 1, GFP_KERNEL);
+		if (!d)
+			return -ENOMEM;
+
+		s = strim(d);
+
+		for (i = 0; i < ARRAY_SIZE(cache_replacement_policies); i++)
+			if (!strcmp(cache_replacement_policies[i], s))
+				break;
+
+		kfree(d);
+
+		if (i == ARRAY_SIZE(cache_replacement_policies))
+			return -EINVAL;
+
+		mutex_lock(&c->set->bucket_lock);
+		c->cache_replacement_policy = i;
+		mutex_unlock(&c->set->bucket_lock);
+	}
 
 	if (attr == &sysfs_freelist_percent) {
 		DECLARE_FIFO(long, free);
@@ -2146,6 +2189,7 @@ static struct cache *cache_alloc(struct cache_sb *sb)
 		&sysfs_io_errors,
 		&sysfs_clear_stats,
 		&sysfs_freelist_percent,
+		&sysfs_cache_replacement_policy,
 		NULL
 	};
 	KTYPE(cache, cache_free);

@@ -292,6 +292,9 @@ struct cache {
 	uint8_t			need_save_prio;
 	unsigned		invalidate_needs_gc:1;
 
+	unsigned		cache_replacement_policy:1;
+	size_t			fifo_last_bucket;
+
 	DECLARE_FIFO(long, free);
 	DECLARE_FIFO(long, free_inc);
 	DECLARE_FIFO(long, unused);

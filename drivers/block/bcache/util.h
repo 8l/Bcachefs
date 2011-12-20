@@ -157,55 +157,70 @@ do {									\
 
 #define DECLARE_FIFO(type, name)					\
 	struct {							\
-		size_t front, back, size;				\
+		size_t front, back, size, mask;				\
 		type *data;						\
 	} name
 
 #define fifo_for_each(c, fifo)						\
 	for (size_t _i = (fifo)->front;					\
 	     c = (fifo)->data[_i], _i != (fifo)->back;			\
-	     _i = (_i + 1) & (fifo)->size)
+	     _i = (_i + 1) & (fifo)->mask)
 
-#define init_fifo(f, s, gfp)						\
+#define __init_fifo(fifo, gfp)						\
 ({									\
-	BUG_ON(!s);							\
-	(f)->front = (f)->back = 0;					\
-	(f)->size = roundup_pow_of_two(s);				\
-	(f)->data = ((f)->size * sizeof(*(f)->data) >= KMALLOC_MAX_SIZE)\
-		? vmalloc((f)->size-- * sizeof(*(f)->data))		\
-		: kmalloc((f)->size-- * sizeof(*(f)->data), gfp);	\
-	(f)->data;							\
+	size_t _bytes;							\
+	BUG_ON(!(fifo)->size);						\
+	(fifo)->front = (fifo)->back = 0;				\
+	(fifo)->mask = roundup_pow_of_two((fifo)->size + 1);		\
+	_bytes = (fifo)->mask * sizeof(*(fifo)->data);			\
+	(fifo)->mask--;							\
+	(fifo)->data = (_bytes >= KMALLOC_MAX_SIZE)			\
+		? vmalloc(_bytes)					\
+		: kmalloc(_bytes, gfp);					\
+})
+
+#define init_fifo_exact(fifo, _size, gfp)				\
+({									\
+	(fifo)->size = (_size);						\
+	__init_fifo(fifo, gfp);						\
+})
+
+#define init_fifo(fifo, _size, gfp)					\
+({									\
+	(fifo)->size = (_size);						\
+	if ((fifo)->size > 4)						\
+		(fifo)->size = roundup_pow_of_two((fifo)->size) - 1;	\
+	__init_fifo(fifo, gfp);						\
 })
 
 #define free_fifo(fifo)							\
 do {									\
-	if ((fifo)->size * sizeof(*(fifo)->data) >= KMALLOC_MAX_SIZE)	\
+	(fifo)->mask++;							\
+	if ((fifo)->mask * sizeof(*(fifo)->data) >= KMALLOC_MAX_SIZE)	\
 		vfree((fifo)->data);					\
 	else								\
 		kfree((fifo)->data);					\
 	(fifo)->data = NULL;						\
 } while (0)
 
-#define fifo_free(fifo)		((fifo)->size - fifo_used(fifo) - 1)
-#define fifo_used(fifo)		(((fifo)->back - (fifo)->front) & (fifo)->size)
+#define fifo_used(fifo)		(((fifo)->back - (fifo)->front) & (fifo)->mask)
+#define fifo_free(fifo)		((fifo)->size - fifo_used(fifo))
 
-#define fifo_empty(fifo)	((fifo)->front == (fifo)->back)
-#define fifo_full(fifo)							\
-	((fifo)->front == (((fifo)->back + 1) & (fifo)->size))
+#define fifo_empty(fifo)	(!fifo_used(fifo))
+#define fifo_full(fifo)		(!fifo_free(fifo))
 
 #define fifo_front(fifo)	((fifo)->data[(fifo)->front])
 #define fifo_back(fifo)							\
-	((fifo)->data[((fifo)->back - 1) & (fifo)->size])
+	((fifo)->data[((fifo)->back - 1) & (fifo)->mask])
 
-#define fifo_idx(fifo, p)						\
-	((((p) - (fifo)->data) - (fifo)->front) & (fifo)->size)
+#define fifo_idx(fifo, p)	(((p) - &fifo_front(fifo)) & (fifo)->mask)
 
 #define fifo_push(fifo, i)						\
 ({									\
 	bool _r = !fifo_full(fifo);					\
 	if (_r) {							\
 		(fifo)->data[(fifo)->back++] = i;			\
-		(fifo)->back &= (fifo)->size;				\
+		(fifo)->back &= (fifo)->mask;				\
 	}								\
 	_r;								\
 })
@@ -215,7 +230,7 @@ do {									\
 	bool _r = !fifo_empty(fifo);					\
 	if (_r) {							\
 		i = (fifo)->data[(fifo)->front++];			\
-		(fifo)->front &= (fifo)->size;				\
+		(fifo)->front &= (fifo)->mask;				\
 	}								\
 	_r;								\
 })
@@ -225,6 +240,7 @@ do {									\
 	swap((l)->front, (r)->front);					\
 	swap((l)->back, (r)->back);					\
 	swap((l)->size, (r)->size);					\
+	swap((l)->mask, (r)->mask);					\
 	swap((l)->data, (r)->data);					\
 } while (0)
 

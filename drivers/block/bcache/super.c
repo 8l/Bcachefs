@@ -218,6 +218,7 @@ rw_attribute(io_error_halflife);
 rw_attribute(verify);
 rw_attribute(key_merging_disabled);
 rw_attribute(gc_always_rewrite);
+rw_attribute(freelist_percent);
 
 read_attribute(cache_hits);
 read_attribute(cache_misses);
@@ -1973,6 +1974,8 @@ SHOW(__cache)
 	sysfs_print(io_errors,
 		    atomic_read(&c->io_errors) >> IO_ERROR_SHIFT);
 
+	sysfs_print(freelist_percent, c->free.size * 100 / c->sb.nbuckets);
+
 	if (attr == &sysfs_priority_stats) {
 		int cmp(const void *l, const void *r)
 		{	return *((uint16_t *) r) - *((uint16_t *) l); }
@@ -2049,6 +2052,32 @@ STORE(__cache)
 	if (blk_queue_discard(bdev_get_queue(c->bdev)))
 		sysfs_strtoul(discard, c->discard);
 
+	if (attr == &sysfs_freelist_percent) {
+		DECLARE_FIFO(long, free);
+		long i;
+		size_t p = strtoul_or_return(buf);
+
+		p = clamp_t(size_t,
+			    ((size_t) c->sb.nbuckets * p) / 100,
+			    roundup_pow_of_two(c->sb.nbuckets) >> 9,
+			    c->sb.nbuckets / 2);
+
+		if (!init_fifo_exact(&free, p, GFP_KERNEL))
+			return -ENOMEM;
+
+		mutex_lock(&c->set->bucket_lock);
+
+		fifo_move(&free, &c->free);
+		fifo_swap(&free, &c->free);
+
+		mutex_unlock(&c->set->bucket_lock);
+
+		while (fifo_pop(&free, i))
+			atomic_dec(&c->buckets[i].pin);
+
+		free_fifo(&free);
+	}
+
 	if (attr == &sysfs_clear_stats) {
 		atomic_long_set(&c->sectors_written, 0);
 		atomic_long_set(&c->btree_sectors_written, 0);
@@ -2116,6 +2145,7 @@ static struct cache *cache_alloc(struct cache_sb *sb)
 		&sysfs_metadata_written,
 		&sysfs_io_errors,
 		&sysfs_clear_stats,
+		&sysfs_freelist_percent,
 		NULL
 	};
 	KTYPE(cache, cache_free);

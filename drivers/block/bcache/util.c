@@ -8,12 +8,6 @@
 
 #include "util.h"
 
-#define CREATE_TRACE_POINTS
-#include <trace/events/bcache.h>
-
-EXPORT_TRACEPOINT_SYMBOL_GPL(bcache_start_closure_wait);
-EXPORT_TRACEPOINT_SYMBOL_GPL(bcache_end_closure_wait);
-
 #define STRTO_H(name, type)					\
 int name ## _h(const char *cp, type *res)		        \
 {								\
@@ -442,7 +436,6 @@ void closure_run_wait(closure_list_t *list, struct workqueue_struct *wq)
 	smp_mb();
 	for (c = xchg(&list->head, NULL); c; c = next) {
 		next = c->next;
-		trace_bcache_end_closure_wait(c, _THIS_IP_);
 		SET_WAITING(c, 0);
 
 		clear_bit(__CLOSURE_WAITING, &c->flags);
@@ -458,7 +451,6 @@ bool closure_wait(closure_list_t *list, struct closure *cl)
 	if (!test_bit(__CLOSURE_WAITING, &cl->flags)) {
 		struct closure *t;
 		SET_WAITING(cl, _RET_IP_);
-		trace_bcache_start_closure_wait(cl, _RET_IP_);
 
 		set_bit(__CLOSURE_WAITING, &cl->flags);
 		closure_get(cl);

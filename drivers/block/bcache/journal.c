@@ -509,6 +509,7 @@ static void journal_write(struct cache_set *c)
 			 w->data->seq, w->data->keys,
 			 (uint64_t) bio->bi_sector);
 		atomic_inc(&c->journal.io);
+		trace_bcache_journal_write(bio);
 		bio_list_add(&list, bio);
 
 		SET_PTR_OFFSET(k, i, PTR_OFFSET(k, i) + sectors);

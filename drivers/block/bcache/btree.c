@@ -28,6 +28,7 @@
 #include <linux/hash.h>
 #include <linux/rcupdate.h>
 
+#include <trace/events/bcache.h>
 /*
  * Todo:
  * register_bcache: Return errors out to userspace correctly
@@ -260,6 +261,7 @@ void btree_read(struct btree *b)
 
 	bio_map(b->bio, b->sets[0].data);
 
+	trace_bcache_btree_read(b->bio);
 	if (bio_submit_split(b->bio, &b->io, b->c->bio_split)) {
 		PREPARE_DELAYED_WORK(&b->work, btree_bio_resubmit);
 		BUG_ON(!schedule_work(&b->work.work));
@@ -359,21 +361,21 @@ static void __btree_write(struct btree *b)
 	b->bio->bi_private	= w;
 
 	bio_map(b->bio, i);
-	if (bio_alloc_pages(b->bio, GFP_NOIO))
-		goto err;
+	if (!bio_alloc_pages(b->bio, GFP_NOIO)) {
+		bio_for_each_segment(bv, b->bio, j)
+			memcpy(page_address(bv->bv_page),
+			       base + j * PAGE_SIZE, PAGE_SIZE);
 
-	bio_for_each_segment(bv, b->bio, j)
-		memcpy(page_address(bv->bv_page),
-		       base + j * PAGE_SIZE, PAGE_SIZE);
-
-	bio_submit_split(b->bio, &b->io, b->c->bio_split);
-
-	if (0) {
+		trace_bcache_btree_write(b->bio);
+		bio_submit_split(b->bio, &b->io, b->c->bio_split);
+	} else {
 		struct closure wait;
-err:		closure_init_stack(&wait);
+		closure_init_stack(&wait);
 
 		w->nofree = true;
 		bio_map(b->bio, i);
+
+		trace_bcache_btree_write(b->bio);
 		bio_submit_split(b->bio, &b->io, b->c->bio_split);
 
 		closure_wait_on(&b->wait, bcache_wq, &wait,
@@ -1235,6 +1237,8 @@ static void btree_gc(struct cache_set *c)
 	struct closure writes;
 	struct btree_op op;
 
+	trace_bcache_gc_start(c->sb.set_uuid);
+
 	memset(&stats, 0, sizeof(struct gc_stat));
 	closure_init_stack(&writes);
 	btree_op_init_stack(&op);
@@ -1288,6 +1292,7 @@ static void btree_gc(struct cache_set *c)
 	memcpy(&c->gc_stats, &stats, sizeof(struct gc_stat));
 	blktrace_msg_all(c, "Finished gc");
 out:
+	trace_bcache_gc_end(c->sb.set_uuid);
 	closure_run_wait(&c->bucket_wait, bcache_wq);
 }
 
@@ -1890,6 +1895,7 @@ static struct bio *cache_hit(struct btree *b, struct bio *bio,
 
 		ret->bi_end_io = cache_read_endio;
 
+		trace_bcache_cache_hit(ret);
 		submit_bbio(ret, b->c, op->keys.top, 0);
 
 		return ret;

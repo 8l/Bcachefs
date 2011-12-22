@@ -258,6 +258,7 @@ static void write_dirty(struct closure *cl)
 	io->bio.bi_bdev		= io->d->bdev;
 	io->bio.bi_end_io	= dirty_endio;
 
+	trace_bcache_write_dirty(&w->io->bio);
 	closure_bio_submit(&w->io->bio, cl, io->d->c->bio_split);
 }
 
@@ -326,6 +327,7 @@ static void read_dirty(struct cached_dev *d)
 		d->last_read = w->key.key;
 		pr_debug("%s", pkey(&w->key));
 
+		trace_bcache_read_dirty(&w->io->bio);
 		closure_bio_submit(&w->io->bio, &w->io->cl, d->c->bio_split);
 		if (atomic_inc_return(&d->in_flight) >= 8)
 			return;

@@ -2,12 +2,14 @@
 #include "bcache.h"
 #include "btree.h"
 #include "debug.h"
+#include "request.h"
 
 #include <linux/cgroup.h>
 #include <linux/hash.h>
 #include <linux/random.h>
-
 #include "blk-cgroup.h"
+
+#include <trace/events/bcache.h>
 
 #define CUTOFF_CACHE_ADD	95
 #define CUTOFF_CACHE_READA	90
@@ -23,29 +25,6 @@ struct bio_passthrough {
 };
 
 struct kmem_cache *passthrough_cache;
-
-struct search {
-	/* Stack frame for bio_complete */
-	struct closure		cl;
-
-	struct task_struct	*task;
-
-	struct bio		*orig_bio;
-	struct bio		*cache_bio;
-	unsigned		cache_bio_sectors;
-	struct bbio		bio;
-
-	struct btree_op		op;
-
-	unsigned		skip:1;
-	unsigned		bio_done:1;
-	unsigned		lookup_done:1;
-	unsigned		recoverable:1;
-	unsigned		allocated_vec:1;
-
-	/* IO error returned to s->bio */
-	short			error;
-};
 
 struct kmem_cache *search_cache;
 
@@ -530,6 +509,7 @@ static void bio_insert(struct closure *cl)
 		cl->fn = bcache_journal;
 		n->bi_rw |= REQ_WRITE;
 
+		trace_bcache_cache_insert(n, n->bi_sector, n->bi_bdev);
 		submit_bbio(n, op->d->c, k, 0);
 	} while (n != bio);
 
@@ -619,6 +599,7 @@ static void __bio_complete(struct search *s)
 		if (s->error)
 			clear_bit(BIO_UPTODATE, &s->orig_bio->bi_flags);
 
+		trace_bcache_request_end(&s->op, s->orig_bio);
 		bio_endio(s->orig_bio, s->error);
 		s->orig_bio = NULL;
 	}
@@ -864,7 +845,9 @@ nonrecoverable:
 
 /* Process reads */
 
-static void do_readahead(struct search *s, struct bio *last_bio, sector_t reada)
+static void setup_cache_miss(struct search *s,
+			     struct bio *last_bio,
+			     sector_t reada)
 {
 	unsigned sectors = 0;
 
@@ -934,10 +917,61 @@ static void request_read_error(struct closure *cl)
 		/* XXX: invalidate cache */
 
 		closure_get(&s->cl);
+		trace_bcache_read_retry(&s->bio.bio);
 		closure_bio_submit(&s->bio.bio, &s->cl, s->op.d->c->bio_split);
 	}
 
 	return_f(cl, bio_complete);
+}
+
+static void do_verify(struct search *s)
+{
+	char name[BDEVNAME_SIZE];
+	struct bio *check;
+	struct bio_vec *bv;
+	struct closure *cl = &s->cl;
+	int i;
+
+	if (!s->allocated_vec)
+		bio_for_each_segment(bv, s->orig_bio, i)
+			bv->bv_offset = 0, bv->bv_len = PAGE_SIZE;
+
+	check = bio_clone(s->orig_bio, GFP_NOIO);
+	if (!check)
+		return;
+
+	if (bio_alloc_pages(check, GFP_NOIO))
+		goto out_put;
+
+	check->bi_rw		= READ_SYNC;
+	check->bi_private	= cl;
+	check->bi_end_io	= request_endio;
+
+	bio_get(check);
+	closure_get(cl);
+	closure_bio_submit(check, cl, s->op.d->c->bio_split);
+	closure_sync(cl);
+
+	bio_for_each_segment(bv, s->orig_bio, i) {
+		void *p1 = kmap(bv->bv_page);
+		void *p2 = kmap(check->bi_io_vec[i].bv_page);
+
+		if (memcmp(p1 + bv->bv_offset,
+			   p2 + bv->bv_offset,
+			   bv->bv_len))
+			printk(KERN_ERR "bcache (%s): verify failed"
+			       " at sector %llu\n",
+			       bdevname(s->op.d->bdev, name),
+			       (uint64_t) s->orig_bio->bi_sector);
+
+		kunmap(bv->bv_page);
+		kunmap(check->bi_io_vec[i].bv_page);
+	}
+
+	__bio_for_each_segment(bv, check, i, 0)
+		__free_page(bv->bv_page);
+out_put:
+	bio_put(check);
 }
 
 static void request_read_done(struct closure *cl)
@@ -1002,54 +1036,9 @@ static void request_read_done(struct closure *cl)
 		}
 	}
 
-	if (verify(s) && s->recoverable) {
-		char name[BDEVNAME_SIZE];
-		struct bio *check;
-		struct bio_vec *bv;
-		int i;
+	if (verify(s) && s->recoverable)
+		do_verify(s);
 
-		if (!s->allocated_vec)
-			bio_for_each_segment(bv, s->orig_bio, i)
-				bv->bv_offset = 0, bv->bv_len = PAGE_SIZE;
-
-		check = bio_clone(s->orig_bio, GFP_NOIO);
-		if (!check)
-			goto out;
-
-		if (bio_alloc_pages(check, GFP_NOIO))
-			goto out_put;
-
-		check->bi_rw		= READ_SYNC;
-		check->bi_private	= cl;
-		check->bi_end_io	= request_endio;
-
-		bio_get(check);
-		closure_get(cl);
-		closure_bio_submit(check, cl, s->op.d->c->bio_split);
-		closure_sync(cl);
-
-		bio_for_each_segment(bv, s->orig_bio, i) {
-			void *p1 = kmap(bv->bv_page);
-			void *p2 = kmap(check->bi_io_vec[i].bv_page);
-
-			if (memcmp(p1 + bv->bv_offset,
-				   p2 + bv->bv_offset,
-				   bv->bv_len))
-				printk(KERN_ERR "bcache (%s): verify failed"
-				       " at sector %llu\n",
-				       bdevname(s->op.d->bdev, name),
-				       (uint64_t) s->orig_bio->bi_sector);
-
-			kunmap(bv->bv_page);
-			kunmap(check->bi_io_vec[i].bv_page);
-		}
-
-		__bio_for_each_segment(bv, check, i, 0)
-			__free_page(bv->bv_page);
-out_put:
-		bio_put(check);
-	}
-out:
 	__bio_complete(s);
 
 	if (s->cache_bio && !atomic_read(&s->op.d->c->closing)) {
@@ -1108,27 +1097,27 @@ static void __request_read(struct closure *cl)
 
 	s->lookup_done = true;
 
-	if (!op->cache_hit && !s->skip) {
-		reada = min_t(uint64_t, reada,
-			      bio->bi_sector + (op->d->readahead >> 9));
-
-		do_readahead(s, bio, reada);
-	}
-
-	if (!op->cache_hit) {
+	if (!op->cache_hit)
 		op->cache_miss = true;
-		bio = s->cache_bio ?: &s->bio.bio;
-
-		if (closure_bio_submit(bio, &s->cl, op->d->c->bio_split))
-			return_f(cl, request_resubmit);
-	}
 
 	atomic_inc(&op->d->stats[s->skip][op->cache_miss]);
-	{
 #ifdef CONFIG_CGROUP_BCACHE
-		struct bcache_cgroup *cg = bio_to_cgroup(bio);
+	{
+		struct bcache_cgroup *cg = bio_to_cgroup(s->orig_bio);
 		atomic_inc(&cg->stats[s->skip][op->cache_miss]);
+	}
 #endif
+	if (!op->cache_hit) {
+		if (!s->skip) {
+			reada = min_t(uint64_t, reada,
+				      bio->bi_sector + (op->d->readahead >> 9));
+			setup_cache_miss(s, bio, reada);
+		}
+
+		bio = s->cache_bio ?: &s->bio.bio;
+		trace_bcache_cache_miss(s->orig_bio);
+		if (closure_bio_submit(bio, &s->cl, op->d->c->bio_split))
+			return_f(cl, request_resubmit);
 	}
 
 	return_f(cl, NULL);
@@ -1144,16 +1133,17 @@ static void request_read(struct search *s)
 
 /* Process writes */
 
-static bool should_writeback(struct cached_dev *d, struct bio *bio)
+static bool should_writeback(struct search *s)
 {
-	struct bcache_cgroup *cg = bio_to_cgroup(bio);
+	struct bcache_cgroup	*cg = bio_to_cgroup(s->orig_bio);
+	struct cached_dev	*d  = s->op.d;
 
 	if (cg->writethrough ||
 	    (!d->writeback && !cg->writeback) ||
-	    (!d->writeback_metadata && (bio->bi_rw & REQ_META)))
+	    (!d->writeback_metadata && (s->orig_bio->bi_rw & REQ_META)))
 		return false;
 
-	return d->c->gc_stats.in_use < (bio->bi_rw & REQ_SYNC)
+	return d->c->gc_stats.in_use < (s->orig_bio->bi_rw & REQ_SYNC)
 		? CUTOFF_WRITEBACK_SYNC
 		: CUTOFF_WRITEBACK;
 }
@@ -1200,14 +1190,18 @@ skip:		s->cache_bio = s->orig_bio;
 		if (bio->bi_rw & (1 << BIO_RW_DISCARD) &&
 		    !blk_queue_discard(bdev_get_queue(s->op.d->bdev)))
 			bio_endio(bio, 0);
-		else if (closure_bio_submit(bio, &s->cl, s->op.d->c->bio_split))
-			return_f(&s->op.cl, request_invalidate_resubmit);
+		else {
+			trace_bcache_write_skip(s->orig_bio);
+			if (closure_bio_submit(bio, &s->cl,
+					       s->op.d->c->bio_split))
+				return_f(&s->op.cl, request_invalidate_resubmit);
+		}
 
 		closure_put(&s->op.cl, bcache_wq);
 		return;
 	}
 
-	if (should_writeback(s->op.d, bio))
+	if (should_writeback(s))
 		s->op.insert_type = INSERT_WRITEBACK;
 
 	if (s->op.insert_type == INSERT_WRITE) {
@@ -1218,9 +1212,11 @@ skip:		s->cache_bio = s->orig_bio;
 		}
 
 		__bio_clone(s->cache_bio, bio);
+		trace_bcache_writethrough(s->orig_bio);
 		if (closure_bio_submit(bio, &s->cl, s->op.d->c->bio_split))
 			return_f(&s->op.cl, request_write_resubmit);
 	} else {
+		trace_bcache_writeback(s->orig_bio);
 		s->cache_bio = bio;
 		closure_put(&s->cl, bcache_wq);
 	}
@@ -1269,6 +1265,7 @@ static void bio_passthrough_submit(struct closure *cl)
 		if (!n)
 			return_f(&s->cl, bio_passthrough_submit);
 
+		trace_bcache_passthrough(n);
 		generic_make_request(n);
 	} while (n != bio);
 }
@@ -1321,6 +1318,7 @@ int bcache_make_request(struct request_queue *q, struct bio *bio)
 		return bio_passthrough(d, bio);
 
 	s = do_bio_hook(bio, d);
+	trace_bcache_request_start(&s->op, bio);
 	check_should_skip(s);
 
 	(bio->bi_rw & REQ_WRITE ? request_write : request_read)(s);

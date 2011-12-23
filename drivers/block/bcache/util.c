@@ -469,11 +469,19 @@ void __closure_wake_up(closure_list_t *list)
 {
 	struct closure *cl;
 
-	struct llist_node *l = llist_del_all(list);
+	struct llist_node *reverse = NULL, *l = llist_del_all(list);
 
 	while (l) {
-		cl = container_of(l, struct closure, list);
+		struct llist_node *t = l;
 		l = llist_next(l);
+
+		t->next = reverse;
+		reverse = t;
+	}
+
+	while (reverse) {
+		cl = container_of(reverse, struct closure, list);
+		reverse = llist_next(reverse);
 
 		SET_WAITING(cl, 0);
 		__closure_put(cl, atomic_sub_return(CLOSURE_WAITING + 1,

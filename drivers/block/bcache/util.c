@@ -426,14 +426,9 @@ void closure_queue(struct closure *cl)
 }
 EXPORT_SYMBOL_GPL(closure_queue);
 
-void closure_put(struct closure *cl)
+static void __closure_put(struct closure *cl, int r)
 {
-	int r;
-again:
 	pr_latency(cl->wait_time, "%pf", cl->fn);
-
-	r = atomic_dec_return(&cl->remaining);
-	smp_mb__after_atomic_dec();
 
 	BUG_ON(r & CLOSURE_GUARD_MASK);
 	BUG_ON((r & CLOSURE_REMAINING_MASK) == 0 &&
@@ -441,64 +436,77 @@ again:
 
 	/* Must deliver precisely one wakeup */
 	if ((r & CLOSURE_REMAINING_MASK) == 1 &&
-	    (r & CLOSURE_SLEEPING))
+	    (r & CLOSURE_SLEEPING)) {
+		smp_mb__after_atomic_dec();
 		wake_up_process(cl->task);
-
-	if (r & CLOSURE_REMAINING_MASK)
-		return;
-
-	if (!cl->fn) {
-		closure_del(cl);
-
-		cl = cl->parent;
-		if (cl)
-			goto again;
-		return;
 	}
 
-	atomic_inc(&cl->remaining);
-	set_wait(cl);
-	closure_queue(cl);
+	if ((r & CLOSURE_REMAINING_MASK) == 0) {
+		smp_mb__after_atomic_dec();
+
+		if (cl->fn) {
+			/* CLOSURE_BLOCKING might be set - clear it */
+			atomic_set(&cl->remaining, 1);
+			set_wait(cl);
+			closure_queue(cl);
+		} else {
+			closure_del(cl);
+
+			if (cl->parent)
+				closure_put(cl->parent);
+		}
+	}
+}
+
+void closure_put(struct closure *cl)
+{
+	int r = atomic_dec_return(&cl->remaining);
+	__closure_put(cl, r);
 }
 EXPORT_SYMBOL_GPL(closure_put);
 
 void __closure_wake_up(closure_list_t *list)
 {
 	struct closure *cl, *next;
-	smp_mb();
-	for (cl = xchg(&list->head, NULL); cl; cl = next) {
-		next = cl->next;
-		SET_WAITING(cl, 0);
 
-		atomic_sub(CLOSURE_WAITING, &cl->remaining);
-		closure_put(cl);
+	cl = xchg(&list->head, NULL);
+	if (!cl)
+		return;
+
+	/* between popping list and clearing CLOSURE_WAITING */
+	smp_rmb();
+
+	for (; cl; cl = next) {
+		next = cl->next;
+
+		SET_WAITING(cl, 0);
+		__closure_put(cl, atomic_sub_return(CLOSURE_WAITING + 1,
+						    &cl->remaining));
 	}
 }
 EXPORT_SYMBOL_GPL(__closure_wake_up);
 
 bool closure_wait(closure_list_t *list, struct closure *cl)
 {
-	smp_rmb(); /* for CLOSURE_WAITING */
+	struct closure *t;
 
-	if (!(atomic_read(&cl->remaining) & CLOSURE_WAITING)) {
-		struct closure *t;
-		SET_WAITING(cl, _RET_IP_);
-
-		atomic_add(CLOSURE_WAITING + 1, &cl->remaining);
-
-		do {
-			t = ACCESS_ONCE(list->head);
-			cl->next = t;
-			/*
-			 * between setting CLOSURE_WAITING/cl->next and pushing
-			 * onto the waitlist
-			 */
-			smp_wmb();
-		} while (cmpxchg(&list->head, t, cl) != t);
-
-		return true;
-	} else
+	if (atomic_read(&cl->remaining) & CLOSURE_WAITING)
 		return false;
+
+	SET_WAITING(cl, _RET_IP_);
+	atomic_add(CLOSURE_WAITING + 1, &cl->remaining);
+
+	do {
+		t = ACCESS_ONCE(list->head);
+		cl->next = t;
+		/*
+		 * between setting CLOSURE_WAITING/cl->next and pushing onto the
+		 * waitlist
+		 */
+		smp_wmb();
+	} while (cmpxchg(&list->head, t, cl) != t);
+
+	return true;
 }
 EXPORT_SYMBOL_GPL(closure_wait);
 

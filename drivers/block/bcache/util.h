@@ -596,15 +596,14 @@ static inline void set_closure_fn(struct closure *cl, closure_fn *fn,
 {
 	cl->fn = fn;
 	cl->wq = wq;
+	/* between atomic_dec() in closure_put() */
+	smp_mb__before_atomic_dec();
 }
 
 #define return_f(_cl, _fn, _wq, ...)					\
 do {									\
 	BUG_ON(!(_cl) || object_is_on_stack(_cl));			\
-	if (closure_blocking(_cl))					\
-		atomic_sub(CLOSURE_BLOCKING, &(_cl)->remaining);	\
 	set_closure_fn(_cl, _fn, _wq);					\
-	smp_mb__before_atomic_dec();					\
 	closure_put(_cl);						\
 	return __VA_ARGS__;						\
 } while (0)

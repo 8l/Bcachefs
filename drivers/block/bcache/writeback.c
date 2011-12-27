@@ -129,7 +129,7 @@ again:
 
 		/* Scanned the whole thing */
 		if (!count && !atomic_read(&d->in_flight)) {
-			if (!d->writeback &&
+			if (d->cache_mode != CACHE_MODE_WRITEBACK &&
 			    BDEV_STATE(&d->sb) == BDEV_STATE_DIRTY) {
 				SET_BDEV_STATE(&d->sb, BDEV_STATE_CLEAN);
 				write_bdev_super(d, NULL);
@@ -192,7 +192,7 @@ static bool should_refill_dirty(struct cached_dev *d)
 		((d->writeback_running &&
 		  ((jiffies_to_msecs(jiffies - t) > ms &&
 		    d->c->gc_stats.in_use > d->writeback_percent) ||
-		   !d->writeback)) ||
+		   d->cache_mode != CACHE_MODE_WRITEBACK)) ||
 		 atomic_read(&d->closing));
 }
 

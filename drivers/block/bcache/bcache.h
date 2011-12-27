@@ -86,7 +86,7 @@ struct cache_sb {
 
 BITMASK(CACHE_SYNC,	struct cache_sb, flags, 0, 1);
 
-BITMASK(BDEV_WRITEBACK,	struct cache_sb, flags, 0, 1);
+BITMASK(BDEV_CACHE_MODE, struct cache_sb, flags, 0, 4);
 BITMASK(BDEV_STATE,	struct cache_sb, flags, 61, 2);
 #define BDEV_STATE_NONE		0U
 #define BDEV_STATE_CLEAN	1U
@@ -129,6 +129,13 @@ struct prio_set {
 };
 
 #include "journal.h"
+
+enum cache_mode {
+	CACHE_MODE_WRITETHROUGH,
+	CACHE_MODE_WRITEBACK,
+	CACHE_MODE_WRITEAROUND,
+	CACHE_MODE_NONE,
+};
 
 struct cache_accounting {
 	struct kobject		kobj;
@@ -222,13 +229,14 @@ struct cached_dev {
 
 	struct timer_list	accounting_timer;
 
+	enum cache_mode		cache_mode;
+
 	unsigned long		sequential_cutoff;
 	unsigned		sequential_merge:1;
 
 	unsigned		verify:1;
 	unsigned		data_csum:1;
 
-	unsigned		writeback:1;
 	unsigned		writeback_metadata:1;
 	unsigned		writeback_running:1;
 	unsigned short		writeback_percent;
@@ -804,6 +812,7 @@ void bcache_write_super(struct cache_set *, struct closure *);
 extern struct kmem_cache *search_cache, *passthrough_cache;
 extern struct workqueue_struct *bcache_wq;
 extern struct list_head cache_sets; /* only needed for old shrinker, will die */
+extern const char * const bcache_cache_modes[];
 
 struct cache_set *cache_set_alloc(struct cache_sb *);
 void free_discards(struct cache *);

@@ -20,6 +20,16 @@ static const char invalid_uuid[] = {
 	0xc8, 0x50, 0xfc, 0x5e, 0xcb, 0x16, 0xcd, 0x99
 };
 
+/* Default is -1; we skip past it for struct cached_dev's cache mode */
+const char * const bcache_cache_modes[] = {
+	"default",
+	"writethrough",
+	"writeback",
+	"writearound",
+	"none",
+	NULL
+};
+
 static const char * const cache_replacement_policies[] = {
 	"lru",
 	"fifo",
@@ -210,7 +220,7 @@ rw_attribute(congested_write_threshold_us);
 rw_attribute(sequential_cutoff);
 rw_attribute(sequential_merge);
 rw_attribute(data_csum);
-rw_attribute(writeback);
+rw_attribute(cache_mode);
 rw_attribute(writeback_metadata);
 rw_attribute(writeback_running);
 rw_attribute(writeback_percent);
@@ -796,9 +806,12 @@ SHOW(__cached_dev)
 
 #define var(stat)		(d->stat)
 
+	if (attr == &sysfs_cache_mode)
+		return sprint_string_list(buf, bcache_cache_modes + 1,
+					  d->cache_mode);
+
 	var_printf(verify,		"%i");
 	var_printf(data_csum,		"%i");
-	var_printf(writeback,		"%i");
 	var_printf(writeback_metadata,	"%i");
 	var_printf(writeback_running,	"%i");
 	var_print(writeback_delay);
@@ -852,6 +865,20 @@ STORE(__cached_dev)
 	    strtoul_or_return(buf))
 		cached_dev_run(d);
 
+	if (attr == &sysfs_cache_mode) {
+		ssize_t v = read_string_list(buf, bcache_cache_modes + 1);
+
+		if (v < 0)
+			return v;
+
+		if (v != d->cache_mode) {
+			SET_BDEV_CACHE_MODE(&d->sb, v);
+			write_bdev_super(d, NULL);
+		}
+
+		d->cache_mode = v;
+	}
+#if 0
 	if (attr == &sysfs_writeback) {
 		v = strtoul_or_return(buf);
 		SET_BDEV_WRITEBACK(&d->sb, v);
@@ -866,7 +893,7 @@ STORE(__cached_dev)
 
 		d->writeback = v;
 	}
-
+#endif
 	if (attr == &sysfs_label) {
 		memcpy(d->sb.label, buf, SB_LABEL_SIZE);
 		write_bdev_super(d, NULL);
@@ -905,8 +932,7 @@ STORE(cached_dev)
 	size = __cached_dev_store(kobj, attr, buf, size);
 
 	if (attr == &sysfs_writeback_running ||
-	    attr == &sysfs_writeback_percent ||
-	    attr == &sysfs_writeback)
+	    attr == &sysfs_writeback_percent)
 		queue_writeback(container_of(kobj, struct cached_dev, kobj));
 
 	mutex_unlock(&register_lock);
@@ -1046,9 +1072,11 @@ found:
 		uuid_write(c);
 
 		memcpy(d->sb.set_uuid, c->sb.set_uuid, 16);
+#if 0
 		SET_BDEV_STATE(&d->sb, d->writeback
 			     ? BDEV_STATE_DIRTY
 			     : BDEV_STATE_CLEAN);
+#endif
 		write_bdev_super(d, &cl);
 
 		msg = "inserted new";
@@ -1121,7 +1149,7 @@ static struct cached_dev *cached_dev_alloc(void)
 #if 0
 		&sysfs_data_csum,
 #endif
-		&sysfs_writeback,
+		&sysfs_cache_mode,
 		&sysfs_writeback_metadata,
 		&sysfs_writeback_running,
 		&sysfs_writeback_delay,
@@ -1282,7 +1310,7 @@ static const char *register_bdev(struct cache_sb *sb, struct page *sb_page,
 	d->sb_bio.bi_io_vec[0].bv_page = sb_page;
 	d->bdev = bdev;
 	d->bdev->bd_holder = d;
-	d->writeback = BDEV_WRITEBACK(&d->sb);
+	d->cache_mode = BDEV_CACHE_MODE(&d->sb);
 
 	d->disk = alloc_disk(1);
 	if (!d->disk)

@@ -33,13 +33,17 @@ static void __request_read(struct closure *);
 
 /* Cgroup interface */
 
-static struct bcache_cgroup {
 #ifdef CONFIG_CGROUP_BCACHE
+
+static struct bcache_cgroup {
 	struct cgroup_subsys_state	css;
-#endif
+	/*
+	 * We subtract one from the index into bcache_cache_modes[], so that
+	 * default == -1; this makes it so the rest match up with d->cache_mode,
+	 * and we use d->cache_mode if cgrp->cache_mode < 0
+	 */
+	short				cache_mode;
 	bool				verify;
-	bool				writeback;
-	bool				writethrough;
 	union {
 
 		atomic_t		stats[2][2];
@@ -50,9 +54,7 @@ static struct bcache_cgroup {
 			atomic_t	cache_bypass_misses;
 		};
 	};
-} bcache_default_cgroup;
-
-#ifdef CONFIG_CGROUP_BCACHE
+} bcache_default_cgroup = { .cache_mode = -1 };
 
 static struct bcache_cgroup *cgroup_to_bcache(struct cgroup *cgroup)
 {
@@ -68,6 +70,31 @@ static struct bcache_cgroup *bio_to_cgroup(struct bio *bio)
 	return cgroup_to_bcache(get_bio_cgroup(bio));
 }
 
+static ssize_t cache_mode_read(struct cgroup *cgrp, struct cftype *cft,
+			struct file *file,
+			char __user *buf, size_t nbytes, loff_t *ppos)
+{
+	char tmp[1024];
+	int len = sprint_string_list(tmp, bcache_cache_modes,
+				     cgroup_to_bcache(cgrp)->cache_mode + 1);
+
+	if (len < 0)
+		return len;
+
+	return simple_read_from_buffer(buf, nbytes, ppos, tmp, len);
+}
+
+static int cache_mode_write(struct cgroup *cgrp, struct cftype *cft,
+			    const char *buf)
+{
+	int v = read_string_list(buf, bcache_cache_modes);
+	if (v < 0)
+		return v;
+
+	cgroup_to_bcache(cgrp)->cache_mode = v - 1;
+	return 0;
+}
+
 static u64 bcache_verify_read(struct cgroup *cgrp, struct cftype *cft)
 {
 	return cgroup_to_bcache(cgrp)->verify;
@@ -76,34 +103,6 @@ static u64 bcache_verify_read(struct cgroup *cgrp, struct cftype *cft)
 static int bcache_verify_write(struct cgroup *cgrp, struct cftype *cft, u64 val)
 {
 	cgroup_to_bcache(cgrp)->verify = val;
-	return 0;
-}
-
-static u64 bcache_writethrough_read(struct cgroup *cgrp, struct cftype *cft)
-{
-	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
-	return bcachecg->writethrough;
-}
-
-static int bcache_writethrough_write(struct cgroup *cgrp, struct cftype *cft,
-				     u64 val)
-{
-	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
-	bcachecg->writethrough = val;
-	return 0;
-}
-
-static u64 bcache_writeback_read(struct cgroup *cgrp, struct cftype *cft)
-{
-	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
-	return bcachecg->writeback;
-}
-
-static int bcache_writeback_write(struct cgroup *cgrp, struct cftype *cft,
-				  u64 val)
-{
-	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
-	bcachecg->writeback = val;
 	return 0;
 }
 
@@ -135,19 +134,14 @@ static u64 bcache_cache_bypass_misses_read(struct cgroup *cgrp,
 
 struct cftype bcache_files[] = {
 	{
+		.name		= "cache_mode",
+		.read		= cache_mode_read,
+		.write_string	= cache_mode_write,
+	},
+	{
 		.name		= "verify",
 		.read_u64	= bcache_verify_read,
 		.write_u64	= bcache_verify_write,
-	},
-	{
-		.name		= "writethrough",
-		.read_u64	= bcache_writethrough_read,
-		.write_u64	= bcache_writethrough_write,
-	},
-	{
-		.name		= "writeback",
-		.read_u64	= bcache_writeback_read,
-		.write_u64	= bcache_writeback_write,
 	},
 	{
 		.name		= "cache_hits",
@@ -169,8 +163,7 @@ struct cftype bcache_files[] = {
 
 static void init_bcache_cgroup(struct bcache_cgroup *cg)
 {
-	cg->writeback = false;
-	cg->writethrough = false;
+	cg->cache_mode = -1;
 }
 
 static struct cgroup_subsys_state *
@@ -209,14 +202,17 @@ struct cgroup_subsys bcache_subsys = {
 	.module		= THIS_MODULE,
 };
 EXPORT_SYMBOL_GPL(bcache_subsys);
-#else
-
-static struct bcache_cgroup *bio_to_cgroup(struct bio *bio)
-{
-	return &bcache_default_cgroup;
-}
-
 #endif
+
+static unsigned cache_mode(struct search *s)
+{
+#ifdef CONFIG_CGROUP_BCACHE
+	int r = bio_to_cgroup(s->orig_bio)->cache_mode;
+	if (r >= 0)
+		return r;
+#endif
+	return s->op.d->cache_mode;
+}
 
 static bool verify(struct search *s)
 {
@@ -727,6 +723,11 @@ static void check_should_skip(struct search *s)
 	    (bio->bi_rw & (1 << BIO_RW_DISCARD)))
 		goto skip;
 
+	if (cache_mode(s) == CACHE_MODE_NONE ||
+	    (cache_mode(s) == CACHE_MODE_WRITEAROUND &&
+	     (bio->bi_rw & REQ_WRITE)))
+		goto skip;
+
 	if (bio->bi_sector   & (d->c->sb.block_size - 1) ||
 	    bio_sectors(bio) & (d->c->sb.block_size - 1)) {
 		pr_debug("skipping unaligned io");
@@ -741,7 +742,7 @@ static void check_should_skip(struct search *s)
 		if (!cutoff)
 			goto rescale;
 
-		if (d->writeback &&
+		if (cache_mode(s) == CACHE_MODE_WRITEBACK &&
 		    (bio->bi_rw & REQ_WRITE) &&
 		    (bio->bi_rw & REQ_SYNC))
 			goto rescale;
@@ -1133,15 +1134,8 @@ static void request_read(struct search *s)
 
 static bool should_writeback(struct search *s)
 {
-	struct bcache_cgroup	*cg = bio_to_cgroup(s->orig_bio);
-	struct cached_dev	*d  = s->op.d;
-
-	if (cg->writethrough ||
-	    (!d->writeback && !cg->writeback) ||
-	    (!d->writeback_metadata && (s->orig_bio->bi_rw & REQ_META)))
-		return false;
-
-	return d->c->gc_stats.in_use < (s->orig_bio->bi_rw & REQ_SYNC)
+	return cache_mode(s) == CACHE_MODE_WRITEBACK &&
+		s->op.d->c->gc_stats.in_use < (s->orig_bio->bi_rw & REQ_SYNC)
 		? CUTOFF_WRITEBACK_SYNC
 		: CUTOFF_WRITEBACK;
 }

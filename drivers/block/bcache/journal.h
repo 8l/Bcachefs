@@ -1,6 +1,8 @@
 #ifndef _BCACHE_JOURNAL_H
 #define _BCACHE_JOURNAL_H
 
+#define JSET_VERSION	0
+
 /*
  * On disk format for a journal entry:
  * seq is monotonically increasing; every journal entry has its own unique
@@ -72,6 +74,15 @@ struct journal {
 	struct journal_write	w[2], *cur;
 };
 
+struct journal_device {
+	unsigned		cur;
+	unsigned		last;
+	uint64_t		seq[SB_JOURNAL_BUCKETS];
+
+	struct bio		bio;
+	struct bio_vec		bv[8];
+};
+
 #define journal_pin_cmp(c, l, r)				\
 	(fifo_idx(&(c)->journal.pin, (l)->journal) >		\
 	 fifo_idx(&(c)->journal.pin, (r)->journal))
@@ -79,15 +90,14 @@ struct journal {
 #define JOURNAL_PIN	20000
 
 #define journal_full(j)						\
-	(!(j)->blocks_free || fifo_full(&(j)->pin))
+	(!(j)->blocks_free || fifo_free(&(j)->pin) <= 1)
 
 struct closure;
 struct cache_set;
 struct btree_op;
 
 void bcache_journal(struct closure *);
-void bcache_journal_wait(struct cache_set *, struct closure *);
-void bcache_journal_next(struct cache_set *);
+void bcache_journal_next(struct journal *);
 void bcache_journal_mark(struct cache_set *, struct list_head *);
 void bcache_journal_meta(struct cache_set *, struct closure *);
 int bcache_journal_read(struct cache_set *, struct list_head *,

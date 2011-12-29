@@ -27,7 +27,9 @@ static void journal_read_endio(struct bio *bio, int error)
 static int journal_read_bucket(struct cache *ca, struct list_head *list,
 			       struct btree_op *op, unsigned bucket_index)
 {
-	struct bio *bio = &ca->journal_bio;
+	struct journal_device *ja = &ca->journal;
+	struct bio *bio = &ja->bio;
+
 	struct journal_replay *i;
 	struct jset *j, *data = ca->set->journal.w[0].data;
 	unsigned len, left, offset = 0;
@@ -111,7 +113,7 @@ add:
 			list_add(&i->list, where);
 			ret = 1;
 
-			ca->journal_seq[bucket_index] = j->seq;
+			ja->seq[bucket_index] = j->seq;
 next_set:
 			offset	+= blocks * ca->sb.block_size;
 			len	-= blocks * ca->sb.block_size;
@@ -137,6 +139,7 @@ int bcache_journal_read(struct cache_set *c, struct list_head *list,
 	struct cache *ca;
 
 	for_each_cache(ca, c) {
+		struct journal_device *ja = &ca->journal;
 		unsigned long bitmap[SB_JOURNAL_BUCKETS / BITS_PER_LONG];
 		unsigned l, r, m;
 		uint64_t seq;
@@ -206,16 +209,16 @@ bsearch:
 		seq = 0;
 
 		for (unsigned i = 0; i < ca->sb.njournal_buckets; i++)
-			if (ca->journal_seq[i] > seq) {
-				seq = ca->journal_seq[i];
-				ca->journal_next = i + 1;
+			if (ja->seq[i] > seq) {
+				seq = ja->seq[i];
+				ja->cur = ja->last = i;
+
 			}
-
-		if (ca->journal_next == ca->sb.njournal_buckets)
-			ca->journal_next = 0;
-
-		ca->journal_last = ca->journal_next;
 	}
+
+	c->journal.seq = list_entry(list->prev,
+				    struct journal_replay,
+				    list)->j.seq;
 
 	return 0;
 #undef read_bucket
@@ -378,29 +381,49 @@ found:
 	rw_unlock(true, best);
 }
 
-static void journal_alloc(struct cache_set *c)
+#define last_seq(j)	((j)->seq - fifo_used(&(j)->pin) + 1)
+
+static void journal_reclaim(struct cache_set *c)
 {
 	struct bkey *k = &c->journal.key;
 	struct cache *ca;
+	uint64_t last_seq;
 	unsigned n = 0;
-	sector_t b;
+	atomic_t p;
+
+	while (!atomic_read(&fifo_front(&c->journal.pin)))
+		fifo_pop(&c->journal.pin, p);
+
+	last_seq = last_seq(&c->journal);
+
+	for_each_cache(ca, c) {
+		struct journal_device *ja = &ca->journal;
+
+		while (ja->last != ja->cur &&
+		       ja->seq[ja->last] < last_seq)
+			if (++ja->last == ca->sb.njournal_buckets)
+				ja->last = 0;
+	}
 
 	if (c->journal.blocks_free)
 		return;
 
-	/* XXX: Sort by free journal space */
+	/*
+	 * Now we allocate:
+	 * XXX: Sort by free journal space
+	 */
 
 	for_each_cache(ca, c) {
-		if (ca->journal_next == ca->journal_last)
+		struct journal_device *ja = &ca->journal;
+		unsigned next = (ja->cur + 1) % ca->sb.njournal_buckets;
+
+		if (next == ja->last)
 			continue;
 
-		b = ca->sb.d[ca->journal_next];
-		b = bucket_to_sector(c, b);
-
-		k->ptr[n++] = PTR(0, b, ca->sb.nr_this_dev);
-
-		if (++ca->journal_next == ca->sb.njournal_buckets)
-			ca->journal_next = 0;
+		ja->cur = next;
+		k->ptr[n++] = PTR(0,
+				  bucket_to_sector(c, ca->sb.d[ja->cur]),
+				  ca->sb.nr_this_dev);
 	}
 
 	k->header = KEY_HEADER(0, 0);
@@ -413,70 +436,27 @@ static void journal_alloc(struct cache_set *c)
 		__closure_wake_up(&c->journal.wait);
 }
 
-#define last_seq(j)	((j)->seq - fifo_used(&(j)->pin) + 1)
-
-static void journal_reclaim(struct cache_set *s)
+void bcache_journal_next(struct journal *j)
 {
-	struct cache *ca;
-	uint64_t last_seq;
-	atomic_t p;
+	atomic_t p = { 1 };
 
-	while (fifo_used(&s->journal.pin) > 1 &&
-	       !atomic_read(&fifo_front(&s->journal.pin)))
-		fifo_pop(&s->journal.pin, p);
+	j->cur = (j->cur == j->w)
+		? &j->w[1]
+		: &j->w[0];
 
-	last_seq = last_seq(&s->journal);
+	/*
+	 * The fifo_push() needs to happen at the same time as j->seq is
+	 * incremented for last_seq() to be calculated correctly
+	 */
+	BUG_ON(!fifo_push(&j->pin, p));
+	atomic_set(&fifo_back(&j->pin), 1);
 
-	for_each_cache(ca, s)
-		while (((ca->journal_last + 1) % ca->sb.njournal_buckets !=
-			ca->journal_next) &&
-		       (!ca->journal_seq[ca->journal_last] ||
-			ca->journal_seq[ca->journal_last] < last_seq))
-			if (++ca->journal_last == ca->sb.njournal_buckets)
-				ca->journal_last = 0;
+	j->cur->data->seq	= ++j->seq;
+	j->cur->need_write	= false;
+	j->cur->data->keys	= 0;
 
-	if (journal_full(&s->journal))
-		pr_debug("allocating");
-
-	journal_alloc(s);
-}
-
-static void __journal_meta(struct cache_set *c)
-{
-	struct cache *ca;
-	struct journal_write *w = c->journal.cur;
-
-	w->data->btree_level = c->root->level;
-
-	bkey_copy(&w->data->btree_root, &c->root->key);
-	bkey_copy(&w->data->uuid_bucket, &c->uuid_bucket);
-
-	for_each_cache(ca, c)
-		w->data->prio_bucket[ca->sb.nr_this_dev] = ca->prio_buckets[0];
-
-	w->data->magic = jset_magic(c);
-}
-
-void bcache_journal_next(struct cache_set *s)
-{
-	atomic_t p = { 0 };
-	struct journal_write *w = s->journal.cur == s->journal.w
-		? &s->journal.w[1]
-		: &s->journal.w[0];
-
-	s->journal.cur = w;
-
-	BUG_ON(!fifo_push(&s->journal.pin, p));
-	atomic_set(&fifo_back(&s->journal.pin), 0);
-
-	w->need_write		= false;
-	w->data->keys		= 0;
-	w->data->seq		= ++s->journal.seq;
-
-	if (fifo_full(&s->journal.pin))
-		pr_debug("journal_pin full (%zu)", fifo_used(&s->journal.pin));
-
-	journal_reclaim(s);
+	if (fifo_full(&j->pin))
+		pr_debug("journal_pin full (%zu)", fifo_used(&j->pin));
 }
 
 static void journal_write_endio(struct bio *bio, int error)
@@ -498,22 +478,33 @@ static void journal_write_endio(struct bio *bio, int error)
 
 static void journal_write(struct cache_set *c)
 {
+	struct cache *ca;
 	struct journal_write *w = c->journal.cur;
-	unsigned bucket, sectors = set_blocks(w->data, c) * c->sb.block_size;
 	struct bkey *k = &c->journal.key;
+	unsigned sectors = set_blocks(w->data, c) * c->sb.block_size;
+
 	struct bio *bio;
 	struct bio_list list;
 	bio_list_init(&list);
 
 	c->journal.blocks_free -= set_blocks(w->data, c);
 
-	__journal_meta(c);
+	w->data->btree_level = c->root->level;
+
+	bkey_copy(&w->data->btree_root, &c->root->key);
+	bkey_copy(&w->data->uuid_bucket, &c->uuid_bucket);
+
+	for_each_cache(ca, c)
+		w->data->prio_bucket[ca->sb.nr_this_dev] = ca->prio_buckets[0];
+
+	w->data->magic		= jset_magic(c);
+	w->data->version	= JSET_VERSION;
 	w->data->last_seq	= last_seq(&c->journal);
 	w->data->csum		= csum_set(w->data);
 
 	for (unsigned i = 0; i < KEY_PTRS(k); i++) {
-		struct cache *ca = PTR_CACHE(c, k, i);
-		bio = &ca->journal_bio;
+		ca = PTR_CACHE(c, k, i);
+		bio = &ca->journal.bio;
 
 		atomic_long_add(sectors, &ca->meta_sectors_written);
 
@@ -527,22 +518,18 @@ static void journal_write(struct cache_set *c)
 		bio->bi_private = w;
 		bio_map(bio, w->data);
 
-		pr_debug("writing seq %llu keys %u to sector %llu",
-			 w->data->seq, w->data->keys,
-			 (uint64_t) bio->bi_sector);
 		atomic_inc(&c->journal.io);
 		trace_bcache_journal_write(bio);
 		bio_list_add(&list, bio);
 
 		SET_PTR_OFFSET(k, i, PTR_OFFSET(k, i) + sectors);
 
-		bucket = (ca->journal_next ?:
-			  ca->sb.njournal_buckets) - 1;
-
-		ca->journal_seq[bucket] = w->data->seq;
+		ca->journal.seq[ca->journal.cur] = w->data->seq;
 	}
 
-	bcache_journal_next(c);
+	atomic_dec_bug(&fifo_back(&c->journal.pin));
+	bcache_journal_next(&c->journal);
+	journal_reclaim(c);
 
 	spin_unlock(&c->journal.lock);
 
@@ -580,26 +567,18 @@ static void journal_work(struct work_struct *work)
 	journal_try_write(c);
 }
 
-void bcache_journal_wait(struct cache_set *c, struct closure *cl)
+void bcache_journal_meta(struct cache_set *c, struct closure *cl)
 {
 	struct journal_write *w;
 
-	spin_lock(&c->journal.lock);
-	w = c->journal.cur;
-	if (w->need_write)
-		BUG_ON(!closure_wait(&w->wait, cl));
-
-	journal_try_write(c);
-}
-
-void bcache_journal_meta(struct cache_set *c, struct closure *cl)
-{
 	if (CACHE_SYNC(&c->sb)) {
 		spin_lock(&c->journal.lock);
-		c->journal.cur->need_write = true;
+
+		w = c->journal.cur;
+		w->need_write = true;
 
 		if (cl)
-			BUG_ON(!closure_wait(&c->journal.cur->wait, cl));
+			BUG_ON(!closure_wait(&w->wait, cl));
 
 		__journal_try_write(c, true);
 	}
@@ -633,10 +612,10 @@ void bcache_journal(struct closure *cl)
 	spin_lock(&c->journal.lock);
 
 	if (journal_full(&c->journal)) {
-		journal_reclaim(c);
-
 		/* XXX: tracepoint */
-		BUG_ON(!closure_wait(&c->journal.wait, cl));
+		closure_wait(&c->journal.wait, cl);
+
+		journal_reclaim(c);
 		spin_unlock(&c->journal.lock);
 
 		btree_flush_write(c);

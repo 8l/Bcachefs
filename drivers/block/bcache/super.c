@@ -1650,9 +1650,11 @@ static void cache_set_free(struct kobject *kobj)
 	/*
 	 * bcache_journal_wait() calls journal_try_write() - should do the wait
 	 * without the write if unregistering because of an error
+	 *
+	 * XXX: doesn't handle an in flight journal write
 	 */
 	if (c->journal.cur)
-		bcache_journal_wait(c, &op.cl);
+		bcache_journal_meta(c, &op.cl);
 
 	closure_sync(&op.cl);
 
@@ -1870,7 +1872,6 @@ static void run_cache_set(struct cache_set *c)
 			goto err;
 
 		j = &list_entry(journal.prev, struct journal_replay, list)->j;
-		c->journal.seq = j->seq;
 
 		err = "IO error reading priorities";
 		for_each_cache(ca, c) {
@@ -1905,14 +1906,16 @@ static void run_cache_set(struct cache_set *c)
 		if (btree_check(c, &op))
 			goto err;
 
+		bcache_journal_mark(c, &journal);
+		btree_gc_finish(c);
 		printk(KERN_DEBUG "bcache: btree_check() done\n");
 
-		bcache_journal_mark(c, &journal);
-
-		btree_gc_finish(c);
-
-		if (!fifo_full(&c->journal.pin))
-			bcache_journal_next(c);
+		/*
+		 * bcache_journal_next() can't happen sooner, or
+		 * btree_gc_finish() will give spurious errors about last_gc >
+		 * gc_gen - this is a hack but oh well.
+		 */
+		bcache_journal_next(&c->journal);
 		bcache_journal_replay(c, &journal, &op);
 	} else {
 		printk(KERN_NOTICE "bcache: invalidating existing data\n");
@@ -1952,12 +1955,14 @@ static void run_cache_set(struct cache_set *c)
 		bcache_btree_set_root(c->root);
 		rw_unlock(true, c->root);
 
-		/* first journal entry doesn't get written until after cache is
-		 * set to sync */
+		/*
+		 * We don't want to write the first journal entry until
+		 * everything is set up - fortunately journal entries won't be
+		 * written until the SET_CACHE_SYNC() here:
+		 */
 		SET_CACHE_SYNC(&c->sb, true);
 
-		c->journal.cur = c->journal.w;
-		bcache_journal_next(c);
+		bcache_journal_next(&c->journal);
 		bcache_journal_meta(c, &op.cl);
 		mutex_unlock(&c->gc_lock);
 	}
@@ -2289,9 +2294,9 @@ static struct cache *cache_alloc(struct cache_sb *sb)
 	c->sb_bio.bi_max_vecs	= 1;
 	c->sb_bio.bi_io_vec	= c->sb_bio.bi_inline_vecs;
 
-	bio_init(&c->journal_bio);
-	c->journal_bio.bi_max_vecs = 8;
-	c->journal_bio.bi_io_vec = c->journal_bio.bi_inline_vecs;
+	bio_init(&c->journal.bio);
+	c->journal.bio.bi_max_vecs = 8;
+	c->journal.bio.bi_io_vec = c->journal.bio.bi_inline_vecs;
 
 	free = roundup_pow_of_two(c->sb.nbuckets) >> 9;
 	free = max_t(size_t, free, 16);

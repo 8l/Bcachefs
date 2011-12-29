@@ -288,8 +288,6 @@ static void btree_complete_write(struct btree *b, struct btree_write *w)
 	if (w->journal) {
 		atomic_dec_bug(w->journal);
 		__closure_wake_up(&b->c->journal.wait);
-		if (journal_full(&b->c->journal))
-			schedule_work(&b->c->journal.work);
 	}
 
 	if (w->owner)
@@ -1338,6 +1336,11 @@ size_t btree_gc_finish(struct cache_set *c)
 			ca->buckets[*i].mark = GC_MARK_BTREE;
 
 		for_each_bucket(b, ca) {
+			/*
+			 * the c->journal.cur check is a hack because when we're
+			 * called from run_cache_set() gc_gen isn't going to be
+			 * correct
+			 */
 			cache_bug_on(c->journal.cur &&
 				     gen_after(b->last_gc, b->gc_gen), c,
 				     "found old gen in gc");
@@ -1410,7 +1413,7 @@ static void btree_gc(struct cache_set *c)
 	}
 
 	/* Possibly wait for new UUIDs or whatever to hit disk */
-	bcache_journal_wait(c, &op.cl);
+	bcache_journal_meta(c, &op.cl);
 	closure_sync(&op.cl);
 
 	available = btree_gc_finish(c);

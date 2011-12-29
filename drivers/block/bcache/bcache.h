@@ -361,17 +361,13 @@ struct cache {
 	struct list_head	discards;
 	struct page		*discard_page;
 
+	struct journal_device	journal;
+
 	/* The rest of this all shows up in sysfs */
 #define IO_ERROR_SHIFT		20
 	atomic_t		io_errors;
 	atomic_t		io_count;
 
-	unsigned		journal_next;
-	unsigned		journal_last;
-	uint64_t		journal_seq[SB_JOURNAL_BUCKETS];
-
-	struct bio		journal_bio;
-	struct bio_vec		journal_bv[8];
 	atomic_long_t		meta_sectors_written;
 	atomic_long_t		btree_sectors_written;
 	atomic_long_t		sectors_written;

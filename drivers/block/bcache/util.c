@@ -6,6 +6,8 @@
 #include <linux/seq_file.h>
 #include <linux/types.h>
 
+#include <linux/dynamic_fault.h>
+
 #include "util.h"
 
 #define STRTO_H(name, type)					\

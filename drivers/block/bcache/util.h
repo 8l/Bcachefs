@@ -416,6 +416,9 @@ unsigned __bio_max_sectors(struct bio *bio, struct block_device *bdev,
 
 int bio_alloc_pages(struct bio *bio, gfp_t gfp);
 
+#define bio_alloc_pages(...)						\
+	(dynamic_fault() ? -ENOMEM	: bio_alloc_pages(__VA_ARGS__))
+
 static inline unsigned bio_max_sectors(struct bio *bio)
 {
 	return __bio_max_sectors(bio, bio->bi_bdev, bio->bi_sector);

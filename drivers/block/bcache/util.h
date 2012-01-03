@@ -73,30 +73,27 @@ static inline void SET_##name(type *k, uint64_t v)		\
 		type *data;						\
 	} name
 
-#define DEFINE_HEAP(type, name, s)					\
-	struct {							\
-		size_t size;						\
-		const size_t used;					\
-		type data[s];						\
-	} name = { .used = 0, .size = s }
-
-#define init_heap(h, s, gfp)						\
+#define init_heap(heap, _size, gfp)					\
 ({									\
-	(h)->used = 0;							\
-	(h)->size = s;							\
-	if ((h)->size * sizeof(*(h)->data) >= KMALLOC_MAX_SIZE)		\
-		(h)->data = vmalloc((h)->size * sizeof(*(h)->data));	\
-	else if ((h)->size > 0)						\
-		(h)->data = kmalloc((h)->size * sizeof(*(h)->data), gfp);\
-	(h)->data;							\
+	size_t _bytes;							\
+	(heap)->used = 0;						\
+	(heap)->size = (_size);						\
+	_bytes = (heap)->size * sizeof(*(heap)->data);			\
+	(heap)->data = NULL;						\
+	if (_bytes < KMALLOC_MAX_SIZE)					\
+		(heap)->data = kmalloc(_bytes, (gfp));			\
+	if ((!(heap)->data) && ((gfp) & GFP_KERNEL))			\
+		(heap)->data = vmalloc(_bytes);				\
+	(heap)->data;							\
 })
 
-#define free_heap(h)							\
+#define free_heap(heap)							\
 do {									\
-	if ((h)->size * sizeof(*(h)->data) >= KMALLOC_MAX_SIZE)		\
-		vfree((h)->data);					\
+	if (is_vmalloc_addr((heap)->data))				\
+		vfree((heap)->data);					\
 	else								\
-		kfree((h)->data);					\
+		kfree((heap)->data);					\
+	(heap)->data = NULL;						\
 } while (0)
 
 #define heap_swap(h, i, j)	swap((h)->data[i], (h)->data[j])
@@ -170,15 +167,21 @@ do {									\
 
 #define __init_fifo(fifo, gfp)						\
 ({									\
-	size_t _bytes;							\
+	size_t _allocated_size, _bytes;					\
 	BUG_ON(!(fifo)->size);						\
+									\
+	_allocated_size = roundup_pow_of_two((fifo)->size + 1);		\
+	_bytes = _allocated_size * sizeof(*(fifo)->data);		\
+									\
+	(fifo)->mask = _allocated_size - 1;				\
 	(fifo)->front = (fifo)->back = 0;				\
-	(fifo)->mask = roundup_pow_of_two((fifo)->size + 1);		\
-	_bytes = (fifo)->mask * sizeof(*(fifo)->data);			\
-	(fifo)->mask--;							\
-	(fifo)->data = (_bytes >= KMALLOC_MAX_SIZE)			\
-		? vmalloc(_bytes)					\
-		: kmalloc(_bytes, gfp);					\
+	(fifo)->data = NULL;						\
+									\
+	if (_bytes < KMALLOC_MAX_SIZE)					\
+		(fifo)->data = kmalloc(_bytes, (gfp));			\
+	if ((!(fifo)->data) && ((gfp) & GFP_KERNEL))			\
+		(fifo)->data = vmalloc(_bytes);				\
+	(fifo)->data;							\
 })
 
 #define init_fifo_exact(fifo, _size, gfp)				\
@@ -197,8 +200,7 @@ do {									\
 
 #define free_fifo(fifo)							\
 do {									\
-	(fifo)->mask++;							\
-	if ((fifo)->mask * sizeof(*(fifo)->data) >= KMALLOC_MAX_SIZE)	\
+	if (is_vmalloc_addr((fifo)->data))				\
 		vfree((fifo)->data);					\
 	else								\
 		kfree((fifo)->data);					\

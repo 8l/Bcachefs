@@ -396,24 +396,6 @@ EXPORT_SYMBOL(closure_lock);
 #define SET_WAITING(s, f)	do {} while (0)
 #endif
 
-void closure_init(struct closure *cl, struct closure *parent)
-{
-	memset(cl, 0, sizeof(struct closure));
-	INIT_WORK(&cl->work, NULL);
-	atomic_set(&cl->remaining, 1);
-	set_wait(cl);
-	cl->parent = parent;
-	if (parent)
-		closure_get(parent);
-
-#ifdef CONFIG_BCACHE_CLOSURE_DEBUG
-	spin_lock_irq(&closure_lock);
-	list_add(&cl->all, &closures);
-	spin_unlock_irq(&closure_lock);
-#endif
-}
-EXPORT_SYMBOL_GPL(closure_init);
-
 void closure_queue(struct closure *cl)
 {
 	struct workqueue_struct *wq = cl->wq;

@@ -480,7 +480,6 @@ struct closure {
 
 void closure_put(struct closure *cl);
 void closure_queue(struct closure *cl);
-void closure_init(struct closure *cl, struct closure *parent);
 void __closure_wake_up(closure_list_t *list);
 bool closure_wait(closure_list_t *list, struct closure *cl);
 void closure_sync(struct closure *cl);
@@ -501,16 +500,40 @@ static inline void closure_del(struct closure *cl)
 static inline void closure_del(struct closure *cl) {}
 #endif
 
+static inline void closure_get(struct closure *cl)
+{
+	atomic_inc_bug(&cl->remaining, 1);
+}
+
+static inline void __closure_init(struct closure *cl, struct closure *parent)
+{
+#if defined(CONFIG_LOCKDEP) || defined(CONFIG_DEBUG_OBJECTS_WORK)
+	INIT_WORK(&cl->work, NULL);
+#endif
+	atomic_set(&cl->remaining, 1);
+	set_wait(cl);
+	cl->parent = parent;
+	if (parent)
+		closure_get(parent);
+
+#ifdef CONFIG_BCACHE_CLOSURE_DEBUG
+	spin_lock_irq(&closure_lock);
+	list_add(&cl->all, &closures);
+	spin_unlock_irq(&closure_lock);
+#endif
+}
+
+static inline void closure_init(struct closure *cl, struct closure *parent)
+{
+	memset(cl, 0, sizeof(struct closure));
+	__closure_init(cl, parent);
+}
+
 static inline void closure_init_stack(struct closure *cl)
 {
 	memset(cl, 0, sizeof(struct closure));
 	atomic_set(&cl->remaining, 1|CLOSURE_BLOCKING|CLOSURE_STACK);
 	set_wait(cl);
-}
-
-static inline void closure_get(struct closure *cl)
-{
-	atomic_inc_bug(&cl->remaining, 1);
 }
 
 static inline void __closure_end_sleep(struct closure *cl)

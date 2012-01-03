@@ -812,8 +812,8 @@ static struct search *do_bio_hook(struct bio *bio, struct cached_dev *d)
 	memset(s, 0, sizeof(struct search));
 
 	btree_op_init(&s->op);
-	closure_init(&s->cl, NULL);
-	closure_init(&s->op.cl, &s->cl);
+	__closure_init(&s->cl, NULL);
+	__closure_init(&s->op.cl, &s->cl);
 
 	s->op.d			= d;
 	s->task			= get_current();

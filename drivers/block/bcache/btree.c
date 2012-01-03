@@ -817,7 +817,7 @@ err:
 struct btree *get_bucket(struct cache_set *c, struct bkey *k,
 			 int level, struct btree_op *op)
 {
-	int nread;
+	int i = 0, nread;
 	bool write = level <= op->lock;
 	struct btree *b;
 
@@ -850,8 +850,13 @@ retry:
 
 	b->jiffies = jiffies;
 
-	for (int i = 0; i < MAX_BSETS && b->sets[i].size; i++)
+	for (; i <= b->nsets && b->sets[i].size; i++) {
 		prefetch(b->sets[i].tree);
+		prefetch(b->sets[i].data);
+	}
+
+	for (; i <= b->nsets; i++)
+		prefetch(b->sets[i].data);
 
 	nread = closure_wait_event(&b->wait, &op->cl, atomic_read(&b->nread));
 	if (nread != 1) {

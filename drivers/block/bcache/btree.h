@@ -29,17 +29,14 @@ static inline void set_gc_sectors(struct cache_set *c)
 
 #define all_keys(b, k)		0
 
-#define for_each_key_after_filter(b, k, search, filter)			\
+#define for_each_key_filter(b, k, filter)				\
 	for (struct bset_tree *_t = (b)->sets;				\
 	     _t <= &(b)->sets[(b)->nsets];				\
 	     _t++)							\
-		for (k = bset_search(b, _t, search);			\
+		for (k = _t->data->start;				\
 		     (k = bkey_filter(b, _t->data, k, filter))		\
 			< end(_t->data);				\
 		     k = next(k))
-
-#define for_each_key_filter(b, k, filter)				\
-	for_each_key_after_filter(b, k, NULL, filter)
 
 #define for_each_key(b, k)	for_each_key_filter(b, k, all_keys)
 

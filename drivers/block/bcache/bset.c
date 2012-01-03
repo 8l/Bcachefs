@@ -824,17 +824,13 @@ struct bkey *btree_iter_next(struct btree_iter *iter)
 
 struct bkey *next_recurse_key(struct btree *b, struct bkey *search)
 {
-	struct bkey *k, *ret = NULL;
+	struct bkey *ret;
+	struct btree_iter iter;
+	btree_iter_init(b, &iter, search);
 
-	for_each_key_after_filter(b, k, search, ptr_bad) {
-		if (!ret || bkey_cmp(k, ret) < 0)
-			ret = k;
-		/* We're actually in two loops here, looping over the sorted
-		 * sets and then the keys within each set - break out of the
-		 * inner loop and still loop over the sorted sets
-		 */
-		break;
-	}
+	do
+		ret = btree_iter_next(&iter);
+	while (ret && ptr_bad(b, ret));
 
 	return ret;
 }

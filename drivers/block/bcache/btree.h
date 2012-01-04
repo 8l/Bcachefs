@@ -69,6 +69,15 @@ struct btree_op {
 		INSERT_REPLAY		= 6
 	} insert_type:8;
 
+	/*
+	 * These two fields logically belong in struct search (maybe we should
+	 * move them back?)
+	 *
+	 * cache_hit is true if the last bio split hit, i.e. if s->bio has been
+	 * submitted.
+	 *
+	 * cache_miss is true if _any_ split missed.
+	 */
 	unsigned		cache_hit:1;
 	unsigned		cache_miss:1;
 };

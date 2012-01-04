@@ -450,18 +450,28 @@ void closure_run_wait(closure_list_t *list, struct workqueue_struct *wq)
 }
 EXPORT_SYMBOL_GPL(closure_run_wait);
 
-bool closure_wait(closure_list_t *list, struct closure *c)
+bool closure_wait(closure_list_t *list, struct closure *cl)
 {
 	smp_rmb(); /* for __CLOSURE_WAITING */
 
-	if (!test_bit(__CLOSURE_WAITING, &c->flags)) {
-		SET_WAITING(c, _RET_IP_);
-		trace_bcache_start_closure_wait(c, _RET_IP_);
+	if (!test_bit(__CLOSURE_WAITING, &cl->flags)) {
+		struct closure *t;
+		SET_WAITING(cl, _RET_IP_);
+		trace_bcache_start_closure_wait(cl, _RET_IP_);
 
-		set_bit(__CLOSURE_WAITING, &c->flags);
-		closure_get(c);
-		smp_mb__after_atomic_inc(); /* for __CLOSURE_WAITING */
-		lockless_list_push(c, list->head, next);
+		set_bit(__CLOSURE_WAITING, &cl->flags);
+		closure_get(cl);
+
+		do {
+			t = ACCESS_ONCE(list->head);
+			cl->next = t;
+			/*
+			 * between setting CLOSURE_WAITING/cl->next and pushing
+			 * onto the waitlist
+			 */
+			smp_wmb();
+		} while (cmpxchg(&list->head, t, cl) != t);
+
 		return true;
 	} else
 		return false;

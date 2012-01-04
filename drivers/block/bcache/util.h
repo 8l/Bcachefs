@@ -235,22 +235,6 @@ do {									\
 		fifo_push(dest, _t);					\
 } while (0)
 
-/*
- * These are subject to the infamous aba problem...
- */
-
-#define lockless_list_push(new, list, member)				\
-	do {								\
-		(new)->member = list;					\
-	} while (cmpxchg(&(list), (new)->member, new) != (new)->member)	\
-
-#define lockless_list_pop(list, member) ({				\
-	typeof(list) _r;						\
-	do {								\
-		_r = list;						\
-	} while (_r && cmpxchg(&(list), _r, _r->member) != _r);		\
-	_r; })
-
 #define ANYSINT_MAX(t)						\
 	((((t) 1 << (sizeof(t) * 8 - 2)) - (t) 1) * (t) 2 + (t) 1)
 

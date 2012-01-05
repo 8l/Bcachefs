@@ -46,11 +46,6 @@ struct btree_op {
 	struct closure		cl;
 	struct cached_dev	*d;
 
-	/* For cache lookups, keys we took refcounts on.
-	 * Everywhere else, keys to be inserted.
-	 */
-	struct keylist		keys;
-
 	/* Journal entry we have a refcount on */
 	atomic_t		*journal;
 
@@ -67,6 +62,11 @@ struct btree_op {
 	} insert_type:8;
 
 	unsigned		cache_hit:1;
+
+	/* Anything after this point won't get zeroed in do_bio_hook() */
+
+	/* Keys to be inserted */
+	struct keylist		keys;
 };
 
 void btree_op_init_stack(struct btree_op *);

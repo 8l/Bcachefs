@@ -226,12 +226,6 @@ static bool verify(struct search *s)
 #endif
 }
 
-static void btree_op_init(struct btree_op *op)
-{
-	keylist_init(&op->keys);
-	op->lock = -1;
-}
-
 static void bio_csum(struct bio *bio, struct bkey *k)
 {
 	struct bio_vec *bv;
@@ -444,6 +438,7 @@ static void bio_insert(struct closure *cl)
 
 	/* Make sure next fn is set for error path */
 	set_closure_fn(cl, NULL, NULL);
+	keylist_init(&op->keys);
 
 	if (atomic_sub_return(bio_sectors(bio), &op->d->c->sectors_to_gc) < 0) {
 		set_gc_sectors(op->d->c);
@@ -541,6 +536,7 @@ static void bio_invalidate(struct search *s)
 		 bio_sectors(bio), (uint64_t) bio->bi_sector);
 
 	set_closure_fn(&s->op.cl, bcache_journal, bcache_wq);
+	keylist_init(&s->op.keys);
 
 	while (bio_sectors(bio)) {
 		unsigned len = min(bio_sectors(bio), 1U << 14);
@@ -566,6 +562,8 @@ again:
 		s->error	= -ENOMEM;
 		s->bio_done	= true;
 	}
+
+	keylist_free(&s->op.keys);
 
 	if (s->skip && !s->bio_done) {
 		bio_invalidate(s);
@@ -595,9 +593,6 @@ static void bio_complete(struct closure *cl)
 	struct search *s = container_of(cl, struct search, cl);
 	struct cached_dev *d = s->op.d;
 
-	BUG_ON(!keylist_empty(&s->op.keys));
-	keylist_free(&s->op.keys);
-
 	if (s->op.insert_type == INSERT_WRITE ||
 	    s->op.insert_type == INSERT_WRITEBACK)
 		up_read_non_owner(&d->writeback_lock);
@@ -612,13 +607,10 @@ static void bio_complete(struct closure *cl)
 		bio_put(s->cache_bio);
 	}
 
-	if (s->error)
-		pr_debug("error %i", s->error);
-
-	__bio_complete(s);
-
 	if (s->allocated_vec)
 		kfree(s->bio.bio.bi_io_vec);
+
+	__bio_complete(s);
 
 	closure_del(&s->cl);
 	mempool_free(s, d->c->search);
@@ -804,13 +796,13 @@ static struct search *do_bio_hook(struct bio *bio, struct cached_dev *d)
 {
 	struct bio_vec *bv;
 	struct search *s = mempool_alloc(d->c->search, GFP_NOIO);
-	memset(s, 0, sizeof(struct search));
+	memset(s, 0, offsetof(struct search, op.keys));
 
-	btree_op_init(&s->op);
 	__closure_init(&s->cl, NULL);
 	__closure_init(&s->op.cl, &s->cl);
 
 	s->op.d			= d;
+	s->op.lock		= -1;
 	s->task			= get_current();
 	s->orig_bio		= bio;
 	__do_bio_hook(s);

@@ -7,13 +7,11 @@ struct search {
 
 	struct task_struct	*task;
 
+	struct bbio		bio;
 	struct bio		*orig_bio;
 	struct bio		*cache_bio;
 	struct bio		*cache_miss;
 	unsigned		cache_bio_sectors;
-	struct bbio		bio;
-
-	struct btree_op		op;
 
 	unsigned		skip:1;
 	unsigned		bio_done:1;
@@ -23,6 +21,9 @@ struct search {
 
 	/* IO error returned to s->bio */
 	short			error;
+
+	/* Anything past op->keys won't get zeroed in do_bio_hook */
+	struct btree_op		op;
 };
 
 void cache_read_endio(struct bio *, int);

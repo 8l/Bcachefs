@@ -407,6 +407,9 @@ static void bio_insert(struct closure *cl)
 	bio->bi_private = cl;
 	bio_get(bio);
 
+	/* Make sure next fn is set for error path */
+	cl->fn = NULL;
+
 	if (atomic_sub_return(bio_sectors(bio), &op->d->c->sectors_to_gc) < 0) {
 		set_gc_sectors(op->d->c);
 		queue_work(bcache_wq, &op->d->c->gc_work);

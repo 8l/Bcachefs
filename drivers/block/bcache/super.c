@@ -212,6 +212,7 @@ read_attribute(dirty_data);
 read_attribute(bset_tree_stats);
 
 read_attribute(state);
+read_attribute(cache_read_races);
 read_attribute(writeback_keys_done);
 read_attribute(writeback_keys_failed);
 read_attribute(io_errors);
@@ -1492,6 +1493,9 @@ SHOW(__cache_set)
 	sysfs_hprint(dirty_data,	c->gc_stats.dirty);
 	sysfs_hprint(average_key_size,	average_key_size(c));
 
+	sysfs_print(cache_read_races,
+		    atomic_long_read(&c->cache_read_races));
+
 	sysfs_print(writeback_keys_done,
 		    atomic_long_read(&c->writeback_keys_done));
 	sysfs_print(writeback_keys_failed,
@@ -1755,6 +1759,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 		&sysfs_btree_cache_max_chain,
 
 		&sysfs_bset_tree_stats,
+		&sysfs_cache_read_races,
 		&sysfs_writeback_keys_done,
 		&sysfs_writeback_keys_failed,
 #ifdef CONFIG_BCACHE_DEBUG

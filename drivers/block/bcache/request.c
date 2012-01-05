@@ -638,10 +638,19 @@ void cache_read_endio(struct bio *bio, int error)
 	struct closure *cl = bio->bi_private;
 	struct search *s = container_of(cl, struct search, cl);
 
-	__bkey_put(s->op.d->c, &b->key);
+	/*
+	 * If the bucket was reused while our bio was in flight, we might have
+	 * read the wrong data. Set s->error but not error so it doesn't get
+	 * counted against the cache device, but we'll still reread the data
+	 * from the backing device.
+	 */
 
 	if (error)
 		s->error = error;
+	else if (ptr_stale(s->op.d->c, &b->key, 0)) {
+		atomic_long_inc(&s->op.d->c->cache_read_races);
+		s->error = -EINTR;
+	}
 
 	bcache_endio(s->op.d->c, bio, error, "reading from cache");
 	closure_put(cl);

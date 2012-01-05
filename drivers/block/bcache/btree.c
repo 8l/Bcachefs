@@ -2002,13 +2002,16 @@ static struct bio *cache_hit(struct btree *b, struct bio *bio,
 	for (unsigned i = 0; i < KEY_PTRS(k); i++) {
 		struct bucket *g = PTR_BUCKET(b->c, k, i);
 
-		atomic_inc(&g->pin);
-		smp_mb__after_atomic_inc();
-
-		if (ptr_stale(b->c, k, i)) {
-			atomic_dec_bug(&g->pin);
-			continue;
-		}
+		/*
+		 * The bucket we're reading from might be reused while our bio
+		 * is in flight, and we could then end up reading the wrong
+		 * data.
+		 *
+		 * We guard against this by checking (in cache_read_endio()) if
+		 * the pointer is stale again; if so, we treat it as an error
+		 * and reread from the backing device (but we don't pass that
+		 * error up anywhere).
+		 */
 
 		/* For multiple cache devices, copy only the pointer we're
 		 * actually reading from
@@ -2021,10 +2024,8 @@ static struct bio *cache_hit(struct btree *b, struct bio *bio,
 		sectors = min(sectors, __bio_max_sectors(bio, bdev, sector));
 
 		ret = bio_split_get(bio, sectors, op->d);
-		if (!ret) {
-			atomic_dec_bug(&g->pin);
+		if (!ret)
 			return ERR_PTR(-ENOMEM);
-		}
 
 		g->prio = initial_prio;
 		/* * (cache_hit_seek + cache_hit_priority

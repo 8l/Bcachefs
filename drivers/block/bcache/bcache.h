@@ -537,6 +537,7 @@ struct cache_set {
 	unsigned		congested_read_threshold_us;
 	unsigned		congested_write_threshold_us;
 
+	atomic_long_t		cache_read_races;
 	atomic_long_t		writeback_keys_done;
 	atomic_long_t		writeback_keys_failed;
 	atomic_long_t		btree_write_count;

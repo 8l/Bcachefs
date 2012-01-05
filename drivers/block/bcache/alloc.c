@@ -283,13 +283,9 @@ static bool can_invalidate_bucket(struct cache *c, struct bucket *b)
 static void invalidate_one_bucket(struct cache *c, struct bucket *b)
 {
 	inc_gen(c, b);
-	smp_mb();
-
-	if (!atomic_read(&b->pin)) {
-		b->prio = initial_prio;
-		atomic_inc(&b->pin);
-		fifo_push(&c->free_inc, b - c->buckets);
-	}
+	b->prio = initial_prio;
+	atomic_inc(&b->pin);
+	fifo_push(&c->free_inc, b - c->buckets);
 }
 
 static void invalidate_buckets_lru(struct cache *c)

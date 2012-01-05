@@ -258,7 +258,7 @@ static void dirty_endio(struct bio *bio, int error)
 		SET_KEY_DIRTY(&w->key, true);
 
 	bio_put(bio);
-	closure_put(&w->io->cl, dirty_wq);
+	closure_put(&w->io->cl);
 }
 
 static void write_dirty(struct closure *cl)
@@ -267,7 +267,7 @@ static void write_dirty(struct closure *cl)
 	struct dirty *w = io->bio.bi_private;
 
 	dirty_init(w);
-	io->cl.fn		= write_dirty_finish;
+	set_closure_fn(&io->cl, write_dirty_finish, dirty_wq);
 	io->bio.bi_rw		= WRITE|REQ_UNPLUG;
 	io->bio.bi_sector	= KEY_START(&w->key);
 	io->bio.bi_bdev		= io->d->bdev;
@@ -324,7 +324,7 @@ static void read_dirty(struct cached_dev *d)
 			return;
 
 		closure_init(&w->io->cl, NULL);
-		w->io->cl.fn		= write_dirty;
+		set_closure_fn(&w->io->cl, write_dirty, dirty_wq);
 		w->io->d		= d;
 
 		dirty_init(w);

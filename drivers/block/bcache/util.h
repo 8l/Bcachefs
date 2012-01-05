@@ -450,12 +450,12 @@ typedef struct {
 struct closure {
 	union {
 		struct {
-			long			_pad;
-			struct task_struct	*p;
+			struct workqueue_struct *wq;
+			struct task_struct	*task;
 			struct closure		*next;
 			closure_fn		*fn;
 		};
-		struct work_struct	w;
+		struct work_struct	work;
 	};
 
 	struct closure		*parent;
@@ -467,10 +467,9 @@ struct closure {
 		};
 
 #define	CLOSURE_BLOCK		0
-#define CLOSURE_NOQUEUE		1
-#define __CLOSURE_STACK		2
-#define	__CLOSURE_WAITING	3
-#define	__CLOSURE_SLEEPING	4
+#define __CLOSURE_STACK		1
+#define	__CLOSURE_WAITING	2
+#define	__CLOSURE_SLEEPING	3
 		unsigned long		flags;
 	};
 
@@ -483,10 +482,10 @@ struct closure {
 #endif
 };
 
-void closure_put(struct closure *s, struct workqueue_struct *wq);
-void closure_queue(struct closure *c, struct workqueue_struct *wq);
+void closure_put(struct closure *s);
+void closure_queue(struct closure *c);
 void __closure_init(struct closure *c, struct closure *parent, bool onstack);
-void closure_run_wait(closure_list_t *list, struct workqueue_struct *wq);
+void closure_run_wait(closure_list_t *list);
 bool closure_wait(closure_list_t *list, struct closure *c);
 void closure_sync(struct closure *c);
 void __closure_sleep(struct closure *c);
@@ -524,7 +523,7 @@ static inline void closure_get(struct closure *c)
 	atomic_inc_bug(&c->remaining, 1);
 }
 
-#define __closure_wait_on(list, wq, c, condition, block)		\
+#define __closure_wait_on(list, c, condition, block)			\
 ({									\
 	__label__ out;							\
 	typeof(condition) ret;						\
@@ -537,7 +536,7 @@ static inline void closure_get(struct closure *c)
 			schedule();					\
 		}							\
 	}								\
-	closure_run_wait(list, wq);					\
+	closure_run_wait(list);						\
 	if (block) {							\
 		__set_current_state(TASK_RUNNING);			\
 		clear_bit(__CLOSURE_SLEEPING, &(c)->flags);		\
@@ -545,20 +544,27 @@ static inline void closure_get(struct closure *c)
 out:	ret;								\
 })
 
-#define closure_wait_on(list, wq, c, condition)				\
-	__closure_wait_on(list, wq, c, condition,			\
+#define closure_wait_on(list, c, condition)				\
+	__closure_wait_on(list, c, condition,				\
 			  test_bit(CLOSURE_BLOCK, &(c)->flags))
 
-#define closure_wait_on_async(list, wq, c, condition)			\
-	__closure_wait_on(list, wq, c, condition, false)
+#define closure_wait_on_async(list, c, condition)			\
+	__closure_wait_on(list, c, condition, false)
 
-#define return_f(_c, _f, ...)						\
+static inline void set_closure_fn(struct closure *cl, closure_fn *fn,
+				  struct workqueue_struct *wq)
+{
+	cl->fn = fn;
+	cl->wq = wq;
+}
+
+#define return_f(_cl, _fn, _wq, ...)					\
 do {									\
-	BUG_ON(!(_c) || object_is_on_stack(_c));			\
-	clear_bit(CLOSURE_BLOCK, &(_c)->flags);				\
-	(_c)->fn = _f;							\
+	BUG_ON(!(_cl) || object_is_on_stack(_cl));			\
+	clear_bit(CLOSURE_BLOCK, &(_cl)->flags);			\
+	set_closure_fn(_cl, _fn, _wq);					\
 	smp_mb__before_atomic_dec();					\
-	closure_put(_c, current->bio_list ? bcache_wq : NULL);		\
+	closure_put(_cl);						\
 	return __VA_ARGS__;						\
 } while (0)
 

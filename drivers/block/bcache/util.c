@@ -399,7 +399,7 @@ EXPORT_SYMBOL(closure_lock);
 void __closure_init(struct closure *c, struct closure *parent, bool onstack)
 {
 	memset(c, 0, sizeof(struct closure));
-	__INIT_WORK(&c->w, NULL, onstack);
+	__INIT_WORK(&c->work, NULL, onstack);
 	atomic_set(&c->remaining, 1);
 	set_wait(c);
 	c->parent = parent;
@@ -416,7 +416,19 @@ void __closure_init(struct closure *c, struct closure *parent, bool onstack)
 }
 EXPORT_SYMBOL_GPL(__closure_init);
 
-void closure_put(struct closure *c, struct workqueue_struct *wq)
+void closure_queue(struct closure *cl)
+{
+	struct workqueue_struct *wq = cl->wq;
+	if (wq) {
+		cl->work.data = (atomic_long_t) WORK_DATA_INIT();
+		INIT_LIST_HEAD(&cl->work.entry);
+		BUG_ON(!queue_work(wq, &cl->work));
+	} else
+		cl->fn(cl);
+}
+EXPORT_SYMBOL_GPL(closure_queue);
+
+void closure_put(struct closure *c)
 {
 	bool sleeping;
 	int r;
@@ -429,7 +441,7 @@ again:
 
 	BUG_ON(r < 0);
 	if (r == 1 && sleeping)
-		wake_up_process(c->p);
+		wake_up_process(c->task);
 	if (r)
 		return;
 
@@ -448,24 +460,11 @@ again:
 
 	atomic_set(&c->remaining, 1);
 	set_wait(c);
-
-	if (!wq || test_bit(CLOSURE_NOQUEUE, &c->flags)) {
-		clear_bit(CLOSURE_NOQUEUE, &c->flags);
-		c->fn(c);
-	} else {
-		INIT_LIST_HEAD(&c->w.entry);
-		BUG_ON(!queue_work(wq, &c->w));
-	}
+	closure_queue(c);
 }
 EXPORT_SYMBOL_GPL(closure_put);
 
-void closure_queue(struct closure *c, struct workqueue_struct *wq)
-{
-	INIT_LIST_HEAD(&c->w.entry);
-	BUG_ON(!queue_work(wq, &c->w));
-}
-
-void closure_run_wait(closure_list_t *list, struct workqueue_struct *wq)
+void closure_run_wait(closure_list_t *list)
 {
 	struct closure *c, *next;
 	smp_mb();
@@ -474,7 +473,7 @@ void closure_run_wait(closure_list_t *list, struct workqueue_struct *wq)
 		SET_WAITING(c, 0);
 
 		clear_bit(__CLOSURE_WAITING, &c->flags);
-		closure_put(c, wq);
+		closure_put(c);
 	}
 }
 EXPORT_SYMBOL_GPL(closure_run_wait);
@@ -508,7 +507,7 @@ EXPORT_SYMBOL_GPL(closure_wait);
 
 void __closure_sleep(struct closure *c)
 {
-	c->p = current;
+	c->task = current;
 	set_current_state(TASK_UNINTERRUPTIBLE);
 	smp_wmb();
 	set_bit(__CLOSURE_SLEEPING, &c->flags);

@@ -9,7 +9,7 @@ static void journal_read_endio(struct bio *bio, int error)
 {
 	struct closure *cl = bio->bi_private;
 	bio_put(bio);
-	closure_put(cl, bcache_wq);
+	closure_put(cl);
 }
 
 static int journal_read_bucket(struct cache *ca, struct list_head *list,
@@ -396,7 +396,7 @@ static void journal_alloc(struct cache_set *c)
 		c->journal.blocks_free = c->sb.bucket_size >> c->block_bits;
 
 	if (!journal_full(&c->journal))
-		closure_run_wait(&c->journal.wait, bcache_wq);
+		closure_run_wait(&c->journal.wait);
 }
 
 #define last_seq(j)	((j)->seq - fifo_used(&(j)->pin) + 1)
@@ -477,7 +477,7 @@ static void journal_write_endio(struct bio *bio, int error)
 	if (!atomic_dec_and_test(&w->c->journal.io))
 		return;
 
-	closure_run_wait(&w->wait, bcache_wq);
+	closure_run_wait(&w->wait);
 	/* atomic_set() unlocks this journal_write */
 	smp_mb();
 	atomic_set(&w->c->journal.io, -1);
@@ -621,7 +621,7 @@ void bcache_journal(struct closure *cl)
 		spin_unlock(&c->journal.lock);
 
 		btree_flush_write(c);
-		return_f(cl, bcache_journal);
+		return_f(cl, bcache_journal, bcache_wq);
 	}
 
 	w = c->journal.cur;
@@ -640,7 +640,7 @@ void bcache_journal(struct closure *cl)
 		BUG_ON(!closure_wait(&w->wait, cl));
 
 		journal_try_write(c);
-		return_f(cl, bcache_journal);
+		return_f(cl, bcache_journal, bcache_wq);
 	}
 
 	memcpy(end(w->data), op->keys.list, n * sizeof(uint64_t));

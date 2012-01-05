@@ -372,7 +372,7 @@ static void write_bdev_super_endio(struct bio *bio, int error)
 	/* XXX: error checking */
 
 	if (d->sb_writer)
-		closure_put(d->sb_writer, bcache_wq);
+		closure_put(d->sb_writer);
 	d->sb_writer = NULL;
 	up(&d->sb_write);
 }
@@ -437,7 +437,7 @@ static void write_super_endio(struct bio *bio, int error)
 	struct cache *c = bio->bi_private;
 
 	count_io_errors(c, error, "writing superblock");
-	closure_put(c->set->sb_writer, bcache_wq);
+	closure_put(c->set->sb_writer);
 }
 
 void bcache_write_super(struct cache_set *c, struct closure *cl)
@@ -478,7 +478,7 @@ static void uuid_endio(struct bio *bio, int error)
 	bcache_endio(container_of(bio->bi_private, struct cache_set,
 				  uuid_write),
 		     bio, error, "accessing uuids");
-	closure_put(bio->bi_private, bcache_wq);
+	closure_put(bio->bi_private);
 }
 
 static void uuid_io(struct cache_set *c, unsigned long rw,
@@ -514,7 +514,7 @@ static void uuid_io(struct cache_set *c, unsigned long rw,
 			pr_debug("Slot %zi: %pU: %s: 1st: %u last: %u inv: %u",
 				 u - c->uuids, u->uuid, u->label,
 				 u->first_reg, u->last_reg, u->invalidated);
-	return_f(cl, NULL);
+	return_f(cl, NULL, NULL);
 }
 
 static int uuid_write(struct cache_set *c)
@@ -548,7 +548,7 @@ static void prio_endio(struct bio *bio, int error)
 	count_io_errors(c, error, "writing priorities");
 
 	bio_put(bio);
-	closure_put(&c->prio, system_wq);
+	closure_put(&c->prio);
 }
 
 static void prio_io(struct cache *c, uint64_t bucket, unsigned long rw)
@@ -587,13 +587,13 @@ static void prio_write_done(struct closure *cl)
 	c->prio_alloc = 0;
 	c->need_save_prio = 0;
 
-	c->prio.fn = NULL;
-	closure_put(&c->prio, NULL);
+	set_closure_fn(&c->prio, NULL, NULL);
+	closure_put(&c->prio);
 
 	atomic_set(&c->prio_written, 1);
 	mutex_unlock(&c->set->bucket_lock);
 
-	closure_run_wait(&c->set->bucket_wait, bcache_wq);
+	closure_run_wait(&c->set->bucket_wait);
 }
 
 static void prio_write_journal(struct closure *cl)
@@ -607,7 +607,7 @@ static void prio_write_journal(struct closure *cl)
 	c->prio_start = c->prio_next[0];
 	bcache_journal_meta(c->set, cl);
 
-	return_f(cl, prio_write_done);
+	return_f(cl, prio_write_done, system_wq);
 }
 
 static void prio_write_bucket(struct closure *cl)
@@ -618,10 +618,11 @@ static void prio_write_bucket(struct closure *cl)
 
 	int i = c->prio_write++;
 
-	if (c->prio_write != prio_buckets(c))
+	if (c->prio_write != prio_buckets(c)) {
 		p->next_bucket = c->prio_next[c->prio_write];
-	else
-		cl->fn = prio_write_journal;
+		set_closure_fn(&c->prio, prio_write_bucket, system_wq);
+	} else
+		set_closure_fn(&c->prio, prio_write_journal, system_wq);
 
 	for (struct bucket *b = c->buckets + i * prios_per_bucket(c);
 	     b < c->buckets + c->sb.nbuckets && d < end;
@@ -647,7 +648,7 @@ void prio_write(struct cache *c, struct closure *cl)
 		b->disk_gen = b->gen;
 
 	closure_init(&c->prio, cl);
-	c->prio.fn = prio_write_bucket;
+	set_closure_fn(&c->prio, prio_write_bucket, system_wq);
 
 	c->prio_write = 0;
 	c->disk_buckets->seq++;
@@ -656,7 +657,7 @@ void prio_write(struct cache *c, struct closure *cl)
 			&c->meta_sectors_written);
 
 	atomic_set(&c->prio_written, -1);
-	closure_put(&c->prio, system_wq);
+	closure_put(&c->prio);
 
 	pr_debug("free %zu, free_inc %zu, unused %zu", fifo_used(&c->free),
 		 fifo_used(&c->free_inc), fifo_used(&c->unused));
@@ -682,7 +683,7 @@ static int prio_read(struct cache *c, uint64_t bucket)
 
 			/* XXX: doesn't get error handling right with splits */
 			if (!test_bit(BIO_UPTODATE, &c->prio_bio->bi_flags))
-				return_f(&c->prio, NULL, -1);
+				return_f(&c->prio, NULL, NULL, -1);
 
 			if (p->csum != crc64(&p->magic, bucket_bytes(c) - 8))
 				printk(KERN_WARNING "bcache: "
@@ -700,7 +701,7 @@ static int prio_read(struct cache *c, uint64_t bucket)
 		b->gen = b->disk_gen = b->last_gc = b->gc_gen = d->gen;
 	}
 
-	return_f(&c->prio, NULL, 0);
+	return_f(&c->prio, NULL, NULL, 0);
 }
 
 /* Backing device - sysfs */
@@ -1605,7 +1606,7 @@ static void cache_set_free(struct kobject *kobj)
 	 */
 	for_each_cache(ca, c)
 		if (ca)
-			closure_wait_on(&c->bucket_wait, bcache_wq, &op.cl,
+			closure_wait_on(&c->bucket_wait, &op.cl,
 					atomic_read(&ca->prio_written) >= 0);
 
 	closure_sync(&op.cl);

@@ -143,7 +143,7 @@ void btree_verify(struct btree *b, struct bset *new)
 	if (!b->c->verify)
 		return;
 
-	closure_wait_on(&b->wait, bcache_wq, &cl, atomic_read(&b->io) == -1);
+	closure_wait_on(&b->wait, &cl, atomic_read(&b->io) == -1);
 
 	mutex_lock(&b->c->verify_lock);
 

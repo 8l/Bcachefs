@@ -428,13 +428,13 @@ static void bio_insert_endio(struct bio *bio, int error)
 			s->error = error;
 
 		if (op->insert_type == INSERT_WRITE)
-			cl->fn = bio_insert_error;
+			set_closure_fn(cl, bio_insert_error, bcache_wq);
 		else
-			cl->fn = NULL;
+			set_closure_fn(cl, NULL, NULL);
 	}
 
 	bcache_endio(op->d->c, bio, error, "writing data to cache");
-	closure_put(cl, bcache_wq);
+	closure_put(cl);
 }
 
 static void bio_insert(struct closure *cl)
@@ -449,7 +449,7 @@ static void bio_insert(struct closure *cl)
 	bio_get(bio);
 
 	/* Make sure next fn is set for error path */
-	cl->fn = NULL;
+	set_closure_fn(cl, NULL, NULL);
 
 	if (atomic_sub_return(bio_sectors(bio), &op->d->c->sectors_to_gc) < 0) {
 		set_gc_sectors(op->d->c);
@@ -464,7 +464,7 @@ static void bio_insert(struct closure *cl)
 		if (keylist_realloc(&op->keys,
 				    1 + (op->d->data_csum ? 1 : 0),
 				    op->d->c))
-			return_f(cl, bcache_journal);
+			return_f(cl, bcache_journal, bcache_wq);
 
 		k = op->keys.top;
 
@@ -477,7 +477,7 @@ static void bio_insert(struct closure *cl)
 		n = bio_split_get(bio, KEY_SIZE(k), op->d);
 		if (!n) {
 			__bkey_put(op->d->c, k);
-			return_f(cl, bio_insert);
+			return_f(cl, bio_insert, bcache_wq);
 		}
 
 		if (op->insert_type == INSERT_WRITEBACK)
@@ -497,7 +497,7 @@ static void bio_insert(struct closure *cl)
 			s->bio_done = true;
 		}
 
-		cl->fn = bcache_journal;
+		set_closure_fn(cl, bcache_journal, bcache_wq);
 		n->bi_rw |= REQ_WRITE;
 
 		trace_bcache_cache_insert(n, n->bi_sector, n->bi_bdev);
@@ -518,7 +518,7 @@ err:
 		 */
 		s->bio_done	= true;
 		s->error	= -ENOMEM;
-		cl->fn		= NULL;
+		set_closure_fn(cl, NULL, NULL);
 		break;
 	case INSERT_WRITE:
 		s->skip		= true;
@@ -532,7 +532,7 @@ err:
 	 * bio_endio()
 	 */
 	bio_put(bio);
-	closure_put(cl, bcache_wq);
+	closure_put(cl);
 
 	pr_debug("error for %s, %i/%i sectors done, bi_sector %llu",
 		 insert_type(op), sectors - bio_sectors(bio), sectors,
@@ -546,7 +546,7 @@ static void bio_invalidate(struct search *s)
 	pr_debug("invalidating %i sectors from %llu",
 		 bio_sectors(bio), (uint64_t) bio->bi_sector);
 
-	s->op.cl.fn = bcache_journal;
+	set_closure_fn(&s->op.cl, bcache_journal, bcache_wq);
 
 	while (bio_sectors(bio)) {
 		unsigned len = min(bio_sectors(bio), 1U << 14);
@@ -579,7 +579,7 @@ again:
 	}
 
 	return_f(cl, !s->bio_done
-		 ? bio_insert : NULL);
+		 ? bio_insert : NULL, bcache_wq);
 }
 
 /* Process a bio */
@@ -642,7 +642,7 @@ static void request_endio(struct bio *bio, int error)
 	}
 
 	bio_put(bio);
-	closure_put(cl, bcache_wq);
+	closure_put(cl);
 }
 
 void cache_read_endio(struct bio *bio, int error)
@@ -657,7 +657,7 @@ void cache_read_endio(struct bio *bio, int error)
 		s->error = error;
 
 	bcache_endio(s->op.d->c, bio, error, "reading from cache");
-	closure_put(cl, NULL);
+	closure_put(cl);
 }
 
 int get_congested(struct cache_set *c)
@@ -919,7 +919,7 @@ static void request_read_error(struct closure *cl)
 		closure_bio_submit(&s->bio.bio, &s->cl, s->op.d->c->bio_split);
 	}
 
-	return_f(cl, bio_complete);
+	return_f(cl, bio_complete, NULL);
 }
 
 static void do_verify(struct search *s)
@@ -1044,7 +1044,7 @@ static void request_read_done(struct closure *cl)
 		bio_insert(&s->op.cl);
 	}
 
-	return_f(cl, bio_complete);
+	return_f(cl, bio_complete, NULL);
 }
 
 static void request_read_done_bh(struct closure *cl)
@@ -1053,17 +1053,17 @@ static void request_read_done_bh(struct closure *cl)
 
 	if (!s->lookup_done) {
 		closure_init(&s->op.cl, &s->cl);
-		return_f(&s->op.cl, __request_read);
+		return_f(&s->op.cl, __request_read, bcache_wq);
 	}
 
-	if (s->error) {
-		cl->fn = request_read_error;
-		closure_queue(cl, bcache_wq);
-	} else if (s->cache_bio || verify(s)) {
-		cl->fn = request_read_done;
-		closure_queue(cl, bcache_wq);
-	} else
-		bio_complete(cl);
+	if (s->error)
+		set_closure_fn(cl, request_read_error, bcache_wq);
+	else if (s->cache_bio || verify(s))
+		set_closure_fn(cl, request_read_done, bcache_wq);
+	else
+		set_closure_fn(cl, bio_complete, NULL);
+
+	closure_queue(cl);
 }
 
 static void request_resubmit(struct closure *cl)
@@ -1073,7 +1073,7 @@ static void request_resubmit(struct closure *cl)
 	struct bio *bio = s->cache_bio ?: &s->bio.bio;
 
 	closure_bio_submit(bio, &s->cl, op->d->c->bio_split);
-	return_f(cl, NULL);
+	return_f(cl, NULL, NULL);
 }
 
 static void __request_read(struct closure *cl)
@@ -1086,12 +1086,12 @@ static void __request_read(struct closure *cl)
 	int ret = btree_root(search_recurse, op->d->c, op, bio, &reada);
 
 	if (ret == -ENOMEM) {
-		closure_put(&s->cl, NULL);
-		return_f(cl, NULL);
+		closure_put(&s->cl);
+		return_f(cl, NULL, NULL);
 	}
 
 	if (ret == -EAGAIN)
-		return_f(cl, __request_read);
+		return_f(cl, __request_read, bcache_wq);
 
 	s->lookup_done = true;
 
@@ -1111,15 +1111,15 @@ static void __request_read(struct closure *cl)
 
 		bio = s->cache_bio ?: &s->bio.bio;
 		if (closure_bio_submit(bio, &s->cl, op->d->c->bio_split))
-			return_f(cl, request_resubmit);
+			return_f(cl, request_resubmit, bcache_wq);
 	}
 
-	return_f(cl, NULL);
+	return_f(cl, NULL, NULL);
 }
 
 static void request_read(struct search *s)
 {
-	s->cl.fn		= request_read_done_bh;
+	set_closure_fn(&s->cl, request_read_done_bh, NULL);
 	s->op.insert_type	= INSERT_READ;
 
 	__request_read(&s->op.cl);
@@ -1142,7 +1142,7 @@ static void request_invalidate_resubmit(struct closure *cl)
 	struct bio *bio = &s->bio.bio;
 
 	closure_bio_submit(bio, &s->cl, op->d->c->bio_split);
-	return_f(cl, bcache_journal);
+	return_f(cl, bcache_journal, bcache_wq);
 }
 
 static void request_write_resubmit(struct closure *cl)
@@ -1159,8 +1159,9 @@ static void request_write(struct search *s)
 {
 	struct bio *bio = &s->bio.bio;
 
-	s->cl.fn		= bio_complete;
-	s->op.insert_type	= INSERT_WRITE;
+	set_closure_fn(&s->cl, bio_complete, NULL);
+	s->op.insert_type = INSERT_WRITE;
+
 	down_read_non_owner(&s->op.d->writeback_lock);
 
 	if (bcache_in_writeback(s->op.d, bio->bi_sector, bio_sectors(bio))) {
@@ -1181,10 +1182,12 @@ skip:		s->cache_bio = s->orig_bio;
 			trace_bcache_write_skip(s->orig_bio);
 			if (closure_bio_submit(bio, &s->cl,
 					       s->op.d->c->bio_split))
-				return_f(&s->op.cl, request_invalidate_resubmit);
+				return_f(&s->op.cl,
+					 request_invalidate_resubmit,
+					 bcache_wq);
 		}
 
-		closure_put(&s->op.cl, bcache_wq);
+		closure_put(&s->op.cl);
 		return;
 	}
 
@@ -1201,11 +1204,11 @@ skip:		s->cache_bio = s->orig_bio;
 		__bio_clone(s->cache_bio, bio);
 		trace_bcache_writethrough(s->orig_bio);
 		if (closure_bio_submit(bio, &s->cl, s->op.d->c->bio_split))
-			return_f(&s->op.cl, request_write_resubmit);
+			return_f(&s->op.cl, request_write_resubmit, bcache_wq);
 	} else {
 		trace_bcache_writeback(s->orig_bio);
 		s->cache_bio = bio;
-		closure_put(&s->cl, bcache_wq);
+		closure_put(&s->cl);
 	}
 
 	bio_insert(&s->op.cl);
@@ -1236,7 +1239,7 @@ static void bio_passthrough_endio(struct bio *bio, int error)
 		clear_bit(BIO_UPTODATE, &s->bio->bi_flags);
 
 	bio_put(bio);
-	closure_put(cl, NULL);
+	closure_put(cl);
 }
 
 static void bio_passthrough_submit(struct closure *cl)
@@ -1245,12 +1248,12 @@ static void bio_passthrough_submit(struct closure *cl)
 						 cl);
 	struct bio *bio = s->bio, *n;
 
-	s->cl.fn = bio_passthrough_done;
+	set_closure_fn(&s->cl, bio_passthrough_done, NULL);
 
 	do {
 		n = bio_split_get(bio, bio_max_sectors(bio), s->d);
 		if (!n)
-			return_f(&s->cl, bio_passthrough_submit);
+			return_f(&s->cl, bio_passthrough_submit, bcache_wq);
 
 		trace_bcache_passthrough(n);
 		generic_make_request(n);

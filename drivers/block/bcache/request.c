@@ -845,24 +845,26 @@ nonrecoverable:
 
 /* Process reads */
 
-static void setup_cache_miss(struct search *s,
-			     struct bio *last_bio,
-			     sector_t reada)
+static void setup_cache_miss(struct search *s, sector_t reada)
 {
 	unsigned sectors = 0;
+	struct bio *bio = &s->bio.bio;
 
-	if (reada > bio_end(last_bio) &&
-	    !(last_bio->bi_rw & REQ_RAHEAD) &&
-	    !(last_bio->bi_rw & REQ_META) &&
+	reada = min(reada, bio->bi_sector + (s->op.d->readahead >> 9));
+
+	if (reada > bio_end(bio) &&
+	    !(bio->bi_rw & REQ_RAHEAD) &&
+	    !(bio->bi_rw & REQ_META) &&
 	    s->op.d->c->gc_stats.in_use < CUTOFF_CACHE_READA)
-		sectors = min_t(unsigned, reada - bio_end(last_bio),
-				__bio_max_sectors(last_bio,
-						  last_bio->bi_bdev,
-						  bio_end(last_bio)));
+		sectors = min_t(unsigned, reada - bio_end(bio),
+				__bio_max_sectors(bio,
+						  bio->bi_bdev,
+						  bio_end(bio)));
+
 	if (sectors)
 		atomic_inc(&s->op.d->cache_readaheads);
 
-	sectors += bio_sectors(last_bio);
+	sectors += bio_sectors(bio);
 	s->cache_bio_sectors = sectors;
 
 	s->cache_bio = bbio_kmalloc(GFP_NOIO,
@@ -870,8 +872,8 @@ static void setup_cache_miss(struct search *s,
 	if (!s->cache_bio)
 		return;
 
-	s->cache_bio->bi_sector	= last_bio->bi_sector;
-	s->cache_bio->bi_bdev	= last_bio->bi_bdev;
+	s->cache_bio->bi_sector	= bio->bi_sector;
+	s->cache_bio->bi_bdev	= bio->bi_bdev;
 	s->cache_bio->bi_size	= sectors << 9;
 
 	s->cache_bio->bi_end_io	= request_endio;
@@ -1102,20 +1104,16 @@ static void __request_read(struct closure *cl)
 
 	atomic_inc(&op->d->stats[s->skip][op->cache_miss]);
 #ifdef CONFIG_CGROUP_BCACHE
-	{
-		struct bcache_cgroup *cg = bio_to_cgroup(s->orig_bio);
-		atomic_inc(&cg->stats[s->skip][op->cache_miss]);
-	}
+	atomic_inc(&bio_to_cgroup(s->orig_bio)->stats[s->skip][op->cache_miss]);
 #endif
+
+	if (!op->cache_hit && !s->skip)
+		setup_cache_miss(s, reada);
+
 	if (!op->cache_hit) {
-		if (!s->skip) {
-			reada = min_t(uint64_t, reada,
-				      bio->bi_sector + (op->d->readahead >> 9));
-			setup_cache_miss(s, bio, reada);
-		}
+		trace_bcache_cache_miss(s->orig_bio);
 
 		bio = s->cache_bio ?: &s->bio.bio;
-		trace_bcache_cache_miss(s->orig_bio);
 		if (closure_bio_submit(bio, &s->cl, op->d->c->bio_split))
 			return_f(cl, request_resubmit);
 	}

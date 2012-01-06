@@ -20,6 +20,12 @@ static const char invalid_uuid[] = {
 	0xc8, 0x50, 0xfc, 0x5e, 0xcb, 0x16, 0xcd, 0x99
 };
 
+static const char * const cache_replacement_policies[] = {
+	"lru",
+	"fifo",
+	NULL
+};
+
 struct uuid_entry {
 	uint8_t		uuid[16];
 	uint8_t		label[32];
@@ -1989,11 +1995,6 @@ err:
 
 /* Cache device */
 
-const char * const cache_replacement_policies[] = {
-	"lru",
-	"fifo"
-};
-
 SHOW(__cache)
 {
 	struct cache *c = container_of(kobj, struct cache, kobj);
@@ -2014,20 +2015,9 @@ SHOW(__cache)
 
 	sysfs_print(freelist_percent, c->free.size * 100 / c->sb.nbuckets);
 
-	if (attr == &sysfs_cache_replacement_policy) {
-		char *out = buf;
-
-		for (unsigned i = 0;
-		     i < ARRAY_SIZE(cache_replacement_policies);
-		     i++)
-			out += sprintf(out,
-				       i == c->cache_replacement_policy
-				       ? "[%s] " : "%s ",
-				       cache_replacement_policies[i]);
-
-		out[-1] = '\n';
-		return out - buf;
-	}
+	if (attr == &sysfs_cache_replacement_policy)
+		return sprint_string_list(buf, cache_replacement_policies,
+					  c->cache_replacement_policy);
 
 	if (attr == &sysfs_priority_stats) {
 		int cmp(const void *l, const void *r)
@@ -2117,30 +2107,19 @@ STORE(__cache)
 	}
 
 	if (attr == &sysfs_cache_replacement_policy) {
-		unsigned i;
-		char *s, *d = kstrndup(buf, PAGE_SIZE - 1, GFP_KERNEL);
-		if (!d)
-			return -ENOMEM;
+		ssize_t v = read_string_list(buf, cache_replacement_policies);
 
-		s = strim(d);
+		if (v < 0)
+			return v;
 
-		for (i = 0; i < ARRAY_SIZE(cache_replacement_policies); i++)
-			if (!strcmp(cache_replacement_policies[i], s))
-				break;
-
-		kfree(d);
-
-		if (i == ARRAY_SIZE(cache_replacement_policies))
-			return -EINVAL;
-
-		mutex_lock(&c->set->bucket_lock);
-		c->cache_replacement_policy = i;
-		mutex_unlock(&c->set->bucket_lock);
-
-		if (i != CACHE_REPLACEMENT(&c->sb)) {
-			SET_CACHE_REPLACEMENT(&c->sb, i);
+		if ((unsigned) v != CACHE_REPLACEMENT(&c->sb)) {
+			SET_CACHE_REPLACEMENT(&c->sb, v);
 			bcache_write_super(c->set, &cl);
 		}
+
+		mutex_lock(&c->set->bucket_lock);
+		c->cache_replacement_policy = v;
+		mutex_unlock(&c->set->bucket_lock);
 	}
 
 	if (attr == &sysfs_freelist_percent) {

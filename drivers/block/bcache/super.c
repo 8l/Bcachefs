@@ -1562,33 +1562,52 @@ static void cache_set_free(struct kobject *kobj)
 
 	lockdep_assert_held(&register_lock);
 
+	/* Wait for/cancel any pending gc: we take gc_lock so that gc can't
+	 * requeue itself while we're canceling the work
+	 * Only safe (?) because gc_work uses trylock
+	 */
+	mutex_lock(&c->gc_lock);
+	cancel_work_sync(&c->gc_work);
+	mutex_unlock(&c->gc_lock);
+
 	if (!IS_ERR_OR_NULL(c->root))
 		list_add(&c->root->lru, &c->lru);
 
+	/* Should skip this if we're unregistering because of an error */
 	list_for_each_entry(b, &c->lru, lru)
 		if (b->write)
 			btree_write(b, true, &op);
 
+	/*
+	 * The if (ca) is a hack - when we finish multiple cache device support
+	 * we'll need a more general solution.
+	 */
 	for_each_cache(ca, c)
 		if (ca)
 			closure_wait_on(&c->bucket_wait, bcache_wq, &op.cl,
 					atomic_read(&ca->prio_written) >= 0);
 
+	closure_sync(&op.cl);
+
+	/*
+	 * bcache_journal_wait() calls journal_try_write() - should do the wait
+	 * without the write if unregistering because of an error
+	 */
 	if (c->journal.cur)
 		bcache_journal_wait(c, &op.cl);
 
 	closure_sync(&op.cl);
 
-	cancel_work_sync(&c->gc_work);
 	cancel_work_sync(&c->journal.work);
-
-	for_each_cache(ca, c)
-		if (ca)
-			kobject_put(&ca->kobj);
 
 	free_open_buckets(c);
 	bcache_btree_cache_free(c);
 	free_journal(c);
+
+	/* Don't free cache until no io could be pending */
+	for_each_cache(ca, c)
+		if (ca)
+			kobject_put(&ca->kobj);
 
 	free_pages((unsigned long) c->uuids, ilog2(bucket_pages(c)));
 	free_pages((unsigned long) c->sort, ilog2(bucket_pages(c)));
@@ -1596,6 +1615,8 @@ static void cache_set_free(struct kobject *kobj)
 	kfree(c->fill_iter);
 	if (c->bio_split)
 		bioset_free(c->bio_split);
+	if (c->bio_meta)
+		mempool_destroy(c->bio_meta);
 	if (c->search)
 		mempool_destroy(c->search);
 
@@ -2180,15 +2201,16 @@ static void cache_free(struct kobject *kobj)
 		bio_put(c->uuid_bio);
 
 	free_pages((unsigned long) c->disk_buckets, ilog2(bucket_pages(c)));
+	kfree(c->prio_buckets);
 	vfree(c->buckets);
 
 	if (c->discard_page)
 		put_page(c->discard_page);
 
 	free_heap(&c->heap);
+	free_fifo(&c->unused);
 	free_fifo(&c->free_inc);
 	free_fifo(&c->free);
-	free_fifo(&c->unused);
 
 	if (c->sb_bio.bi_inline_vecs[0].bv_page)
 		put_page(c->sb_bio.bi_io_vec[0].bv_page);

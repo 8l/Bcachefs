@@ -476,6 +476,7 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 static void mca_data_free(struct btree *b)
 {
 	struct bset_tree *t = b->sets;
+	BUG_ON(atomic_read(&b->io) != -1);
 
 	if (bset_prev_bytes(b) < PAGE_SIZE)
 		kfree(t->prev);
@@ -627,6 +628,8 @@ static int bcache_shrink_buckets(struct shrinker *shrink,
 void bcache_btree_cache_free(struct cache_set *c)
 {
 	struct btree *b;
+	struct closure cl;
+	closure_init_stack(&cl);
 
 	if (c->shrink.list.next)
 		unregister_shrinker(&c->shrink);
@@ -638,8 +641,16 @@ void bcache_btree_cache_free(struct cache_set *c)
 		list_move_tail(&c->verify_data->lru, &c->lru);
 #endif
 
-	while (!list_empty(&c->lru))
-		mca_data_free(list_first_entry(&c->lru, struct btree, lru));
+	while (!list_empty(&c->lru)) {
+		b = list_first_entry(&c->lru, struct btree, lru);
+
+		if (b->write)
+			btree_complete_write(b, b->write);
+		b->write = NULL;
+
+		closure_wait_event(&b->wait, &cl, atomic_read(&b->io) == -1);
+		mca_data_free(b);
+	}
 
 	while (!list_empty(&c->freed)) {
 		b = list_first_entry(&c->freed, struct btree, lru);
@@ -1411,6 +1422,11 @@ out:
 static void btree_gc_work(struct work_struct *w)
 {
 	struct cache_set *c = container_of(w, struct cache_set, gc_work);
+
+	/*
+	 * The trylock here isn't just for performance - it's necessary so that
+	 * cache_set_unregister can safely make sure there isn't a pending gc
+	 */
 	if (!mutex_trylock(&c->gc_lock))
 		return;
 

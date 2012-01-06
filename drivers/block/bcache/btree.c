@@ -380,7 +380,7 @@ void btree_read_work(struct work_struct *w)
 
 	__btree_sort(b, 0, NULL, iter, true);
 
-	pr_latency(b->expires, "btree_read");
+	pr_latency(b->wait_time, "btree_read");
 
 	smp_wmb(); /* b->nread is our write lock */
 	atomic_set(&b->nread, 1);
@@ -442,8 +442,6 @@ void btree_read(struct btree *b)
 
 static void btree_complete_write(struct btree *b, struct btree_write *w)
 {
-	closure_run_wait(&w->wait, bcache_wq);
-
 	if (w->prio_blocked &&
 	    !atomic_sub_return(w->prio_blocked, &b->c->prio_blocked))
 		closure_run_wait(&b->c->bucket_wait, bcache_wq);
@@ -458,7 +456,10 @@ static void btree_complete_write(struct btree *b, struct btree_write *w)
 	if (w->owner)
 		closure_put(w->owner, bcache_wq);
 
-	memset(w, 0, sizeof(struct btree_write));
+	w->nofree	= 0;
+	w->prio_blocked	= 0;
+	w->journal	= NULL;
+	w->owner	= NULL;
 }
 
 static void btree_write_endio(struct bio *bio, int error)
@@ -466,7 +467,7 @@ static void btree_write_endio(struct bio *bio, int error)
 	int n;
 	struct bio_vec *bv;
 	struct btree_write *w = bio->bi_private;
-	struct btree *b = w->b;
+	struct btree *b = container_of(w, struct btree, writes[w->index]);
 	bio_put(bio);
 
 	cache_set_err_on(error, b->c, "writing index");
@@ -487,10 +488,9 @@ static void btree_write_endio(struct bio *bio, int error)
 	atomic_set(&b->io, -1);
 	closure_run_wait(&b->wait, bcache_wq);
 
-	if (b->write) {
-		long delay = max_t(long, 0, b->expires - jiffies);
-		schedule_delayed_work(&b->work, delay);
-	}
+	if (b->write)
+		queue_delayed_work(btree_wq, &b->work,
+				   msecs_to_jiffies(30000));
 }
 
 /* Locking: this function must be called with either
@@ -511,10 +511,9 @@ static int __btree_write(struct btree *b)
 	BUG_ON(current->bio_list);
 
 	if (atomic_cmpxchg(&b->io, -1, 1) != -1) {
-		if (b->write) {
-			long delay = max_t(long, 0, b->expires - jiffies);
-			queue_delayed_work(btree_wq, &b->work, delay);
-		}
+		if (b->write)
+			queue_delayed_work(btree_wq, &b->work,
+					   msecs_to_jiffies(30000));
 		return -1;
 	}
 
@@ -554,10 +553,10 @@ err:		closure_init_stack(&wait);
 
 		w->nofree = true;
 		bio_map(&b->bio, i);
-
-		closure_wait(&w->wait, &wait);
 		bio_submit_split(&b->bio, &b->io, b->c->bio_split);
-		closure_sync(&wait);
+
+		closure_wait_on(&b->wait, bcache_wq, &wait,
+				atomic_read(&b->io) == -1);
 	}
 
 	if (b->written) {
@@ -581,7 +580,7 @@ static void btree_write_work(struct work_struct *w)
 	struct btree *b = container_of(to_delayed_work(w), struct btree, work);
 
 	down_read(&b->lock);
-	pr_latency(b->expires, "btree_write_work");
+	pr_latency(b->wait_time, "btree_write_work");
 
 	if (b->write)
 		__btree_write(b);
@@ -599,16 +598,12 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 		!i->keys));
 
 	if (!b->write) {
-		unsigned long delay = msecs_to_jiffies(30000);
 		b->write = &b->writes[b->next_write];
-		b->write->b = b;
-		b->write->journal = NULL;
 		b->next_write ^= 1;
 
-		b->expires = jiffies + delay;
-
 		PREPARE_DELAYED_WORK(&b->work, btree_write_work);
-		queue_delayed_work(btree_wq, &b->work, delay);
+		queue_delayed_work(btree_wq, &b->work,
+				   msecs_to_jiffies(30000));
 	}
 
 	b->write->prio_blocked += b->prio_blocked;
@@ -642,11 +637,9 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 			closure_get(&op->cl);
 		}
 
-		if (__btree_write(b)) {
-			b->expires = jiffies;
-			if (b->work.timer.function)
-				mod_timer_pending(&b->work.timer, b->expires);
-		}
+		if (__btree_write(b) &&
+		    b->work.timer.function)
+			mod_timer_pending(&b->work.timer, jiffies);
 	}
 	BUG_ON(!b->written);
 }
@@ -795,6 +788,8 @@ struct btree *__alloc_bucket(struct cache_set *c, struct bkey *k, gfp_t gfp)
 	INIT_DELAYED_WORK(&b->work, NULL);
 	b->c = c;
 	atomic_set(&b->io, -1);
+	b->writes[0].index	= 0;
+	b->writes[1].index	= 1;
 	b->bio.bi_max_vecs	= bucket_pages(b->c);
 	b->bio.bi_io_vec	= b->bio.bi_inline_vecs;
 

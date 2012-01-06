@@ -449,13 +449,12 @@ struct btree_write {
 #ifdef CONFIG_BCACHE_LATENCY_DEBUG
 	unsigned long		wait_time;
 #endif
-	struct btree		*b;
-	closure_list_t		wait;
 	struct closure		*owner;
 	atomic_t		*journal;
 
-	int			prio_blocked;
-	bool			nofree;
+	int			prio_blocked:30;
+	unsigned		nofree:1;
+	unsigned		index:1;
 };
 
 struct bkey_float;
@@ -497,9 +496,6 @@ struct btree {
 		 * btree_gc_recurse() */
 	};
 
-	/* If we have data to write, when it should be written in jiffies */
-	unsigned long		expires;
-
 	/* Points to one of writes[] iff there is data to write */
 	struct btree_write	*write;
 
@@ -514,6 +510,9 @@ struct btree {
 	struct delayed_work	work;
 	closure_list_t		wait;
 
+#ifdef CONFIG_BCACHE_LATENCY_DEBUG
+	unsigned long		wait_time;
+#endif
 	struct btree_write	writes[2];
 
 	struct bio		bio;

@@ -878,22 +878,7 @@ STORE(__cached_dev)
 
 		d->cache_mode = v;
 	}
-#if 0
-	if (attr == &sysfs_writeback) {
-		v = strtoul_or_return(buf);
-		SET_BDEV_WRITEBACK(&d->sb, v);
 
-		if (v &&
-		    d->c &&
-		    BDEV_STATE(&d->sb) == BDEV_STATE_CLEAN) {
-			SET_BDEV_STATE(&d->sb, BDEV_STATE_DIRTY);
-			write_bdev_super(d, &cl);
-		} else
-			write_bdev_super(d, NULL);
-
-		d->writeback = v;
-	}
-#endif
 	if (attr == &sysfs_label) {
 		memcpy(d->sb.label, buf, SB_LABEL_SIZE);
 		write_bdev_super(d, NULL);
@@ -933,7 +918,8 @@ STORE(cached_dev)
 
 	if (attr == &sysfs_writeback_running ||
 	    attr == &sysfs_writeback_percent)
-		queue_writeback(container_of(kobj, struct cached_dev, kobj));
+		bcache_writeback_queue(container_of(kobj, struct cached_dev,
+						    kobj));
 
 	mutex_unlock(&register_lock);
 	return size;
@@ -1008,7 +994,7 @@ static void cached_dev_detach(struct cached_dev *d)
 	if (atomic_xchg(&d->closing, 1))
 		return;
 
-	queue_writeback(d);
+	bcache_writeback_queue(d);
 	cached_dev_put(d);
 }
 
@@ -1097,7 +1083,7 @@ found:
 	if (BDEV_STATE(&d->sb) == BDEV_STATE_DIRTY) {
 		atomic_long_set(&d->last_refilled, jiffies ?: 1);
 		atomic_inc(&d->count);
-		queue_writeback(d);
+		bcache_writeback_queue(d);
 	}
 
 	cached_dev_run(d);
@@ -1115,7 +1101,7 @@ static void cached_dev_free(struct kobject *kobj)
 	lockdep_assert_held(&register_lock);
 
 	/* XXX: background writeback could be in progress... */
-	cancel_work_sync(&d->refill);
+	cancel_delayed_work_sync(&d->refill);
 
 	if (d->c)
 		kobject_put(&d->c->kobj);

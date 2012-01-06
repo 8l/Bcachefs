@@ -197,7 +197,12 @@ struct cached_dev {
 	struct bio_set		*bio_split;
 
 	struct rw_semaphore	writeback_lock;
-	struct work_struct	refill;
+	struct delayed_work	refill;
+
+	/* Nonzero, and writeback has a refcount (d->count), iff there is dirty
+	 * data in the cache
+	 */
+	atomic_long_t		last_refilled;
 
 	union {
 		atomic_t	all[7];
@@ -246,11 +251,6 @@ struct cached_dev {
 
 	/* Number of writeback bios in flight */
 	atomic_t		in_flight;
-
-	/* Nonzero, and writeback has a refcount (d->count), iff there is dirty
-	 * data in the cache
-	 */
-	atomic_long_t		last_refilled;
 
 	uint64_t		last_found;
 	uint64_t		last_read;
@@ -775,8 +775,9 @@ static inline uint8_t gen_after(uint8_t a, uint8_t b)
 
 void btree_op_init_stack(struct btree_op *);
 
-bool in_writeback(struct cached_dev *, sector_t, unsigned);
-void queue_writeback(struct cached_dev *);
+bool bcache_in_writeback(struct cached_dev *, sector_t, unsigned);
+void bcache_writeback_queue(struct cached_dev *);
+void bcache_writeback_start(struct cached_dev *);
 
 int get_congested(struct cache_set *);
 void count_io_errors(struct cache *, int, const char *);

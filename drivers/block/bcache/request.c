@@ -491,13 +491,8 @@ static void bio_insert(struct closure *cl)
 		keylist_push(&op->keys);
 
 		if (n == bio) {
-			queue_writeback(op->d);
-
-			if (op->insert_type == INSERT_WRITEBACK &&
-			    !atomic_long_read(&op->d->last_refilled) &&
-			    !atomic_long_xchg(&op->d->last_refilled,
-					      jiffies ?: 1))
-				atomic_inc(&op->d->count);
+			if (op->insert_type == INSERT_WRITEBACK)
+				bcache_writeback_start(op->d);
 
 			s->bio_done = true;
 		}
@@ -1168,7 +1163,7 @@ static void request_write(struct search *s)
 	s->op.insert_type	= INSERT_WRITE;
 	down_read_non_owner(&s->op.d->writeback_lock);
 
-	if (in_writeback(s->op.d, bio->bi_sector, bio_sectors(bio))) {
+	if (bcache_in_writeback(s->op.d, bio->bi_sector, bio_sectors(bio))) {
 		s->skip = false;
 		s->op.insert_type = INSERT_WRITEBACK;
 	}

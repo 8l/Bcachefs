@@ -162,7 +162,7 @@ again:
 	return count;
 }
 
-bool in_writeback(struct cached_dev *d, sector_t offset, unsigned len)
+bool bcache_in_writeback(struct cached_dev *d, sector_t offset, unsigned len)
 {
 	struct dirty *ret, s;
 	s.key = KEY(d->id, offset + len, len);
@@ -196,10 +196,25 @@ static bool should_refill_dirty(struct cached_dev *d)
 		 atomic_read(&d->closing));
 }
 
-void queue_writeback(struct cached_dev *d)
+void bcache_writeback_queue(struct cached_dev *d)
 {
 	if (should_refill_dirty(d))
-		queue_work(dirty_wq, &d->refill);
+		queue_delayed_work(dirty_wq, &d->refill, 0);
+}
+
+void bcache_writeback_start(struct cached_dev *d)
+{
+	if (!atomic_long_read(&d->last_refilled) &&
+	    !atomic_long_xchg(&d->last_refilled, jiffies ?: 1)) {
+
+		SET_BDEV_STATE(&d->sb, BDEV_STATE_DIRTY);
+		/* XXX: should do this synchronously */
+		write_bdev_super(d, NULL);
+
+		atomic_inc(&d->count);
+		queue_delayed_work(dirty_wq, &d->refill,
+				   msecs_to_jiffies(d->writeback_delay * 1000));
+	}
 }
 
 static void write_dirty_finish(struct closure *cl)
@@ -340,14 +355,15 @@ static void read_dirty(struct cached_dev *d)
 
 static void read_dirty_work(struct work_struct *work)
 {
-	struct cached_dev *d = container_of(work, struct cached_dev, refill);
+	struct cached_dev *d = container_of(to_delayed_work(work),
+					    struct cached_dev, refill);
 	spin_lock(&d->lock);
 	read_dirty(d);
 }
 
 void bcache_writeback_init_cached_dev(struct cached_dev *d)
 {
-	INIT_WORK(&d->refill, read_dirty_work);
+	INIT_DELAYED_WORK(&d->refill, read_dirty_work);
 	init_rwsem(&d->writeback_lock);
 
 	d->dirty			= RB_ROOT;

@@ -85,6 +85,41 @@ ssize_t hprint(char *buf, int64_t v)
 }
 EXPORT_SYMBOL_GPL(hprint);
 
+ssize_t sprint_string_list(char *buf, const char * const list[],
+			   size_t selected)
+{
+	char *out = buf;
+
+	for (size_t i = 0; list[i]; i++)
+		out += sprintf(out, i == selected ? "[%s] " : "%s ", list[i]);
+
+	out[-1] = '\n';
+	return out - buf;
+}
+EXPORT_SYMBOL_GPL(sprint_string_list);
+
+ssize_t read_string_list(const char *buf, const char * const list[])
+{
+	size_t i;
+	char *s, *d = kstrndup(buf, PAGE_SIZE - 1, GFP_KERNEL);
+	if (!d)
+		return -ENOMEM;
+
+	s = strim(d);
+
+	for (i = 0; list[i]; i++)
+		if (!strcmp(list[i], s))
+			break;
+
+	kfree(d);
+
+	if (!list[i])
+		return -EINVAL;
+
+	return i;
+}
+EXPORT_SYMBOL_GPL(read_string_list);
+
 bool is_zero(const char *p, size_t n)
 {
 	for (size_t i = 0; i < n; i++)

@@ -458,6 +458,27 @@ void btree_read(struct btree *b)
 	pr_debug("%s", pbtree(b));
 }
 
+static void btree_complete_write(struct btree *b, struct btree_write *w)
+{
+	closure_run_wait(&w->wait, bcache_wq);
+
+	if (w->prio_blocked &&
+	    !atomic_sub_return(w->prio_blocked, &b->c->prio_blocked))
+		closure_run_wait(&b->c->bucket_wait, bcache_wq);
+
+	if (w->journal) {
+		atomic_dec_bug(w->journal);
+		closure_run_wait(&b->c->journal.wait, bcache_wq);
+		if (journal_full(&b->c->journal))
+			schedule_work(&b->c->journal.work);
+	}
+
+	if (w->owner)
+		closure_put(w->owner, bcache_wq);
+
+	memset(w, 0, sizeof(struct btree_write));
+}
+
 static void btree_write_endio(struct bio *bio, int error)
 {
 	int n;
@@ -477,23 +498,8 @@ static void btree_write_endio(struct bio *bio, int error)
 		__bio_for_each_segment(bv, &b->bio, n, 0)
 			__free_page(bv->bv_page);
 
-	closure_run_wait(&w->wait, bcache_wq);
-	if (w->owner)
-		closure_put(w->owner, bcache_wq);
+	btree_complete_write(b, w);
 
-	if (w->prio_blocked &&
-	    !atomic_sub_return(w->prio_blocked, &b->c->prio_blocked))
-		closure_run_wait(&b->c->bucket_wait, bcache_wq);
-
-	if (w->journal) {
-		atomic_dec_bug(w->journal);
-		w->journal = NULL;
-		closure_run_wait(&b->c->journal.wait, bcache_wq);
-		if (journal_full(&b->c->journal))
-			schedule_work(&b->c->journal.work);
-	}
-
-	memset(w, 0, sizeof(struct btree_write));
 	atomic_set(&b->io, -1);
 	closure_run_wait(&b->wait, bcache_wq);
 
@@ -1043,6 +1049,16 @@ static void btree_free(struct btree *b, struct btree_op *op)
 	BUG_ON(b == b->c->root);
 	pr_debug("bucket %s", pbtree(b));
 
+	if (b->write)
+		btree_complete_write(b, b->write);
+	b->write = NULL;
+
+	if (b->prio_blocked &&
+	    !atomic_sub_return(b->prio_blocked, &b->c->prio_blocked))
+		closure_run_wait(&b->c->bucket_wait, bcache_wq);
+
+	b->prio_blocked = 0;
+
 	spin_lock(&b->c->bucket_lock);
 
 	for (unsigned i = 0; i < KEY_PTRS(&b->key); i++) {
@@ -1050,19 +1066,6 @@ static void btree_free(struct btree *b, struct btree_op *op)
 
 		inc_gen(PTR_CACHE(b->c, &b->key, i),
 			PTR_BUCKET(b->c, &b->key, i));
-	}
-
-	/* This isn't correct, the caller needs to add the wait list
-	 * to the wait list for the new bucket's write.
-	 */
-	if (b->write) {
-		BUG_ON(b->write->owner);
-		BUG_ON(b->write->prio_blocked);
-		closure_run_wait(&b->write->wait, bcache_wq);
-		if (b->write->journal)
-			atomic_dec_bug(b->write->journal);
-		b->write->journal = NULL;
-		b->write = NULL;
 	}
 
 	unpop_bucket(b->c, &b->key);

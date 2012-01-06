@@ -663,10 +663,11 @@ int bcache_btree_cache_alloc(struct cache_set *c)
 
 	c->verify_data = mca_bucket_alloc(c, &ZERO_KEY, GFP_KERNEL);
 
-	if (c->verify_data && !c->verify_data->sets[0].data)
-		c->verify_data = NULL;
-	else
+	if (c->verify_data &&
+	    c->verify_data->sets[0].data)
 		list_del_init(&c->verify_data->lru);
+	else
+		c->verify_data = NULL;
 #endif
 
 	c->shrink.shrink = bcache_shrink_buckets;

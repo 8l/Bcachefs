@@ -577,6 +577,13 @@ void bcache_journal(struct closure *cl)
 	    !CACHE_SYNC(&c->sb))
 		goto out;
 
+	/*
+	 * If we're looping because we errored, might already be waiting on
+	 * another journal write:
+	 */
+	while (test_bit(__CLOSURE_WAITING, &cl->parent->flags))
+		closure_sync(cl->parent);
+
 	spin_lock(&c->journal.lock);
 
 	journal_reclaim(c);
@@ -609,10 +616,7 @@ void bcache_journal(struct closure *cl)
 	op->journal = &fifo_back(&c->journal.pin);
 	atomic_inc(op->journal);
 
-	/* XXX: if bio_insert doesn't finish on the first loop through this may
-	 * bug
-	 */
-	BUG_ON(!closure_wait(&w->wait, cl->parent));
+	closure_wait(&w->wait, cl->parent);
 
 	journal_try_write(c);
 out:

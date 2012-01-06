@@ -352,6 +352,7 @@ struct cache_set {
 	struct closure		*sb_writer;
 
 	mempool_t		*search;
+	mempool_t		*bio_meta;
 	struct bio_set		*bio_split; /* Move to struct cache? */
 	struct shrinker		shrink;
 
@@ -533,8 +534,7 @@ struct btree {
 	unsigned long		wait_time;
 #endif
 	struct btree_write	writes[2];
-
-	struct bio		bio;
+	struct bio		*bio;
 };
 
 struct bbio {
@@ -754,6 +754,8 @@ void queue_writeback(struct cached_dev *);
 int get_congested(struct cache_set *);
 void count_io_errors(struct cache *, int, const char *);
 void bcache_endio(struct cache_set *, struct bio *, int, const char *);
+void bbio_free(struct bio *, struct cache_set *);
+struct bio *bbio_alloc(struct cache_set *);
 struct bio *bbio_kmalloc(gfp_t, int);
 struct bio *__bio_split_get(struct bio *, int, struct bio_set *);
 void submit_bbio(struct bio *, struct cache_set *, struct bkey *, unsigned);

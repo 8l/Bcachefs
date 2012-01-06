@@ -168,6 +168,18 @@ bug:
 
 /* Key/pointer manipulation */
 
+void bkey_copy_single_ptr(struct bkey *dest, const struct bkey *src, unsigned i)
+{
+	BUG_ON(i > KEY_PTRS(src));
+
+	/* Only copy the header, key, and one pointer. */
+	memcpy(dest, src, 2 * sizeof(uint64_t));
+	dest->ptr[0] = src->ptr[i];
+	SET_KEY_PTRS(dest, 1);
+	/* We didn't copy the checksum so clear that bit. */
+	SET_KEY_CSUM(dest, 0);
+}
+
 bool __cut_front(const struct bkey *where, struct bkey *k)
 {
 	unsigned len = 0;

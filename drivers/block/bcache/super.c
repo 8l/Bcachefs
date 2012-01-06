@@ -1725,7 +1725,10 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	iter_size = (sb->bucket_size / sb->block_size + 1) *
 		sizeof(struct btree_iter_set);
 
-	if (!(c->bio_split = bioset_create(4, offsetof(struct bbio, bio))) ||
+	if (!(c->bio_meta = mempool_create_kmalloc_pool(2,
+				sizeof(struct bbio) + sizeof(struct bio_vec) *
+				bucket_pages(c))) ||
+	    !(c->bio_split = bioset_create(4, offsetof(struct bbio, bio))) ||
 	    !(c->fill_iter = kmalloc(iter_size, GFP_KERNEL)) ||
 	    !(c->sort = alloc_bucket_pages(GFP_KERNEL, c)) ||
 	    !(c->uuids = alloc_bucket_pages(GFP_KERNEL, c)) ||

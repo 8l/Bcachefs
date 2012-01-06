@@ -110,6 +110,7 @@ void keylist_copy(struct keylist *, struct keylist *);
 struct bkey *keylist_pop(struct keylist *);
 int keylist_realloc(struct keylist *, int);
 
+void bkey_copy_single_ptr(struct bkey *, const struct bkey *, unsigned);
 bool __cut_front(const struct bkey *, struct bkey *);
 bool __cut_back(const struct bkey *, struct bkey *);
 

@@ -396,10 +396,10 @@ EXPORT_SYMBOL(closure_lock);
 #define SET_WAITING(s, f)	do {} while (0)
 #endif
 
-void __closure_init(struct closure *c, struct closure *parent, bool onstack)
+void closure_init(struct closure *c, struct closure *parent)
 {
 	memset(c, 0, sizeof(struct closure));
-	__INIT_WORK(&c->work, NULL, onstack);
+	INIT_WORK(&c->work, NULL);
 	atomic_set(&c->remaining, 1);
 	set_wait(c);
 	c->parent = parent;
@@ -407,14 +407,12 @@ void __closure_init(struct closure *c, struct closure *parent, bool onstack)
 		closure_get(parent);
 
 #ifdef CONFIG_BCACHE_CLOSURE_DEBUG
-	if (!onstack) {
-		spin_lock_irq(&closure_lock);
-		list_add(&c->all, &closures);
-		spin_unlock_irq(&closure_lock);
-	}
+	spin_lock_irq(&closure_lock);
+	list_add(&c->all, &closures);
+	spin_unlock_irq(&closure_lock);
 #endif
 }
-EXPORT_SYMBOL_GPL(__closure_init);
+EXPORT_SYMBOL_GPL(closure_init);
 
 void closure_queue(struct closure *cl)
 {
@@ -428,39 +426,39 @@ void closure_queue(struct closure *cl)
 }
 EXPORT_SYMBOL_GPL(closure_queue);
 
-void closure_put(struct closure *c)
+void closure_put(struct closure *cl)
 {
-	bool sleeping;
 	int r;
 again:
-	pr_latency(c->wait_time, "%pf", c->fn);
+	pr_latency(cl->wait_time, "%pf", cl->fn);
 
-	sleeping = test_bit(__CLOSURE_SLEEPING, &c->flags);
-	r = atomic_dec_return(&c->remaining);
+	r = atomic_dec_return(&cl->remaining);
 	smp_mb__after_atomic_dec();
 
-	BUG_ON(r < 0);
-	if (r == 1 && sleeping)
-		wake_up_process(c->task);
-	if (r)
+	BUG_ON(r & CLOSURE_GUARD_MASK);
+	BUG_ON((r & CLOSURE_REMAINING_MASK) == 0 &&
+	       (r & (CLOSURE_STACK|CLOSURE_WAITING|CLOSURE_SLEEPING)));
+
+	/* Must deliver precisely one wakeup */
+	if ((r & CLOSURE_REMAINING_MASK) == 1 &&
+	    (r & CLOSURE_SLEEPING))
+		wake_up_process(cl->task);
+
+	if (r & CLOSURE_REMAINING_MASK)
 		return;
 
-	BUG_ON(test_bit(__CLOSURE_STACK, &c->flags));
-	BUG_ON(test_bit(__CLOSURE_WAITING, &c->flags));
-	BUG_ON(test_bit(__CLOSURE_SLEEPING, &c->flags));
+	if (!cl->fn) {
+		closure_del(cl);
 
-	if (!c->fn) {
-		closure_del(c);
-
-		c = c->parent;
-		if (c)
+		cl = cl->parent;
+		if (cl)
 			goto again;
 		return;
 	}
 
-	atomic_set(&c->remaining, 1);
-	set_wait(c);
-	closure_queue(c);
+	atomic_inc(&cl->remaining);
+	set_wait(cl);
+	closure_queue(cl);
 }
 EXPORT_SYMBOL_GPL(closure_put);
 
@@ -472,7 +470,7 @@ void closure_run_wait(closure_list_t *list)
 		next = c->next;
 		SET_WAITING(c, 0);
 
-		clear_bit(__CLOSURE_WAITING, &c->flags);
+		atomic_sub(CLOSURE_WAITING, &c->remaining);
 		closure_put(c);
 	}
 }
@@ -480,14 +478,13 @@ EXPORT_SYMBOL_GPL(closure_run_wait);
 
 bool closure_wait(closure_list_t *list, struct closure *cl)
 {
-	smp_rmb(); /* for __CLOSURE_WAITING */
+	smp_rmb(); /* for CLOSURE_WAITING */
 
-	if (!test_bit(__CLOSURE_WAITING, &cl->flags)) {
+	if (!(atomic_read(&cl->remaining) & CLOSURE_WAITING)) {
 		struct closure *t;
 		SET_WAITING(cl, _RET_IP_);
 
-		set_bit(__CLOSURE_WAITING, &cl->flags);
-		closure_get(cl);
+		atomic_add(CLOSURE_WAITING + 1, &cl->remaining);
 
 		do {
 			t = ACCESS_ONCE(list->head);
@@ -505,30 +502,19 @@ bool closure_wait(closure_list_t *list, struct closure *cl)
 }
 EXPORT_SYMBOL_GPL(closure_wait);
 
-void __closure_sleep(struct closure *c)
-{
-	c->task = current;
-	set_current_state(TASK_UNINTERRUPTIBLE);
-	smp_wmb();
-	set_bit(__CLOSURE_SLEEPING, &c->flags);
-}
-EXPORT_SYMBOL_GPL(__closure_sleep);
-
 void closure_sync(struct closure *c)
 {
 	while (1) {
-		__closure_sleep(c);
+		__closure_start_sleep(c);
 
-		if (atomic_read(&c->remaining) == 1)
+		if ((atomic_read(&c->remaining) &
+		     CLOSURE_REMAINING_MASK) == 1)
 			break;
 
 		schedule();
 	}
-	__set_current_state(TASK_RUNNING);
-	clear_bit(__CLOSURE_SLEEPING, &c->flags);
 
-	smp_rmb(); /* for __CLOSURE_WAITING */
-	BUG_ON(test_bit(__CLOSURE_WAITING, &c->flags));
+	__closure_end_sleep(c);
 }
 EXPORT_SYMBOL_GPL(closure_sync);
 

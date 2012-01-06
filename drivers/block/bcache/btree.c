@@ -794,7 +794,7 @@ err:
 		}
 
 	if (b == ERR_PTR(-EAGAIN) &&
-	    test_bit(CLOSURE_BLOCK, &cl->flags)) {
+	    closure_blocking(cl)) {
 		mutex_unlock(&c->bucket_lock);
 		closure_sync(cl);
 		mutex_lock(&c->bucket_lock);
@@ -1892,7 +1892,7 @@ int btree_insert(struct btree_op *op, struct cache_set *c)
 	struct cache *ca;
 	struct keylist stack_keys;
 
-	set_bit(CLOSURE_BLOCK, &op->cl.flags);
+	set_closure_blocking(&op->cl);
 
 	BUG_ON(keylist_empty(&op->keys));
 	keylist_copy(&stack_keys, &op->keys);

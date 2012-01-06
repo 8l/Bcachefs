@@ -460,18 +460,15 @@ struct closure {
 
 	struct closure		*parent;
 
-	union {
-		struct {
-			atomic_t		_pad2;
-			atomic_t		remaining;
-		};
+#define CLOSURE_REMAINING_MASK	(~(~0 << 24))
+#define CLOSURE_GUARD_MASK					\
+	((1 << 23)|(1 << 25)|(1 << 27)|(1 << 29)|(1 << 31))
 
-#define	CLOSURE_BLOCK		0
-#define __CLOSURE_STACK		1
-#define	__CLOSURE_WAITING	2
-#define	__CLOSURE_SLEEPING	3
-		unsigned long		flags;
-	};
+#define	CLOSURE_BLOCKING	(1 << 24)
+#define CLOSURE_STACK		(1 << 26)
+#define	CLOSURE_WAITING		(1 << 28)
+#define	CLOSURE_SLEEPING	(1 << 30)
+	atomic_t		remaining;
 
 #ifdef CONFIG_BCACHE_CLOSURE_DEBUG
 	struct list_head	all;
@@ -484,11 +481,10 @@ struct closure {
 
 void closure_put(struct closure *s);
 void closure_queue(struct closure *c);
-void __closure_init(struct closure *c, struct closure *parent, bool onstack);
+void closure_init(struct closure *c, struct closure *parent);
 void closure_run_wait(closure_list_t *list);
 bool closure_wait(closure_list_t *list, struct closure *c);
 void closure_sync(struct closure *c);
-void __closure_sleep(struct closure *c);
 
 #ifdef CONFIG_BCACHE_CLOSURE_DEBUG
 extern struct list_head closures;
@@ -506,30 +502,55 @@ static inline void closure_del(struct closure *c)
 static inline void closure_del(struct closure *c) {}
 #endif
 
-static inline void closure_init(struct closure *c, struct closure *parent)
+static inline void closure_init_stack(struct closure *cl)
 {
-	__closure_init(c, parent, false);
+	memset(cl, 0, sizeof(struct closure));
+	atomic_set(&cl->remaining, 1|CLOSURE_BLOCKING|CLOSURE_STACK);
+	set_wait(cl);
 }
 
-static inline void closure_init_stack(struct closure *c)
+static inline void closure_get(struct closure *cl)
 {
-	__closure_init(c, NULL, true);
-	set_bit(CLOSURE_BLOCK, &c->flags);
-	set_bit(__CLOSURE_STACK, &c->flags);
+	atomic_inc_bug(&cl->remaining, 1);
 }
 
-static inline void closure_get(struct closure *c)
+static inline void __closure_end_sleep(struct closure *cl)
 {
-	atomic_inc_bug(&c->remaining, 1);
+	__set_current_state(TASK_RUNNING);
+
+	if (atomic_read(&cl->remaining) & CLOSURE_SLEEPING)
+		atomic_sub(CLOSURE_SLEEPING, &cl->remaining);
 }
 
-#define __closure_wait_on(list, c, condition, block)			\
+static inline void __closure_start_sleep(struct closure *cl)
+{
+	cl->task = current;
+	set_current_state(TASK_UNINTERRUPTIBLE);
+
+	if (!(atomic_read(&cl->remaining) & CLOSURE_SLEEPING))
+		atomic_add(CLOSURE_SLEEPING, &cl->remaining);
+}
+
+static inline bool closure_blocking(struct closure *cl)
+{
+	return atomic_read(&cl->remaining) & CLOSURE_BLOCKING;
+}
+
+static inline void set_closure_blocking(struct closure *cl)
+{
+	if (!closure_blocking(cl))
+		atomic_add(CLOSURE_BLOCKING, &cl->remaining);
+}
+
+#define __closure_wait_on(list, c, condition, _block)			\
 ({									\
 	__label__ out;							\
+	bool block = _block;						\
 	typeof(condition) ret;						\
+									\
 	while (!(ret = (condition))) {					\
 		if (block)						\
-			__closure_sleep(c);				\
+			__closure_start_sleep(c);			\
 		if (!closure_wait(list, c)) {				\
 			if (!block)					\
 				goto out;				\
@@ -537,16 +558,14 @@ static inline void closure_get(struct closure *c)
 		}							\
 	}								\
 	closure_run_wait(list);						\
-	if (block) {							\
-		__set_current_state(TASK_RUNNING);			\
-		clear_bit(__CLOSURE_SLEEPING, &(c)->flags);		\
-	}								\
-out:	ret;								\
+	if (block)							\
+		__closure_end_sleep(c);					\
+out:									\
+	ret;								\
 })
 
 #define closure_wait_on(list, c, condition)				\
-	__closure_wait_on(list, c, condition,				\
-			  test_bit(CLOSURE_BLOCK, &(c)->flags))
+	__closure_wait_on(list, c, condition, closure_blocking(c))
 
 #define closure_wait_on_async(list, c, condition)			\
 	__closure_wait_on(list, c, condition, false)
@@ -561,7 +580,8 @@ static inline void set_closure_fn(struct closure *cl, closure_fn *fn,
 #define return_f(_cl, _fn, _wq, ...)					\
 do {									\
 	BUG_ON(!(_cl) || object_is_on_stack(_cl));			\
-	clear_bit(CLOSURE_BLOCK, &(_cl)->flags);			\
+	if (closure_blocking(_cl))					\
+		atomic_sub(CLOSURE_BLOCKING, &(_cl)->remaining);	\
 	set_closure_fn(_cl, _fn, _wq);					\
 	smp_mb__before_atomic_dec();					\
 	closure_put(_cl);						\

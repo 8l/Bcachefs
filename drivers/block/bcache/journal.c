@@ -608,7 +608,7 @@ void bcache_journal(struct closure *cl)
 	 * If we're looping because we errored, might already be waiting on
 	 * another journal write:
 	 */
-	while (test_bit(__CLOSURE_WAITING, &cl->parent->flags))
+	while (atomic_read(&cl->parent->remaining) & CLOSURE_WAITING)
 		closure_sync(cl->parent);
 
 	spin_lock(&c->journal.lock);

@@ -458,14 +458,14 @@ again:
 		 fifo_used(&c->free_inc), fifo_used(&c->unused));
 
 	if (cl) {
-		if (test_bit(CLOSURE_BLOCK, &cl->flags))
+		if (closure_blocking(cl))
 			mutex_unlock(&c->set->bucket_lock);
 
 		closure_wait_on(&c->set->bucket_wait, cl,
 				atomic_read(&c->prio_written) > 0 ||
 				can_save_prios(c));
 
-		if (test_bit(CLOSURE_BLOCK, &cl->flags)) {
+		if (closure_blocking(cl)) {
 			mutex_lock(&c->set->bucket_lock);
 			goto again;
 		}

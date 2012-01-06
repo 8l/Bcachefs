@@ -20,9 +20,6 @@ struct bkey_float {
 	unsigned	mantissa:BKEY_MANTISSA_BITS;
 };
 
-#define bset_tree_space(b)						\
-	((PAGE_SIZE << bset_tree_order(b)) / sizeof(struct bkey_float))
-
 /* Keylists */
 
 void keylist_copy(struct keylist *dest, struct keylist *src)
@@ -455,9 +452,7 @@ void bset_build_tree_noalloc(struct btree *b, unsigned set)
 	struct bkey *k		= i->start;
 
 	struct {
-		unsigned l;
-		unsigned r:27;
-		unsigned p:5;
+		unsigned l, r;
 	} stack[22], *sp = stack;
 
 	unsigned j, end;
@@ -476,7 +471,7 @@ void bset_build_tree_noalloc(struct btree *b, unsigned set)
 		while ((((size_t) next(k)) >> 6) != cacheline)
 			k = next(k);
 
-		f->exponent = bkey_u64s(k);
+		t->prev[j] = bkey_u64s(k);
 		k = next(k);
 		cacheline++;
 		f->m = ((size_t) k & 63) / sizeof(uint64_t);
@@ -507,10 +502,9 @@ void bset_build_tree_noalloc(struct btree *b, unsigned set)
 		sp = &stack[ilog2(j)];
 
 		m = bset_tree_to_idx(f, to_inorder(j, t));
-		sp->p = f->exponent;
 
 		make_bfloat(f, node(i, sp->l), node(i, sp->r),
-			       node(i, m), node(i, m - sp->p));
+			       node(i, m), node(i, m - t->prev[j]));
 
 		if (j == end)
 			break;
@@ -531,7 +525,7 @@ void bset_build_tree_noalloc(struct btree *b, unsigned set)
 			f = &t->key[j];
 			m = bset_tree_to_idx(f, to_inorder(j, t));
 
-			sp[1].l = m - sp->p;
+			sp[1].l = m - t->prev[j];
 			sp[1].r = sp->r;
 
 			j = j * 2 + 1;
@@ -555,8 +549,10 @@ void bset_build_tree(struct btree *b, unsigned set)
 
 	if (set) {
 		struct bset_tree *p = &b->tree[set - 1];
-		t->key = p->key + roundup(p->size,
-					  64 / sizeof(struct bkey_float));
+		unsigned n = roundup(p->size, 64 / sizeof(struct bkey_float));
+
+		t->key = p->key + n;
+		t->prev = p->prev + n;
 	}
 
 	t->size = ((size_t) end(i) - (size_t) i) / 64;

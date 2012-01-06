@@ -650,12 +650,21 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 
 void free_bucket_data(struct btree *b)
 {
-	if (b->data)
-		free_pages((unsigned long) b->data, b->page_order);
-	if (b->tree->key)
+	if (bset_prev_space(b) < PAGE_SIZE)
+		kfree(b->tree->prev);
+	else
+		free_pages((unsigned long) b->tree->prev, bset_prev_order(b));
+
+	if (bset_tree_space(b) < PAGE_SIZE)
+		kfree(b->tree->key);
+	else
 		free_pages((unsigned long) b->tree->key, bset_tree_order(b));
-	b->data = NULL;
-	b->tree->key = NULL;
+
+	free_pages((unsigned long) b->data, b->page_order);
+
+	b->tree->prev	= NULL;
+	b->tree->key	= NULL;
+	b->data		= NULL;
 	list_move_tail(&b->lru, &b->c->freed);
 	b->c->bucket_cache_used--;
 }
@@ -757,16 +766,27 @@ out:
 
 static void alloc_bucket_data(struct btree *b, struct bkey *k, gfp_t gfp)
 {
+	gfp |= GFP_NOIO;
 	lockdep_assert_held(&b->c->bucket_lock);
 	BUG_ON(b->data);
 
 	b->page_order = ilog2(max_t(unsigned, b->c->btree_pages,
 				    KEY_SIZE(k) / PAGE_SECTORS ?: 1));
 
-	gfp |= GFP_NOIO;
-	if (!(b->data = (void *) __get_free_pages(gfp, b->page_order)) ||
-	    !(b->tree->key = (void *)
-			__get_free_pages(gfp, bset_tree_order(b))))
+	b->data = (void *) __get_free_pages(gfp, b->page_order);
+	if (!b->data)
+		goto err;
+
+	b->tree->key = bset_tree_space(b) < PAGE_SIZE
+		? kmalloc(bset_tree_space(b), gfp)
+		: (void *) __get_free_pages(gfp, bset_tree_order(b));
+	if (!b->tree->key)
+		goto err;
+
+	b->tree->prev = bset_prev_space(b) < PAGE_SIZE
+		? kmalloc(bset_prev_space(b), gfp)
+		: (void *) __get_free_pages(gfp, bset_prev_order(b));
+	if (!b->tree->prev)
 		goto err;
 
 	list_move_tail(&b->lru, &b->c->lru);

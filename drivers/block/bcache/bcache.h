@@ -499,6 +499,11 @@ struct btree {
 		unsigned	extra;
 		struct bkey	end;
 		struct bkey_float *key;
+
+		/* The nodes in the bset tree point to specific keys - this
+		 * array holds the sizes of the previous key.
+		 */
+		uint8_t		*prev;
 	}			tree[4];
 
 	/* The actual btree node, with pointers to each sorted set */
@@ -570,7 +575,12 @@ static inline unsigned local_clock_us(void)
 #define index(i, b)							\
 	((size_t) (((void *) i - (void *) (b)->data) / block_bytes(b->c)))
 
-#define bset_tree_order(b)	(b->page_order > 4 ? b->page_order - 4 : 0)
+#define btree_data_space(b)	(PAGE_SIZE << (b)->page_order)
+#define bset_tree_space(b)	(btree_data_space(b) / 16)
+#define bset_prev_space(b)	(bset_tree_space(b) / 4)
+
+#define bset_tree_order(b)	(b->page_order - 4)
+#define bset_prev_order(b)	(b->page_order - 6)
 
 #define prios_per_bucket(c)				\
 	((bucket_bytes(c) - sizeof(struct prio_set)) /	\

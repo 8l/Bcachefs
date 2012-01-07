@@ -1991,16 +1991,50 @@ void bcache_btree_set_root(struct btree *b)
 
 /* Cache lookup */
 
-static struct bio *cache_hit(struct btree *b, struct bio *bio,
-			     struct bkey *k, struct btree_op *op)
+static int cache_hit(struct btree *b, struct btree_op *op,
+		     struct bio *bio, struct bkey *k)
 {
-	sector_t sector = bio->bi_sector;
-	unsigned sectors = k->key - sector;
-	struct bio *ret;
-	struct block_device *bdev;
+	unsigned sectors, ptr;
+	struct bio *n;
+	int offset(void)	{ return bio->bi_sector - KEY_START(k); }
 
-	for (unsigned i = 0; i < KEY_PTRS(k); i++) {
-		struct bucket *g = PTR_BUCKET(b->c, k, i);
+	while (offset() < 0) {
+		struct search *s = container_of(op, struct search, op);
+
+		sectors = min_t(unsigned, -offset(), bio_max_sectors(bio));
+
+		n = bio_split_get(bio, sectors, op->d);
+		if (!n)
+			return -ENOMEM;
+
+		if (s->cache_miss)
+			generic_make_request(s->cache_miss);
+
+		s->cache_miss = n;
+	}
+
+	/* XXX: figure out best pointer - for multiple cache devices */
+	ptr = 0;
+
+	PTR_BUCKET(b->c, k, ptr)->prio = initial_prio;
+
+	do {
+		struct bkey *bio_key;
+		struct block_device *bdev = PTR_CACHE(b->c, k, ptr)->bdev;
+
+		sector_t sector = PTR_OFFSET(k, ptr) + offset();
+
+		sectors = min_t(unsigned, k->key - bio->bi_sector,
+				__bio_max_sectors(bio, bdev, sector));
+
+		n = bio_split_get(bio, sectors, op->d);
+		if (!n)
+			return -ENOMEM;
+
+		if (n == bio)
+			op->cache_hit = true;
+
+		bio_key = &container_of(n, struct bbio, bio)->key;
 
 		/*
 		 * The bucket we're reading from might be reused while our bio
@@ -2013,120 +2047,59 @@ static struct bio *cache_hit(struct btree *b, struct bio *bio,
 		 * error up anywhere).
 		 */
 
-		/* For multiple cache devices, copy only the pointer we're
-		 * actually reading from
-		 */
-		bkey_copy_single_ptr(op->keys.top, k, i);
-		BUG_ON(KEY_PTRS(op->keys.top) != 1);
+		bkey_copy_single_ptr(bio_key, k, ptr);
+		SET_PTR_OFFSET(bio_key, 0, sector);
 
-		bdev = PTR_CACHE(b->c, k, i)->bdev;
-		sector += KEY_SIZE(k) - k->key + PTR_OFFSET(k, i);
-		sectors = min(sectors, __bio_max_sectors(bio, bdev, sector));
+		n->bi_end_io = cache_read_endio;
 
-		ret = bio_split_get(bio, sectors, op->d);
-		if (!ret)
-			return ERR_PTR(-ENOMEM);
-
-		g->prio = initial_prio;
-		/* * (cache_hit_seek + cache_hit_priority
-		 * bio_sectors(bio) / c->sb.bucket_size)
-		 / (cache_hit_seek + cache_hit_priority);*/
-
-		pr_debug("cache hit of %i sectors from %llu, need %i sectors",
-			 bio_sectors(ret), (uint64_t) ret->bi_sector,
-			 ret == bio ? 0 : bio_sectors(bio));
-
-		SET_PTR_OFFSET(op->keys.top, 0, sector);
-
-		ret->bi_end_io = cache_read_endio;
-
-		trace_bcache_cache_hit(ret);
-		submit_bbio(ret, b->c, op->keys.top, 0);
-
-		return ret;
-	}
-
-	return NULL;
-}
-
-static int btree_search_leaf(struct btree *b, struct btree_op *op,
-			     struct bio *bio, uint64_t *reada, struct bkey *k)
-{
-	if (KEY_DEV(k) != op->d->id)
-		return 0;
-
-	if (bio_end(bio) <= KEY_START(k)) {
-		*reada = min(*reada, KEY_START(k));
-		return 0;
-	}
-
-	while (bio->bi_sector < KEY_START(k)) {
-		struct search *s = container_of(op, struct search, op);
-
-		int sectors = min_t(int, bio_max_sectors(bio),
-				    KEY_START(k) - bio->bi_sector);
-
-		struct bio *n = bio_split_get(bio, sectors, op->d);
-		if (!n)
-			return -ENOMEM;
-
-		BUG_ON(n == bio);
-
-		if (s->cache_miss)
-			generic_make_request(s->cache_miss);
-
-		s->cache_miss = n;
-	}
-
-	pr_debug("%s", pkey(k));
-
-	do {
-		struct bio *n = cache_hit(b, bio, k, op);
-		if (!n)
-			break;
-		if (IS_ERR(n))
-			return -ENOMEM;
-
-		if (n == bio) {
-			op->cache_hit = true;
-			break;
-		}
-	} while (bio->bi_sector < k->key);
+		trace_bcache_cache_hit(n);
+		__submit_bbio(n, b->c);
+	} while (!op->cache_hit &&
+		 bio->bi_sector < k->key);
 
 	return 0;
 }
 
 int btree_search_recurse(struct btree *b, struct btree_op *op,
-			 struct bio *bio, uint64_t *reada)
+			 struct bio *bio, unsigned *reada)
 {
-	int ret;
+	int ret = 0;
+	struct bkey *k;
 	struct btree_iter iter;
 	btree_iter_init(b, &iter, &KEY(op->d->id, bio->bi_sector, 0));
 
 	pr_debug("at %s searching for %u:%llu", pbtree(b), op->d->id,
 		 (uint64_t) bio->bi_sector);
 
-	while (1) {
-		struct bkey *k = btree_iter_next(&iter);
-		if (!k)
+	do {
+		k = btree_iter_next(&iter);
+		if (!k) {
+			btree_bug_on(b->level, b,
+				     "no key to recurse on at level %i/%i",
+				     b->level, b->c->root->level);
+			break;
+		}
+
+		if (!b->level && KEY_DEV(k) != op->d->id)
 			break;
 
 		if (ptr_bad(b, k))
 			continue;
 
+		if (!b->level && bio_end(bio) <= KEY_START(k)) {
+			*reada = min_t(unsigned, *reada,
+				       KEY_START(k) - bio_end(bio));
+			break;
+		}
+
 		ret = b->level
 			? btree(search_recurse, k, b, op, bio, reada)
-			: btree_search_leaf(b, op, bio, reada, k);
+			: cache_hit(b, op, bio, k);
+	} while (!ret &&
+		 !op->cache_hit &&
+		 bkey_cmp(k, &KEY(op->d->id, bio_end(bio), 0)) < 0);
 
-		if (ret ||
-		    op->cache_hit ||
-		    bkey_cmp(k, &KEY(op->d->id, bio_end(bio), 0)) >= 0)
-			return ret;
-	}
-
-	btree_bug_on(b->level, b, "no key to recurse on at level %i/%i",
-		     b->level, b->c->root->level);
-	return 0;
+	return ret;
 }
 
 void bcache_btree_exit(void)

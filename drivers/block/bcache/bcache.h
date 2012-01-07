@@ -885,6 +885,8 @@ void bbio_free(struct bio *, struct cache_set *);
 struct bio *bbio_alloc(struct cache_set *);
 struct bio *bbio_kmalloc(gfp_t, int);
 struct bio *__bio_split_get(struct bio *, int, struct bio_set *);
+
+void __submit_bbio(struct bio *, struct cache_set *);
 void submit_bbio(struct bio *, struct cache_set *, struct bkey *, unsigned);
 int submit_bbio_split(struct bio *, struct cache_set *,
 		      struct bkey *, unsigned);

@@ -831,36 +831,32 @@ static struct search *do_bio_hook(struct bio *bio, struct cached_dev *d)
 
 /* Process reads */
 
-static void setup_cache_miss(struct search *s, sector_t reada)
+static void setup_cache_miss(struct search *s, unsigned reada)
 {
-	unsigned sectors = 0;
 	struct bio *bio = s->cache_miss;
 
-	reada = min(reada, bio->bi_sector + (s->op.d->readahead >> 9));
+	if ((bio->bi_rw & REQ_RAHEAD) ||
+	    (bio->bi_rw & REQ_META) ||
+	    s->op.d->c->gc_stats.in_use >= CUTOFF_CACHE_READA)
+		reada = 0;
 
-	if (reada > bio_end(bio) &&
-	    !(bio->bi_rw & REQ_RAHEAD) &&
-	    !(bio->bi_rw & REQ_META) &&
-	    s->op.d->c->gc_stats.in_use < CUTOFF_CACHE_READA)
-		sectors = min_t(unsigned, reada - bio_end(bio),
-				__bio_max_sectors(bio,
-						  bio->bi_bdev,
-						  bio_end(bio)));
+	if (bio_end(bio) + reada >
+	    (sector_t) (bio->bi_bdev->bd_inode->i_size >> 9))
+		reada = (bio->bi_bdev->bd_inode->i_size >> 9) - bio_end(bio);
 
-	if (sectors)
+	if (reada)
 		atomic_inc(&s->op.d->stats.cache_readaheads);
 
-	sectors += bio_sectors(bio);
-	s->cache_bio_sectors = sectors;
+	s->cache_bio_sectors = bio_sectors(bio) + reada;
 
 	s->cache_bio = bbio_kmalloc(GFP_NOIO,
-				    DIV_ROUND_UP(sectors, PAGE_SECTORS));
+			DIV_ROUND_UP(s->cache_bio_sectors, PAGE_SECTORS));
 	if (!s->cache_bio)
 		return;
 
 	s->cache_bio->bi_sector	= bio->bi_sector;
 	s->cache_bio->bi_bdev	= bio->bi_bdev;
-	s->cache_bio->bi_size	= sectors << 9;
+	s->cache_bio->bi_size	= s->cache_bio_sectors << 9;
 
 	s->cache_bio->bi_end_io	= request_endio;
 	s->cache_bio->bi_private = &s->cl;
@@ -1071,7 +1067,7 @@ static void __request_read(struct closure *cl)
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 	struct search *s = container_of(op, struct search, op);
 	struct bio *bio = &s->bio.bio;
-	uint64_t reada = bio->bi_bdev->bd_inode->i_size >> 9;
+	unsigned reada = op->d->readahead;
 
 	int ret = btree_root(search_recurse, op->d->c, op, bio, &reada);
 

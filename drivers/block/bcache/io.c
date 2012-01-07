@@ -61,17 +61,23 @@ struct bio *__bio_split_get(struct bio *bio, int len, struct bio_set *bs)
 	return ret;
 }
 
-void submit_bbio(struct bio *bio, struct cache_set *c,
-		 struct bkey *k, unsigned ptr)
+void __submit_bbio(struct bio *bio, struct cache_set *c)
 {
 	struct bbio *b = container_of(bio, struct bbio, bio);
-	bkey_copy_single_ptr(&b->key, k, ptr);
 
 	bio->bi_sector	= PTR_OFFSET(&b->key, 0);
 	bio->bi_bdev	= PTR_CACHE(c, &b->key, 0)->bdev;
 
 	b->submit_time_us = local_clock_us();
 	generic_make_request(bio);
+}
+
+void submit_bbio(struct bio *bio, struct cache_set *c,
+			struct bkey *k, unsigned ptr)
+{
+	struct bbio *b = container_of(bio, struct bbio, bio);
+	bkey_copy_single_ptr(&b->key, k, ptr);
+	__submit_bbio(bio, c);
 }
 
 int submit_bbio_split(struct bio *bio, struct cache_set *c,

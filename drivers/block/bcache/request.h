@@ -9,6 +9,7 @@ struct search {
 
 	struct bio		*orig_bio;
 	struct bio		*cache_bio;
+	struct bio		*cache_miss;
 	unsigned		cache_bio_sectors;
 	struct bbio		bio;
 

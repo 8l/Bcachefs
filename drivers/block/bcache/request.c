@@ -839,7 +839,7 @@ nonrecoverable:
 static void setup_cache_miss(struct search *s, sector_t reada)
 {
 	unsigned sectors = 0;
-	struct bio *bio = &s->bio.bio;
+	struct bio *bio = s->cache_miss;
 
 	reada = min(reada, bio->bi_sector + (s->op.d->readahead >> 9));
 
@@ -985,13 +985,13 @@ static void request_read_done(struct closure *cl)
 
 		bio_reset(s->cache_bio);
 		bio_put(s->cache_bio);
-		s->cache_bio->bi_sector	= s->bio.bio.bi_sector;
-		s->cache_bio->bi_bdev	= s->bio.bio.bi_bdev;
+		s->cache_bio->bi_sector	= s->cache_miss->bi_sector;
+		s->cache_bio->bi_bdev	= s->cache_miss->bi_bdev;
 		s->cache_bio->bi_size	= s->cache_bio_sectors << 9;
 		bio_map(s->cache_bio, NULL);
 
 		src = bio_iovec(s->cache_bio);
-		dst = bio_iovec(&s->bio.bio);
+		dst = bio_iovec(s->cache_miss);
 		src_offset = src->bv_offset;
 		dst_offset = dst->bv_offset;
 		dst_ptr = kmap(dst->bv_page);
@@ -1000,8 +1000,8 @@ static void request_read_done(struct closure *cl)
 			if (dst_offset == dst->bv_offset + dst->bv_len) {
 				kunmap(dst->bv_page);
 				dst++;
-				if (dst == bio_iovec_idx(&s->bio.bio,
-							 s->bio.bio.bi_vcnt))
+				if (dst == bio_iovec_idx(s->cache_miss,
+							 s->cache_miss->bi_vcnt))
 					break;
 
 				dst_offset = dst->bv_offset;
@@ -1065,7 +1065,7 @@ static void request_resubmit(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 	struct search *s = container_of(op, struct search, op);
-	struct bio *bio = s->cache_bio ?: &s->bio.bio;
+	struct bio *bio = s->cache_bio ?: s->cache_miss;
 
 	closure_bio_submit(bio, &s->cl, op->d->c->bio_split);
 	return_f(cl, NULL, NULL);
@@ -1090,21 +1090,26 @@ static void __request_read(struct closure *cl)
 
 	s->lookup_done = true;
 
-	if (!op->cache_hit)
-		op->cache_miss = true;
+	if (!op->cache_hit) {
+		if (s->cache_miss)
+			generic_make_request(s->cache_miss);
+		s->cache_miss = bio;
+	} else
+		reada = 0;
 
-	atomic_inc(&op->d->stats.stats[s->skip][op->cache_miss]);
+	atomic_inc(&op->d->stats.stats[s->skip][s->cache_miss != NULL]);
 #ifdef CONFIG_CGROUP_BCACHE
-	atomic_inc(&bio_to_cgroup(s->orig_bio)->stats[s->skip][op->cache_miss]);
+	atomic_inc(&bio_to_cgroup(s->orig_bio)->
+		   stats[s->skip][s->cache_miss != NULL]);
 #endif
 
-	if (!op->cache_hit && !s->skip)
-		setup_cache_miss(s, reada);
+	if (s->cache_miss) {
+		if (!s->skip)
+			setup_cache_miss(s, reada);
 
-	if (!op->cache_hit) {
 		trace_bcache_cache_miss(s->orig_bio);
 
-		bio = s->cache_bio ?: &s->bio.bio;
+		bio = s->cache_bio ?: s->cache_miss;
 		if (closure_bio_submit(bio, &s->cl, op->d->c->bio_split))
 			return_f(cl, request_resubmit, bcache_wq);
 	}

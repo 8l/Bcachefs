@@ -23,6 +23,7 @@
 #include "bcache.h"
 #include "btree.h"
 #include "debug.h"
+#include "request.h"
 
 #include <linux/slab.h>
 #include <linux/bitops.h>
@@ -2056,6 +2057,8 @@ static int btree_search_leaf(struct btree *b, struct btree_op *op,
 	}
 
 	while (bio->bi_sector < KEY_START(k)) {
+		struct search *s = container_of(op, struct search, op);
+
 		int sectors = min_t(int, bio_max_sectors(bio),
 				    KEY_START(k) - bio->bi_sector);
 
@@ -2064,8 +2067,11 @@ static int btree_search_leaf(struct btree *b, struct btree_op *op,
 			return -ENOMEM;
 
 		BUG_ON(n == bio);
-		op->cache_miss = true;
-		generic_make_request(n);
+
+		if (s->cache_miss)
+			generic_make_request(s->cache_miss);
+
+		s->cache_miss = n;
 	}
 
 	pr_debug("%s", pkey(k));

@@ -238,7 +238,7 @@ static void write_dirty_finish(struct closure *cl)
 		keylist_add(&op.keys, &w->key);
 
 		pr_debug("clearing %s", pkey(&w->key));
-		btree_insert(&op, d->c);
+		bcache_btree_insert(&op, d->c);
 		closure_sync(&op.cl);
 	}
 

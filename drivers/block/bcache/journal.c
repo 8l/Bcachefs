@@ -2,6 +2,7 @@
 #include "bcache.h"
 #include "btree.h"
 #include "debug.h"
+#include "request.h"
 
 /* Journalling */
 
@@ -271,7 +272,7 @@ int bcache_journal_replay(struct cache_set *s, struct list_head *list,
 			op->journal = i->pin;
 			atomic_inc(op->journal);
 
-			ret = btree_insert(op, s);
+			ret = bcache_btree_insert(op, s);
 			if (ret)
 				goto err;
 
@@ -653,17 +654,17 @@ void bcache_journal(struct closure *cl)
 
 	journal_try_write(c);
 out:
-	btree_insert_async(cl);
+	bcache_btree_insert_async(cl);
 }
 
-void free_journal(struct cache_set *c)
+void bcache_journal_free(struct cache_set *c)
 {
 	free_pages((unsigned long) c->journal.w[1].data, JSET_BITS);
 	free_pages((unsigned long) c->journal.w[0].data, JSET_BITS);
 	free_fifo(&c->journal.pin);
 }
 
-int alloc_journal(struct cache_set *c)
+int bcache_journal_alloc(struct cache_set *c)
 {
 	struct journal *j = &c->journal;
 

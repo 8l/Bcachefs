@@ -82,6 +82,8 @@ struct btree_op {
 	unsigned		cache_miss:1;
 };
 
+void btree_op_init_stack(struct btree_op *);
+
 static inline void rw_lock(bool w, struct btree *b, int level)
 {
 	w ? down_write_nested(&b->lock, level + 1)
@@ -145,27 +147,22 @@ static inline const char *insert_type(struct btree_op *op)
 	return bcache_insert_types[op->insert_type];
 }
 
-/* Hack around symbol collisions */
-#define btree_alloc(x, y, z)	bcache_btree_alloc(x, y, z)
-#define btree_insert(x, y)	bcache_btree_insert(x, y)
+void btree_read_work(struct work_struct *);
+void btree_read(struct btree *);
+void btree_write(struct btree *b, bool now, struct btree_op *op);
 
-struct btree *btree_alloc(struct cache_set *, int, struct closure *);
-int btree_insert(struct btree_op *, struct cache_set *);
-void btree_insert_async(struct closure *);
-int btree_search_recurse(struct btree *, struct btree_op *,
-			 struct bio *, uint64_t *);
-
-void set_new_root(struct btree *);
+void bcache_btree_set_root(struct btree *);
+struct btree *bcache_btree_alloc(struct cache_set *, int, struct closure *);
 struct btree *get_bucket(struct cache_set *, struct bkey *,
 			 int, struct btree_op *);
+
+bool bcache_btree_insert_keys(struct btree *, struct btree_op *);
+int bcache_btree_insert(struct btree_op *, struct cache_set *);
+int btree_search_recurse(struct btree *, struct btree_op *,
+			 struct bio *, uint64_t *);
 
 size_t btree_gc_finish(struct cache_set *);
 int btree_check(struct cache_set *, struct btree_op *);
 void __btree_mark_key(struct cache_set *, int, struct bkey *);
-
-void btree_read_work(struct work_struct *);
-void btree_read(struct btree *);
-void btree_write(struct btree *b, bool now, struct btree_op *op);
-bool btree_insert_keys(struct btree *, struct btree_op *);
 
 #endif

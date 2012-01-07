@@ -1,3 +1,5 @@
+#ifndef _BCACHE_JOURNAL_H
+#define _BCACHE_JOURNAL_H
 
 struct jset {
 	uint64_t		csum;
@@ -80,3 +82,8 @@ int bcache_journal_read(struct cache_set *, struct list_head *,
 			struct btree_op *);
 int bcache_journal_replay(struct cache_set *, struct list_head *,
 			  struct btree_op *);
+
+void bcache_journal_free(struct cache_set *);
+int bcache_journal_alloc(struct cache_set *);
+
+#endif /* _BCACHE_JOURNAL_H */

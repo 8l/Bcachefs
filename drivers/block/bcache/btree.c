@@ -24,11 +24,12 @@
 #include "btree.h"
 #include "debug.h"
 
+#include <linux/slab.h>
 #include <linux/bitops.h>
 #include <linux/hash.h>
 #include <linux/rcupdate.h>
-
 #include <trace/events/bcache.h>
+
 /*
  * Todo:
  * register_bcache: Return errors out to userspace correctly
@@ -101,6 +102,14 @@ const char * const bcache_insert_types[] = {
 static struct workqueue_struct *btree_wq;
 
 static void btree_gc_work(struct work_struct *);
+
+void btree_op_init_stack(struct btree_op *op)
+{
+	memset(op, 0, sizeof(struct btree_op));
+	closure_init_stack(&op->cl);
+	op->lock = -1;
+	keylist_init(&op->keys);
+}
 
 /* Btree key manipulation */
 
@@ -906,7 +915,8 @@ static void btree_free(struct btree *b, struct btree_op *op)
 	mutex_unlock(&b->c->bucket_lock);
 }
 
-struct btree *btree_alloc(struct cache_set *c, int level, struct closure *cl)
+struct btree *bcache_btree_alloc(struct cache_set *c, int level,
+				 struct closure *cl)
 {
 	BKEY_PADDED(key) k;
 	struct btree *b = ERR_PTR(-EAGAIN);
@@ -1023,7 +1033,7 @@ static struct btree *btree_gc_alloc(struct btree *b, struct bkey *k,
 	 * collection, so we can't sleep in btree_alloc() -> pop_bucket(), or
 	 * we'd risk deadlock - so we don't pass it our closure.
 	 */
-	struct btree *n = btree_alloc(b->c, b->level, NULL);
+	struct btree *n = bcache_btree_alloc(b->c, b->level, NULL);
 
 	if (!IS_ERR_OR_NULL(n)) {
 		btree_sort(b, 0, n->sets[0].data);
@@ -1259,7 +1269,7 @@ static int btree_gc_root(struct btree *b, struct btree_op *op,
 	int ret = 0, stale = btree_gc_mark(b, &keys, gc);
 
 	if (b->level || stale > 10)
-		n = btree_alloc(b->c, b->level, &op->cl);
+		n = bcache_btree_alloc(b->c, b->level, &op->cl);
 
 	if (!IS_ERR_OR_NULL(n)) {
 		swap(b, n);
@@ -1278,7 +1288,7 @@ static int btree_gc_root(struct btree *b, struct btree_op *op,
 
 	if (!IS_ERR_OR_NULL(n)) {
 		closure_sync(&op->cl);
-		set_new_root(b);
+		bcache_btree_set_root(b);
 		btree_free(n, op);
 		rw_unlock(true, b);
 	}
@@ -1546,7 +1556,7 @@ static bool fix_overlapping_extents(struct btree *b,
 			else if (bkey_cmp(k, check) < 0)
 				cut_front(k, check);
 			else {
-				atomic_inc(&op->d->cache_miss_collisions);
+				atomic_inc(&op->d->stats.cache_miss_collisions);
 				return true;
 			}
 
@@ -1628,7 +1638,7 @@ wb_failed:	atomic_long_inc(&b->c->writeback_keys_failed);
 	return false;
 }
 
-bool btree_insert_keys(struct btree *b, struct btree_op *op)
+bool bcache_btree_insert_keys(struct btree *b, struct btree_op *op)
 {
 	/* If a read generates a cache miss, and a write to the same location
 	 * finishes before the new data is added to the cache, the write will
@@ -1721,7 +1731,7 @@ static int btree_split(struct btree *b, struct btree_op *op)
 	bool split, root = b == b->c->root;
 	struct btree *n1, *n2 = NULL, *n3 = NULL;
 
-	n1 = btree_alloc(b->c, b->level, &op->cl);
+	n1 = bcache_btree_alloc(b->c, b->level, &op->cl);
 	if (IS_ERR(n1))
 		goto err;
 
@@ -1736,17 +1746,17 @@ static int btree_split(struct btree *b, struct btree_op *op)
 	if (split) {
 		unsigned keys = 0;
 
-		n2 = btree_alloc(b->c, b->level, &op->cl);
+		n2 = bcache_btree_alloc(b->c, b->level, &op->cl);
 		if (IS_ERR(n2))
 			goto err_free1;
 
 		if (root) {
-			n3 = btree_alloc(b->c, b->level + 1, &op->cl);
+			n3 = bcache_btree_alloc(b->c, b->level + 1, &op->cl);
 			if (IS_ERR(n3))
 				goto err_free2;
 		}
 
-		btree_insert_keys(n1, op);
+		bcache_btree_insert_keys(n1, op);
 
 		/* Has to be a linear search because we don't have an auxiliary
 		 * search tree yet
@@ -1771,23 +1781,23 @@ static int btree_split(struct btree *b, struct btree_op *op)
 		btree_write(n2, true, op);
 		rw_unlock(true, n2);
 	} else
-		btree_insert_keys(n1, op);
+		bcache_btree_insert_keys(n1, op);
 
 	keylist_add(&op->keys, &n1->key);
 	btree_write(n1, true, op);
 
 	if (n3) {
 		bkey_copy_key(&n3->key, &MAX_KEY);
-		btree_insert_keys(n3, op);
+		bcache_btree_insert_keys(n3, op);
 		btree_write(n3, true, op);
 
 		closure_sync(&op->cl);
-		set_new_root(n3);
+		bcache_btree_set_root(n3);
 		rw_unlock(true, n3);
 	} else if (root) {
 		op->keys.top = op->keys.bottom;
 		closure_sync(&op->cl);
-		set_new_root(n1);
+		bcache_btree_set_root(n1);
 	} else {
 		bkey_copy(op->keys.top, &b->key);
 		bkey_copy_key(op->keys.top, &ZERO_KEY);
@@ -1880,14 +1890,14 @@ static int btree_insert_recurse(struct btree *b, struct btree_op *op,
 			bset_build_tree(b, &b->sets[b->nsets]);
 		}
 
-		if (btree_insert_keys(b, op))
+		if (bcache_btree_insert_keys(b, op))
 			btree_write(b, false, op);
 	}
 
 	return 0;
 }
 
-int btree_insert(struct btree_op *op, struct cache_set *c)
+int bcache_btree_insert(struct btree_op *op, struct cache_set *c)
 {
 	int ret = 0;
 	struct cache *ca;
@@ -1951,7 +1961,7 @@ int btree_insert(struct btree_op *op, struct cache_set *c)
 	return ret;
 }
 
-void set_new_root(struct btree *b)
+void bcache_btree_set_root(struct btree *b)
 {
 	BUG_ON(!b->written);
 	BUG_ON(!current_is_writer(&b->c->root->lock));

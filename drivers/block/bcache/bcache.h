@@ -8,7 +8,6 @@
 #include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/rwsem.h>
-#include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
 
@@ -141,7 +140,7 @@ enum cache_mode {
 	CACHE_MODE_NONE,
 };
 
-struct cache_accounting {
+struct cache_accounting_set {
 	struct kobject		kobj;
 	unsigned		rescale;
 
@@ -159,6 +158,38 @@ struct cache_accounting {
 			unsigned long	sectors_bypassed;
 		};
 	};
+};
+
+struct cache_accounting {
+	union {
+		atomic_t	all[7];
+
+		atomic_t	stats[2][2];
+
+		struct {
+			atomic_t	cache_hits;
+			atomic_t	cache_misses;
+			atomic_t	cache_bypass_hits;
+			atomic_t	cache_bypass_misses;
+
+			atomic_t	cache_readaheads;
+			atomic_t	cache_miss_collisions;
+			atomic_t	sectors_bypassed;
+		};
+	};
+
+	union {
+		struct cache_accounting_set sets[4];
+
+		struct {
+			struct cache_accounting_set total;
+			struct cache_accounting_set five_minute;
+			struct cache_accounting_set hour;
+			struct cache_accounting_set day;
+		};
+	};
+
+	struct timer_list	timer;
 };
 
 struct io {
@@ -208,50 +239,21 @@ struct cached_dev {
 	 */
 	atomic_long_t		last_refilled;
 
-	union {
-		atomic_t	all[7];
-
-		atomic_t	stats[2][2];
-
-		struct {
-			atomic_t	cache_hits;
-			atomic_t	cache_misses;
-			atomic_t	cache_bypass_hits;
-			atomic_t	cache_bypass_misses;
-
-			atomic_t	cache_readaheads;
-			atomic_t	cache_miss_collisions;
-			atomic_t	sectors_bypassed;
-		};
-	};
-
-	union {
-		struct cache_accounting accounting[4];
-
-		struct {
-			struct cache_accounting total;
-			struct cache_accounting five_minute;
-			struct cache_accounting hour;
-			struct cache_accounting day;
-		};
-	};
-
-	struct timer_list	accounting_timer;
-
-	enum cache_mode		cache_mode;
-
 	unsigned long		sequential_cutoff;
-	unsigned		sequential_merge:1;
+	unsigned		readahead;
 
+	enum cache_mode		cache_mode:3;
+
+	unsigned		sequential_merge:1;
 	unsigned		verify:1;
 	unsigned		data_csum:1;
 
 	unsigned		writeback_metadata:1;
 	unsigned		writeback_running:1;
-	unsigned short		writeback_percent;
+	unsigned char		writeback_percent;
 	unsigned		writeback_delay;
 
-	unsigned long		readahead;
+	struct cache_accounting	stats;
 
 	/* Number of writeback bios in flight */
 	atomic_t		in_flight;
@@ -777,13 +779,10 @@ static inline uint8_t gen_after(uint8_t a, uint8_t b)
 
 /* Forward declarations */
 
-void btree_op_init_stack(struct btree_op *);
-
 bool bcache_in_writeback(struct cached_dev *, sector_t, unsigned);
 void bcache_writeback_queue(struct cached_dev *);
 void bcache_writeback_start(struct cached_dev *);
 
-int get_congested(struct cache_set *);
 void count_io_errors(struct cache *, int, const char *);
 void bcache_endio(struct cache_set *, struct bio *, int, const char *);
 void bbio_free(struct bio *, struct cache_set *);
@@ -793,8 +792,6 @@ struct bio *__bio_split_get(struct bio *, int, struct bio_set *);
 void submit_bbio(struct bio *, struct cache_set *, struct bkey *, unsigned);
 int submit_bbio_split(struct bio *, struct cache_set *,
 		      struct bkey *, unsigned);
-
-void cache_read_endio(struct bio *, int);
 
 uint8_t inc_gen(struct cache *, struct bucket *);
 void rescale_priorities(struct cache_set *, int);
@@ -807,25 +804,18 @@ int __pop_bucket_set(struct cache_set *, uint16_t,
 int pop_bucket_set(struct cache_set *, uint16_t,
 		   struct bkey *, int, struct closure *);
 
+bool cache_set_error(struct cache_set *, const char *, ...);
+
 void prio_write(struct cache *, struct closure *);
 void write_bdev_super(struct cached_dev *, struct closure *);
-bool cache_set_error(struct cache_set *, const char *, ...);
-int bcache_make_request(struct request_queue *, struct bio *);
-
 void bcache_write_super(struct cache_set *, struct closure *);
 
-extern struct kmem_cache *search_cache, *passthrough_cache;
 extern struct workqueue_struct *bcache_wq;
-extern struct list_head cache_sets; /* only needed for old shrinker, will die */
 extern const char * const bcache_cache_modes[];
 
 struct cache_set *cache_set_alloc(struct cache_sb *);
 void free_discards(struct cache *);
 int alloc_discards(struct cache *);
-void free_journal(struct cache_set *);
-int alloc_journal(struct cache_set *);
-void free_open_buckets(struct cache_set *);
-int alloc_open_buckets(struct cache_set *);
 void bcache_btree_cache_free(struct cache_set *);
 int bcache_btree_cache_alloc(struct cache_set *);
 void bcache_writeback_init_cached_dev(struct cached_dev *);

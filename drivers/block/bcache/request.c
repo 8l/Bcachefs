@@ -5,6 +5,7 @@
 #include "request.h"
 
 #include <linux/cgroup.h>
+#include <linux/module.h>
 #include <linux/hash.h>
 #include <linux/random.h>
 #include "blk-cgroup.h"
@@ -231,13 +232,6 @@ static void btree_op_init(struct btree_op *op)
 	op->lock = -1;
 }
 
-void btree_op_init_stack(struct btree_op *op)
-{
-	memset(op, 0, sizeof(struct btree_op));
-	btree_op_init(op);
-	closure_init_stack(&op->cl);
-}
-
 static void bio_csum(struct bio *bio, struct bkey *k)
 {
 	struct bio_vec *bv;
@@ -262,7 +256,7 @@ struct open_bucket {
 	BKEY_PADDED(key);
 };
 
-void free_open_buckets(struct cache_set *c)
+void bcache_open_buckets_free(struct cache_set *c)
 {
 	struct open_bucket *b;
 
@@ -274,7 +268,7 @@ void free_open_buckets(struct cache_set *c)
 	}
 }
 
-int alloc_open_buckets(struct cache_set *c)
+int bcache_open_buckets_alloc(struct cache_set *c)
 {
 	spin_lock_init(&c->data_bucket_lock);
 
@@ -563,12 +557,12 @@ static void bio_invalidate(struct search *s)
 	s->bio_done = true;
 }
 
-void btree_insert_async(struct closure *cl)
+void bcache_btree_insert_async(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 	struct search *s = container_of(op, struct search, op);
 again:
-	if (btree_insert(op, op->d->c)) {
+	if (bcache_btree_insert(op, op->d->c)) {
 		s->error	= -ENOMEM;
 		s->bio_done	= true;
 	}
@@ -660,7 +654,7 @@ void cache_read_endio(struct bio *bio, int error)
 	closure_put(cl);
 }
 
-int get_congested(struct cache_set *c)
+int bcache_get_congested(struct cache_set *c)
 {
 	static const unsigned fract_bits = 6;
 	unsigned fract;
@@ -729,7 +723,7 @@ static void check_should_skip(struct search *s)
 		goto skip;
 	}
 
-	cutoff = get_congested(d->c);
+	cutoff = bcache_get_congested(d->c);
 
 	if (!cutoff) {
 		cutoff = d->sequential_cutoff >> 9;
@@ -787,7 +781,7 @@ rescale:
 	rescale_priorities(d->c, bio_sectors(bio));
 	return;
 skip:
-	atomic_add(bio_sectors(bio), &d->sectors_bypassed);
+	atomic_add(bio_sectors(bio), &d->stats.sectors_bypassed);
 	s->skip = true;
 }
 
@@ -858,7 +852,7 @@ static void setup_cache_miss(struct search *s, sector_t reada)
 						  bio_end(bio)));
 
 	if (sectors)
-		atomic_inc(&s->op.d->cache_readaheads);
+		atomic_inc(&s->op.d->stats.cache_readaheads);
 
 	sectors += bio_sectors(bio);
 	s->cache_bio_sectors = sectors;
@@ -1098,7 +1092,7 @@ static void __request_read(struct closure *cl)
 	if (!op->cache_hit)
 		op->cache_miss = true;
 
-	atomic_inc(&op->d->stats[s->skip][op->cache_miss]);
+	atomic_inc(&op->d->stats.stats[s->skip][op->cache_miss]);
 #ifdef CONFIG_CGROUP_BCACHE
 	atomic_inc(&bio_to_cgroup(s->orig_bio)->stats[s->skip][op->cache_miss]);
 #endif

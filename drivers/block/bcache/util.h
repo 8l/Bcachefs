@@ -6,6 +6,7 @@
 #include <linux/kernel.h>
 #include <linux/llist.h>
 #include <linux/ratelimit.h>
+#include <linux/vmalloc.h>
 #include <linux/workqueue.h>
 
 #ifndef USHRT_MAX

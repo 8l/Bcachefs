@@ -402,7 +402,7 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 			SET_KEY_PTRS(k, 1);
 #endif
 			keylist_push(&op.keys);
-			btree_insert_keys(b, &op);
+			bcache_btree_insert_keys(b, &op);
 
 			if (should_split(b) ||
 			    set_blocks(i, b->c) !=

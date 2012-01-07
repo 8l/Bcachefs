@@ -1,7 +1,7 @@
 
-#include <linux/random.h>
-
 #include "bcache.h"
+
+#include <linux/random.h>
 
 static void do_discard(struct cache *);
 

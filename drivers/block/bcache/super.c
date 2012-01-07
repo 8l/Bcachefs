@@ -2,6 +2,7 @@
 #include "bcache.h"
 #include "btree.h"
 #include "debug.h"
+#include "request.h"
 
 #include <linux/buffer_head.h>
 #include <linux/debugfs.h>
@@ -78,7 +79,7 @@ static const char * const accounting_types[]	= {
 static struct kobject *bcache_kobj;
 static struct mutex register_lock;
 static LIST_HEAD(uncached_devices);
-LIST_HEAD(cache_sets);
+static LIST_HEAD(cache_sets);
 static int bcache_major, bcache_minor;
 
 struct workqueue_struct *bcache_wq;
@@ -708,18 +709,18 @@ static int prio_read(struct cache *c, uint64_t bucket)
 
 static void scale_accounting(unsigned long data)
 {
-	struct cached_dev *d = (struct cached_dev *) data;
+	struct cache_accounting *d = (struct cache_accounting *) data;
 
 	for (int i = 0; i < 7; i++) {
 		unsigned long t = atomic_xchg(&d->all[i], 0);
 		t <<= 16;
 
 		for (int j = 0; j < 4; j++)
-			d->accounting[j].all[i] += t;
+			d->sets[j].all[i] += t;
 	}
 
 	for (int j = 1; j < 4; j++) {
-		struct cache_accounting *a = &d->accounting[j];
+		struct cache_accounting_set *a = &d->sets[j];
 
 		if (++a->rescale == accounting_rescale[j]) {
 			a->rescale = 0;
@@ -731,8 +732,8 @@ static void scale_accounting(unsigned long data)
 		}
 	}
 
-	d->accounting_timer.expires += accounting_delay;
-	add_timer(&d->accounting_timer);
+	d->timer.expires += accounting_delay;
+	add_timer(&d->timer);
 }
 
 #define PRINT_ACCOUNTING()						\
@@ -753,8 +754,8 @@ do {									\
 
 SHOW(cached_dev_accounting)
 {
-	struct cache_accounting *a =
-		container_of(kobj, struct cache_accounting, kobj);
+	struct cache_accounting_set *a =
+		container_of(kobj, struct cache_accounting_set, kobj);
 
 #define var(stat)		(a->stat >> 16)
 
@@ -775,7 +776,7 @@ SHOW(cache_set_accounting)
 	struct cached_dev *d;				\
 	unsigned long ret = 0;				\
 	list_for_each_entry(d, &c->devices, list)	\
-		ret += d->accounting[idx].stat;		\
+		ret += d->stats.sets[idx].stat;	\
 	ret >> 16;					\
 })
 
@@ -861,7 +862,7 @@ STORE(__cached_dev)
 	d_strtoi_h(readahead);
 
 	if (attr == &sysfs_clear_stats)
-		memset(&d->total.all, 0, sizeof(unsigned long) * 7);
+		memset(&d->stats.total.all, 0, sizeof(unsigned long) * 7);
 
 	if (attr == &sysfs_running &&
 	    strtoul_or_return(buf))
@@ -1174,18 +1175,18 @@ static struct cached_dev *cached_dev_alloc(void)
 	kobject_init(&d->kobj, &cached_dev_obj);
 
 	for (int i = 0; i < 4; i++)
-		kobject_init(&d->accounting[i].kobj, &accounting_obj);
+		kobject_init(&d->stats.sets[i].kobj, &accounting_obj);
 
 	INIT_LIST_HEAD(&d->list);
 	spin_lock_init(&d->lock);
 	sema_init(&d->sb_write, 1);
 	INIT_WORK(&d->detach, cached_dev_detach_finish);
 
-	init_timer(&d->accounting_timer);
-	d->accounting_timer.expires	= jiffies + accounting_delay;
-	d->accounting_timer.data	= (unsigned long) d;
-	d->accounting_timer.function	= scale_accounting;
-	add_timer(&d->accounting_timer);
+	init_timer(&d->stats.timer);
+	d->stats.timer.expires	= jiffies + accounting_delay;
+	d->stats.timer.data	= (unsigned long) &d->stats;
+	d->stats.timer.function	= scale_accounting;
+	add_timer(&d->stats.timer);
 
 	d->sequential_merge		= true;
 	d->sequential_cutoff		= 4 << 20;
@@ -1339,7 +1340,7 @@ static const char *register_bdev(struct cache_sb *sb, struct page *sb_page,
 		goto err;
 
 	for (int i = 0; i < 4; i++)
-		if (kobject_add(&d->accounting[i].kobj, &d->kobj,
+		if (kobject_add(&d->stats.sets[i].kobj, &d->kobj,
 				"stats_%s", accounting_types[i]))
 			goto err;
 
@@ -1462,7 +1463,7 @@ SHOW(__cache_set)
 	sysfs_print(io_error_limit,	c->error_limit >> IO_ERROR_SHIFT);
 
 	sysfs_hprint(congested,
-		     ((uint64_t) get_congested(c)) << 9);
+		     ((uint64_t) bcache_get_congested(c)) << 9);
 	sysfs_print(congested_read_threshold_us,
 		    c->congested_read_threshold_us);
 	sysfs_print(congested_write_threshold_us,
@@ -1622,9 +1623,9 @@ static void cache_set_free(struct kobject *kobj)
 
 	cancel_work_sync(&c->journal.work);
 
-	free_open_buckets(c);
+	bcache_open_buckets_free(c);
 	bcache_btree_cache_free(c);
-	free_journal(c);
+	bcache_journal_free(c);
 
 	/* Don't free cache until no io could be pending */
 	for_each_cache(ca, c)
@@ -1788,9 +1789,9 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	    !(c->fill_iter = kmalloc(iter_size, GFP_KERNEL)) ||
 	    !(c->sort = alloc_bucket_pages(GFP_KERNEL, c)) ||
 	    !(c->uuids = alloc_bucket_pages(GFP_KERNEL, c)) ||
-	    alloc_journal(c) ||
+	    bcache_journal_alloc(c) ||
 	    bcache_btree_cache_alloc(c) ||
-	    alloc_open_buckets(c))
+	    bcache_open_buckets_alloc(c))
 		goto err;
 
 	c->fill_iter->size = sb->bucket_size / sb->block_size;
@@ -1899,7 +1900,7 @@ static void run_cache_set(struct cache_set *c)
 			goto err;
 
 		err = "cannot allocate new btree root";
-		c->root = btree_alloc(c, 0, &op.cl);
+		c->root = bcache_btree_alloc(c, 0, &op.cl);
 		if (IS_ERR_OR_NULL(c->root))
 			goto err;
 
@@ -1914,7 +1915,7 @@ static void run_cache_set(struct cache_set *c)
 		mutex_unlock(&c->bucket_lock);
 
 		closure_sync(&op.cl);
-		set_new_root(c->root);
+		bcache_btree_set_root(c->root);
 		rw_unlock(true, c->root);
 
 		/* first journal entry doesn't get written until after cache is

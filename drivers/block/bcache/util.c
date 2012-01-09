@@ -208,7 +208,7 @@ int bio_alloc_pages(struct bio *bio, gfp_t gfp)
 	struct bio_vec *bv;
 	bio_for_each_segment(bv, bio, i) {
 		bv->bv_page = alloc_page(gfp);
-		if (!bv) {
+		if (!bv->bv_page) {
 			while (bv-- != bio->bi_io_vec + bio->bi_idx)
 				__free_page(bv->bv_page);
 			return -ENOMEM;

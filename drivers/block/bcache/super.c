@@ -168,6 +168,7 @@ write_attribute(detach);
 write_attribute(unregister);
 write_attribute(clear_stats);
 write_attribute(trigger_gc);
+write_attribute(prune_cache);
 
 read_attribute(bucket_size);
 read_attribute(block_size);
@@ -1455,6 +1456,12 @@ STORE(__cache_set)
 	if (attr == &sysfs_trigger_gc)
 		queue_work(bcache_wq, &c->gc_work);
 
+	if (attr == &sysfs_prune_cache) {
+		unsigned long v;
+		strict_strtoul(buf, 10, &v);
+		c->shrink.shrink(&c->shrink, v, NULL);
+	}
+
 	sysfs_strtoul(congested_threshold_us, c->congested_threshold_us);
 
 	sysfs_strtoul(io_error_limit, c->error_limit);
@@ -1631,6 +1638,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 		&sysfs_writeback_keys_done,
 		&sysfs_writeback_keys_failed,
 #ifdef CONFIG_BCACHE_DEBUG
+		&sysfs_prune_cache,
 		&sysfs_verify,
 		&sysfs_key_merging_disabled,
 #endif

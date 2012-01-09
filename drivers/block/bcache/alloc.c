@@ -36,7 +36,7 @@ void rescale_priorities(struct cache_set *c, int sectors)
 			return;
 	} while (atomic_cmpxchg(&c->rescale, r, r + next) != r);
 
-	spin_lock(&c->bucket_lock);
+	mutex_lock(&c->bucket_lock);
 
 	for_each_cache(ca, c)
 		for_each_bucket(b, ca)
@@ -47,7 +47,7 @@ void rescale_priorities(struct cache_set *c, int sectors)
 				c->min_prio = min(c->min_prio, b->prio);
 			}
 
-	spin_unlock(&c->bucket_lock);
+	mutex_unlock(&c->bucket_lock);
 }
 
 static long pop_freed(struct cache *c)
@@ -85,7 +85,7 @@ static void discard_finish(struct work_struct *w)
 	struct cache *c = d->c;
 	bool run = false;
 
-	spin_lock(&c->set->bucket_lock);
+	mutex_lock(&c->set->bucket_lock);
 	if (fifo_empty(&c->free) ||
 	    fifo_used(&c->free) == 8)
 		run = true;
@@ -95,7 +95,7 @@ static void discard_finish(struct work_struct *w)
 	list_add(&d->list, &c->discards);
 
 	do_discard(c);
-	spin_unlock(&c->set->bucket_lock);
+	mutex_unlock(&c->set->bucket_lock);
 
 	if (run)
 		closure_run_wait(&c->set->bucket_wait, NULL);
@@ -386,14 +386,14 @@ again:
 
 	if (cl) {
 		if (test_bit(CLOSURE_BLOCK, &cl->flags))
-			spin_unlock(&c->set->bucket_lock);
+			mutex_unlock(&c->set->bucket_lock);
 
 		closure_wait_on(&c->set->bucket_wait, bcache_wq, cl,
 				atomic_read(&c->prio_written) > 0 ||
 				can_save_prios(c));
 
 		if (test_bit(CLOSURE_BLOCK, &cl->flags)) {
-			spin_lock(&c->set->bucket_lock);
+			mutex_lock(&c->set->bucket_lock);
 			goto again;
 		}
 	}
@@ -446,8 +446,8 @@ int pop_bucket_set(struct cache_set *c, uint16_t prio,
 		   struct bkey *k, int n, struct closure *cl)
 {
 	int ret;
-	spin_lock(&c->bucket_lock);
+	mutex_lock(&c->bucket_lock);
 	ret = __pop_bucket_set(c, prio, k, n, cl);
-	spin_unlock(&c->bucket_lock);
+	mutex_unlock(&c->bucket_lock);
 	return ret;
 }

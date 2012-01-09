@@ -361,10 +361,11 @@ struct cache_set {
 	 * is increased on cache hit, and periodically all the buckets on the
 	 * heap have their priority scaled down by a linear function.
 	 */
-	spinlock_t		bucket_lock;
+	struct mutex		bucket_lock;
 	unsigned short		bucket_bits;
 	unsigned short		block_bits;
 	unsigned		btree_pages;
+	unsigned		bucket_cache_used;
 
 	/* Refcount for when we can't write the priorities to disk until a
 	 * btree write finishes.
@@ -472,9 +473,9 @@ struct btree {
 	struct cache_set	*c;
 
 	atomic_t		nread;
-	short			level;
 	uint16_t		written;
-	uint16_t		nsets;
+	uint8_t			level;
+	uint8_t			nsets;
 	unsigned		next_write:1;
 	unsigned		page_order:7;
 
@@ -765,8 +766,8 @@ void free_journal(struct cache_set *);
 int alloc_journal(struct cache_set *);
 void free_open_buckets(struct cache_set *);
 int alloc_open_buckets(struct cache_set *);
-void free_btree_cache(struct cache_set *);
-int alloc_btree_cache(struct cache_set *);
+void bcache_btree_cache_free(struct cache_set *);
+int bcache_btree_cache_alloc(struct cache_set *);
 void bcache_writeback_init_cached_dev(struct cached_dev *);
 
 void bcache_debug_exit(void);

@@ -293,7 +293,7 @@ static void btree_flush_write(struct cache_set *s)
 		rw_unlock(true, i);
 	}
 
-	spin_lock(&s->bucket_lock);
+	mutex_lock(&s->bucket_lock);
 
 	i = NULL;
 	list_for_each_entry(b, &s->lru, lru) {
@@ -324,13 +324,13 @@ next:
 				break;
 			}
 
-		spin_unlock(&s->bucket_lock);
+		mutex_unlock(&s->bucket_lock);
 		if (!i)
 			return;
 
 		rw_lock(true, i, i->level);
 	} else
-		spin_unlock(&s->bucket_lock);
+		mutex_unlock(&s->bucket_lock);
 found:
 	if (i->write)
 		btree_write(i, true, NULL);

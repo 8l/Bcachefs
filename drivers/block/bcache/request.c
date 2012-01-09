@@ -359,8 +359,11 @@ static struct open_bucket *get_data_bucket(struct bkey *search,
 	struct list_head *buckets = &c->open_buckets;
 	struct open_bucket *l, *ret, *ret_task;
 
+	BKEY_PADDED(key) alloc;
+	struct bkey *k = NULL;
+
 	if (s->op.insert_type == INSERT_WRITEBACK) {
-		__closure_init(&cl, NULL, true);
+		closure_init_stack(&cl);
 		w = &cl;
 		buckets = &c->dirty_buckets;
 	}
@@ -378,13 +381,18 @@ again:
 	ret = ret_task ?: list_first_entry(buckets, struct open_bucket, list);
 found:
 	if (!ret->sectors_free) {
-		if (pop_bucket_set(c, initial_prio, &ret->key, 1, w)) {
+		if (!k) {
 			spin_unlock(&c->open_bucket_lock);
-			if (!w)
+			k = &alloc.key;
+
+			if (pop_bucket_set(c, initial_prio, k, 1, w))
 				return NULL;
-			closure_sync(w);
+
 			goto again;
 		}
+
+		bkey_copy(&ret->key, k);
+		k = NULL;
 
 		if (w)
 			for (unsigned i = 0; i < KEY_PTRS(&ret->key); i++)
@@ -394,7 +402,10 @@ found:
 		ret->sectors_free = c->sb.bucket_size;
 	} else
 		for (unsigned i = 0; i < KEY_PTRS(&ret->key); i++)
-			BUG_ON(ptr_stale(c, &ret->key, i));
+			EBUG_ON(ptr_stale(c, &ret->key, i));
+
+	if (k)
+		__bkey_put(c, k);
 
 	ret->last = s->task;
 	bkey_copy_key(&ret->key, search);

@@ -146,14 +146,12 @@ size_t btree_gc_finish(struct cache_set *);
 int btree_check(struct btree *, struct btree_op *);
 void __btree_mark_key(struct cache_set *, int, struct bkey *);
 
-void btree_write(struct btree *b, bool now, struct btree_op *op);
 void btree_read_work(struct work_struct *);
 void btree_read(struct btree *);
+void btree_write(struct btree *b, bool now, struct btree_op *op);
+bool btree_insert_keys(struct btree *, struct btree_op *);
 
 void free_bucket_data(struct btree *);
-struct btree *__alloc_bucket(struct cache_set *, gfp_t);
-void alloc_bucket_data(struct btree *, gfp_t);
-
-bool btree_insert_keys(struct btree *, struct btree_op *);
+struct btree *__alloc_bucket(struct cache_set *, struct bkey *, gfp_t);
 
 #endif

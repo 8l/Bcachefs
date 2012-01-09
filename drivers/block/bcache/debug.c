@@ -187,27 +187,25 @@ void btree_verify(struct btree *b, struct bset *new)
 
 void bcache_debug_cache_set_free(struct cache_set *c)
 {
-	if (c->verify_data) {
-		free_bucket_data(c->verify_data);
-		kfree(c->verify_data);
-	}
+	if (c->verify_data)
+		list_move_tail(&c->verify_data->lru, &c->lru);
 }
 
 int bcache_debug_cache_set_alloc(struct cache_set *c)
 {
+	int ret = 0;
 	mutex_init(&c->verify_lock);
 
-	c->verify_data = __alloc_bucket(c, GFP_KERNEL);
-	if (!c->verify_data)
-		return -ENOMEM;
+	mutex_lock(&c->bucket_lock);
+	c->verify_data = __alloc_bucket(c, &ZERO_KEY, 0);
 
-	SET_KEY_SIZE(&c->verify_data->key, c->sb.bucket_size);
+	if (!c->verify_data || !c->verify_data->data)
+		ret = -ENOMEM;
+	else
+		list_del_init(&c->verify_data->lru);
 
-	alloc_bucket_data(c->verify_data, GFP_KERNEL);
-	if (!c->verify_data->data)
-		return -ENOMEM;
-
-	return 0;
+	mutex_unlock(&c->bucket_lock);
+	return ret;
 }
 
 #endif

@@ -559,7 +559,7 @@ static void prio_write_done(struct closure *cl)
 		 fifo_used(&c->free_inc), fifo_used(&c->unused));
 	blktrace_msg(c, "Finished priorities: " buckets_free(c));
 
-	spin_lock(&c->set->bucket_lock);
+	mutex_lock(&c->set->bucket_lock);
 
 	for (unsigned i = 0; i < prio_buckets(c); i++)
 		c->prio_buckets[i] = c->prio_next[i];
@@ -571,7 +571,7 @@ static void prio_write_done(struct closure *cl)
 	closure_put(&c->prio, NULL);
 
 	atomic_set(&c->prio_written, 1);
-	spin_unlock(&c->set->bucket_lock);
+	mutex_unlock(&c->set->bucket_lock);
 
 	closure_run_wait(&c->set->bucket_wait, bcache_wq);
 }
@@ -1354,18 +1354,18 @@ SHOW(__cache_set)
 		size_t ret = 0;
 		struct btree *b;
 
-		spin_lock(&c->bucket_lock);
+		mutex_lock(&c->bucket_lock);
 		list_for_each_entry(b, &c->lru, lru)
 			ret += 1 << (b->page_order + PAGE_SHIFT);
 
-		spin_unlock(&c->bucket_lock);
+		mutex_unlock(&c->bucket_lock);
 		return ret;
 	}
 
 	unsigned cache_max_chain(struct cache_set *c)
 	{
 		unsigned ret = 0;
-		spin_lock(&c->bucket_lock);
+		mutex_lock(&c->bucket_lock);
 
 		for (struct hlist_head *h = c->bucket_hash;
 		     h < c->bucket_hash + (1 << BUCKET_HASH_BITS);
@@ -1379,7 +1379,7 @@ SHOW(__cache_set)
 			ret = max(ret, i);
 		}
 
-		spin_unlock(&c->bucket_lock);
+		mutex_unlock(&c->bucket_lock);
 		return ret;
 	}
 
@@ -1573,7 +1573,7 @@ static void cache_set_free(struct kobject *kobj)
 
 	bcache_debug_cache_set_free(c);
 	free_open_buckets(c);
-	free_btree_cache(c);
+	bcache_btree_cache_free(c);
 	free_journal(c);
 
 	free_pages((unsigned long) c->uuids, ilog2(bucket_pages(c)));
@@ -1703,7 +1703,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 		c->btree_pages = max_t(int, c->btree_pages / 4,
 				       BTREE_MAX_PAGES);
 
-	spin_lock_init(&c->bucket_lock);
+	mutex_init(&c->bucket_lock);
 	spin_lock_init(&c->open_bucket_lock);
 	mutex_init(&c->gc_lock);
 	mutex_init(&c->fill_lock);
@@ -1729,7 +1729,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	    !(c->sort = alloc_bucket_pages(GFP_KERNEL, c)) ||
 	    !(c->uuids = alloc_bucket_pages(GFP_KERNEL, c)) ||
 	    alloc_journal(c) ||
-	    alloc_btree_cache(c) ||
+	    bcache_btree_cache_alloc(c) ||
 	    alloc_open_buckets(c) ||
 	    bcache_debug_cache_set_alloc(c))
 		goto err;
@@ -1849,12 +1849,12 @@ static void run_cache_set(struct cache_set *c)
 		bkey_copy_key(&c->root->key, &MAX_KEY);
 		btree_write(c->root, true, &op);
 
-		spin_lock(&c->bucket_lock);
+		mutex_lock(&c->bucket_lock);
 		for_each_cache(ca, c) {
 			free_some_buckets(ca);
 			prio_write(ca, &op.cl);
 		}
-		spin_unlock(&c->bucket_lock);
+		mutex_unlock(&c->bucket_lock);
 
 		closure_sync(&op.cl);
 		set_new_root(c->root);
@@ -1988,10 +1988,10 @@ SHOW(__cache)
 		if (!p)
 			return -ENOMEM;
 
-		spin_lock(&c->set->bucket_lock);
+		mutex_lock(&c->set->bucket_lock);
 		for (i = c->sb.first_bucket; i < n; i++)
 			p[i] = c->buckets[i].prio;
-		spin_unlock(&c->set->bucket_lock);
+		mutex_unlock(&c->set->bucket_lock);
 
 		sort(p, n, sizeof(uint16_t), cmp, NULL);
 

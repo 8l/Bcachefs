@@ -33,6 +33,7 @@ const char * const bcache_cache_modes[] = {
 static const char * const cache_replacement_policies[] = {
 	"lru",
 	"fifo",
+	"random",
 	NULL
 };
 

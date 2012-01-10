@@ -94,7 +94,11 @@ BITMASK(BDEV_STATE,	struct cache_sb, flags, 61, 2);
 #define BDEV_STATE_STALE	3U
 
 BITMASK(CACHE_DISCARD,	struct cache_sb, flags, 1, 1);
+
 BITMASK(CACHE_REPLACEMENT, struct cache_sb, flags, 2, 3);
+#define CACHE_REPLACEMENT_LRU	0U
+#define CACHE_REPLACEMENT_FIFO	1U
+#define CACHE_REPLACEMENT_RANDOM 2U
 
 /* Version 1: Seed pointer into btree node checksum
  */
@@ -303,7 +307,7 @@ struct cache {
 	uint8_t			need_save_prio;
 	unsigned		invalidate_needs_gc:1;
 
-	unsigned		cache_replacement_policy:1;
+	unsigned		cache_replacement_policy:3;
 	size_t			fifo_last_bucket;
 
 	DECLARE_FIFO(long, free);

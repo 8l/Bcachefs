@@ -1,4 +1,6 @@
 
+#include <linux/random.h>
+
 #include "bcache.h"
 
 static void do_discard(struct cache *);
@@ -312,6 +314,31 @@ static void invalidate_buckets_fifo(struct cache *c)
 	}
 }
 
+static void invalidate_buckets_random(struct cache *c)
+{
+	struct bucket *b;
+	size_t checked = 0;
+
+	while (!fifo_full(&c->free_inc)) {
+		size_t n;
+		get_random_bytes(&n, sizeof(n));
+
+		n %= c->sb.nbuckets - c->sb.first_bucket;
+		n += c->sb.first_bucket;
+
+		b = c->buckets + n;
+
+		if (can_invalidate_bucket(c, b))
+			invalidate_one_bucket(c, b);
+
+		if (++checked >= c->sb.nbuckets / 2) {
+			c->invalidate_needs_gc = 1;
+			queue_work(bcache_wq, &c->set->gc_work);
+			return;
+		}
+	}
+}
+
 static void invalidate_buckets(struct cache *c)
 {
 	/* free_some_buckets() may just need to write priorities to keep gens
@@ -321,10 +348,17 @@ static void invalidate_buckets(struct cache *c)
 	    c->invalidate_needs_gc)
 		return;
 
-	if (c->cache_replacement_policy)
-		invalidate_buckets_fifo(c);
-	else
+	switch (c->cache_replacement_policy) {
+	case CACHE_REPLACEMENT_LRU:
 		invalidate_buckets_lru(c);
+		break;
+	case CACHE_REPLACEMENT_FIFO:
+		invalidate_buckets_fifo(c);
+		break;
+	case CACHE_REPLACEMENT_RANDOM:
+		invalidate_buckets_random(c);
+		break;
+	}
 }
 
 bool can_save_prios(struct cache *c)

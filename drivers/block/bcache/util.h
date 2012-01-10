@@ -4,6 +4,7 @@
 
 #include <linux/errno.h>
 #include <linux/kernel.h>
+#include <linux/llist.h>
 #include <linux/ratelimit.h>
 #include <linux/workqueue.h>
 
@@ -443,16 +444,14 @@ do {									\
 
 typedef void (closure_fn) (struct closure *);
 
-typedef struct {
-	struct closure *head;
-} closure_list_t;
+typedef struct llist_head	closure_list_t;
 
 struct closure {
 	union {
 		struct {
 			struct workqueue_struct *wq;
 			struct task_struct	*task;
-			struct closure		*next;
+			struct llist_node	list;
 			closure_fn		*fn;
 		};
 		struct work_struct	work;

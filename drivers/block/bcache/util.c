@@ -467,17 +467,13 @@ EXPORT_SYMBOL_GPL(closure_put);
 
 void __closure_wake_up(closure_list_t *list)
 {
-	struct closure *cl, *next;
+	struct closure *cl;
 
-	cl = xchg(&list->head, NULL);
-	if (!cl)
-		return;
+	struct llist_node *l = llist_del_all(list);
 
-	/* between popping list and clearing CLOSURE_WAITING */
-	smp_rmb();
-
-	for (; cl; cl = next) {
-		next = cl->next;
+	while (l) {
+		cl = container_of(l, struct closure, list);
+		l = llist_next(l);
 
 		SET_WAITING(cl, 0);
 		__closure_put(cl, atomic_sub_return(CLOSURE_WAITING + 1,
@@ -488,23 +484,12 @@ EXPORT_SYMBOL_GPL(__closure_wake_up);
 
 bool closure_wait(closure_list_t *list, struct closure *cl)
 {
-	struct closure *t;
-
 	if (atomic_read(&cl->remaining) & CLOSURE_WAITING)
 		return false;
 
 	SET_WAITING(cl, _RET_IP_);
 	atomic_add(CLOSURE_WAITING + 1, &cl->remaining);
-
-	do {
-		t = ACCESS_ONCE(list->head);
-		cl->next = t;
-		/*
-		 * between setting CLOSURE_WAITING/cl->next and pushing onto the
-		 * waitlist
-		 */
-		smp_wmb();
-	} while (cmpxchg(&list->head, t, cl) != t);
+	llist_add(&cl->list, list);
 
 	return true;
 }

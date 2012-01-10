@@ -82,16 +82,25 @@ static inline void rw_unlock(bool w, struct btree *b)
 	(w ? up_write : up_read)(&b->lock);
 }
 
-#define insert_lock(s, b)	((b)->level	<= (s)->lock)
+#define insert_lock(s, b)	((b)->level <= (s)->lock)
 
+/*
+ * These macros are for recursing down the btree - they handle the details of
+ * locking and looking up nodes in the cache for you. They're best treated as
+ * mere syntax when reading code that uses them.
+ *
+ * op->lock determines whether we take a read or a write lock at a given depth.
+ * If you've got a read lock and find that you need a write lock (i.e. you're
+ * going to have to split), set op->lock and return -EINTR; btree_root() will
+ * call you again and you'll have the correct lock.
+ */
 #define btree(f, k, b, op, ...)						\
 ({									\
-	int _r, l = b->level - 1;					\
+	int _r, l = (b)->level - 1;					\
 	bool _w = l <= (op)->lock;					\
-	struct btree *_b = get_bucket(b->c, k, l, op);			\
-	BUG_ON(ptr_bad(b, k));						\
+	struct btree *_b = get_bucket((b)->c, k, l, op);		\
 	if (!IS_ERR(_b)) {						\
-		_r = btree_ ## f(_b, op, ## __VA_ARGS__);		\
+		_r = btree_ ## f(_b, op, ##__VA_ARGS__);		\
 		rw_unlock(_w, _b);					\
 	} else								\
 		_r = PTR_ERR(_b);					\

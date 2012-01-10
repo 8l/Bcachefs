@@ -3,6 +3,65 @@
 
 #include <linux/random.h>
 
+/*
+ * Allocation in bcache is done in terms of buckets:
+ *
+ * Each bucket has associated an 8 bit gen; this gen corresponds to the gen in
+ * btree pointers - they must match for the pointer to be considered valid.
+ *
+ * Thus (assuming a bucket has no dirty data or metadata in it) we can reuse a
+ * bucket simply by incrementing its gen.
+ *
+ * The gens (along with the priorities; it's really the gens are important but
+ * the code is named as if it's the priorities) are written in an arbitrary list
+ * of buckets on disk, with a pointer to them in the journal header.
+ *
+ * When we invalidate a bucket, we have to write its new gen to disk and wait
+ * for that write to complete before we use it - otherwise after a crash we
+ * could have pointers that appeared to be good but pointed to data that had
+ * been overwritten.
+ *
+ * Since the gens and priorities are all stored contiguously on disk, we can
+ * batch this up: We fill up the free_inc list with freshly invalidated buckets,
+ * call prio_write() - and when prio_write() eventually finishes it toggles
+ * c->prio_written and the buckets in free_inc are now ready to be used. When
+ * the free_inc list empties, we toggle c->prio_written and the cycle repeats.
+ *
+ * free_inc isn't the only freelist - if it was, we'd often to sleep while
+ * priorities and gens were being written before we could allocate. c->free is a
+ * smaller freelist, and buckets on that list are always ready to be used.
+ *
+ * If we've got discards enabled, that happens when a bucket moves from the
+ * free_inc list to the free list.
+ *
+ * There is another freelist, because sometimes we have buckets that we know
+ * have nothing pointing into them - these we can reuse without waiting for
+ * priorities to be rewritten. These come from freed btree nodes and buckets
+ * that garbage collection discovered no longer had valid keys pointing into
+ * them (because they were overwritten). That's the unused list - buckets on the
+ * unused list move to the free list, optionally being discarded in the process.
+ *
+ * It's also important to ensure that gens don't wrap around - with respect to
+ * either the oldest gen in the btree or the gen on disk. This is quite
+ * difficult to do in practice, but we explicitly guard against it anyways - if
+ * a bucket is in danger of wrapping around we simply skip invalidating it that
+ * time around, and we garbage collect or rewrite the priorities sooner than we
+ * would have otherwise.
+ *
+ * pop_bucket() allocates a single bucket from a specific cache.
+ *
+ * pop_bucket_set() allocates one or more buckets from different caches out of a
+ * cache set.
+ *
+ * free_some_buckets() drives all the processes described above. It's called
+ * from pop_bucket() and a few other places that need to make sure free buckets
+ * are ready.
+ *
+ * invalidate_buckets_(lru|fifo)() find buckets that are available to be
+ * invalidated, and then invalidate them and stick them on the free_inc list -
+ * in either lru or fifo order.
+ */
+
 static void do_discard(struct cache *);
 
 /* Bucket heap / gen */

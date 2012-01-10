@@ -4,7 +4,18 @@
 #include "debug.h"
 #include "request.h"
 
-/* Journalling */
+/*
+ * Journal replay/recovery:
+ *
+ * This code is all driven from run_cache_set(); we first read the journal
+ * entries, do some other stuff, then we mark all the keys in the journal
+ * entries (same as garbage collection would), then we replay them - reinserting
+ * them into the cache in precisely the same order as they appear in the
+ * journal.
+ *
+ * We only journal keys that go in leaf nodes, which simplifies things quite a
+ * bit.
+ */
 
 static void journal_read_endio(struct bio *bio, int error)
 {
@@ -297,6 +308,8 @@ err:
 	closure_sync(&op->cl);
 	return ret;
 }
+
+/* Journalling */
 
 static void btree_flush_write(struct cache_set *c)
 {
@@ -593,6 +606,12 @@ void bcache_journal_meta(struct cache_set *c, struct closure *cl)
 		__journal_try_write(c, true);
 	}
 }
+
+/*
+ * Entry point to the journalling code - bio_insert() and btree_invalidate()
+ * pass bcache_journal() a list of keys to be journalled, and then
+ * bcache_journal() hands those same keys off to btree_insert_async()
+ */
 
 void bcache_journal(struct closure *cl)
 {

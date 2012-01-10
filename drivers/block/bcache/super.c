@@ -540,7 +540,37 @@ static int uuid_write(struct cache_set *c)
 	return 0;
 }
 
-/* Bucket priorities/gens */
+/*
+ * Bucket priorities/gens:
+ *
+ * For each bucket, we store on disk its
+   * 8 bit gen
+   * 16 bit priority
+ *
+ * See alloc.c for an explanation of the gen. The priority is used to implement
+ * lru (and in the future other) cache replacement policies; for most purposes
+ * it's just an opaque integer.
+ *
+ * The gens and the priorities don't have a whole lot to do with each other, and
+ * it's actually the gens that must be written out at specific times - it's no
+ * big deal if the priorities don't get written, if we lose them we just reuse
+ * buckets in suboptimal order.
+ *
+ * On disk they're stored in a packed array, and in as many buckets are required
+ * to fit them all. The buckets we use to store them form a list; the journal
+ * header points to the first bucket, the first bucket points to the second
+ * bucket, et cetera.
+ *
+ * This code is primarily used by the allocation code; periodically (whenever
+ * it runs out of buckets to allocate from) the allocation code will invalidate
+ * some buckets, but it can't use those buckets until their new gens are safely
+ * on disk.
+ *
+ * So it calls prio_write(), which does a bunch of work and eventually stores
+ * the pointer to the new first prio bucket in the current open journal entry
+ * header; when that journal entry is written, we can mark the buckets that have
+ * been invalidated as being ready for use by toggling c->prio_written.
+ */
 
 static void prio_endio(struct bio *bio, int error)
 {

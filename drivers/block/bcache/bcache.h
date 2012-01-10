@@ -105,6 +105,10 @@ BITMASK(CACHE_REPLACEMENT, struct cache_sb, flags, 2, 3);
  */
 #define BCACHE_BSET_VERSION	1
 
+/*
+ * This is the on disk format for btree nodes - a btree node on disk is a list
+ * of these; within each set the keys are sorted
+ */
 struct bset {
 	uint64_t		csum;
 	uint64_t		magic;
@@ -118,6 +122,10 @@ struct bset {
 	};
 };
 
+/*
+ * On disk format for priorities and gens - see super.c near prio_write() for
+ * more.
+ */
 struct prio_set {
 	uint64_t		csum;
 	uint64_t		magic;
@@ -220,7 +228,9 @@ struct cached_dev {
 	struct cache_set	*c;
 	unsigned		id;
 
+	/* Used for the dirty io rb tree, and the recent io hash */
 	spinlock_t		lock;
+
 	/* Refcount on the cache set. Always nonzero when we're caching. */
 	atomic_t		count;
 	atomic_t		unregister;
@@ -233,10 +243,8 @@ struct cached_dev {
 	mempool_t		*bio_passthrough;
 	struct bio_set		*bio_split;
 
-	struct rw_semaphore	writeback_lock;
-	struct delayed_work	refill;
-
-	/* Nonzero, and writeback has a refcount (d->count), iff there is dirty
+	/*
+	 * Nonzero, and writeback has a refcount (d->count), iff there is dirty
 	 * data in the cache
 	 */
 	atomic_long_t		last_refilled;
@@ -257,16 +265,30 @@ struct cached_dev {
 
 	struct cache_accounting	stats;
 
-	/* Number of writeback bios in flight */
-	atomic_t		in_flight;
+	/*
+	 * Writes take a read lock from start to finish; scanning for dirty data
+	 * to refill the rb tree requires a write lock
+	 */
+	struct rw_semaphore	writeback_lock;
 
-	uint64_t		last_found;
-	uint64_t		last_read;
-	struct rb_root		dirty;
-
-	/* Beginning and end of range in dirty rb tree */
+	/*
+	 * Beginning and end of range in dirty rb tree - so that we can skip
+	 * taking d->lock and checking the rb tree
+	 */
 	uint64_t		writeback_start;
 	uint64_t		writeback_end;
+	struct rb_root		dirty;
+
+	/*
+	 * Internal to the writeback code, so refill_dirty() and read_dirty()
+	 * can keep track of where they're at.
+	 */
+	uint64_t		last_found;
+	uint64_t		last_read;
+
+	/* Number of writeback bios in flight */
+	atomic_t		in_flight;
+	struct delayed_work	refill;
 
 #define RECENT_IO_BITS	7
 #define RECENT_IO	(1 << RECENT_IO_BITS)
@@ -295,6 +317,13 @@ struct cache {
 	struct bio		*prio_bio;
 	struct prio_set		*disk_buckets;
 
+	/*
+	 * When allocating new buckets, prio_write() gets first dibs - since we
+	 * may not be allocate at all without writing priorities and gens.
+	 * prio_buckets[] contains the last buckets we wrote priorities to (so
+	 * gc can mark them as metadata), prio_next[] contains the buckets
+	 * allocated for the next prio write.
+	 */
 	/* Bucket that journal uses */
 	uint64_t		prio_start;
 
@@ -372,44 +401,92 @@ struct cache_set {
 
 	mempool_t		*search;
 	mempool_t		*bio_meta;
-	struct bio_set		*bio_split; /* Move to struct cache? */
+	struct bio_set		*bio_split;
+
+	/* For the btree cache */
 	struct shrinker		shrink;
 
-	/*
-	 * Buckets used for cached data go on the heap. The heap is ordered by
-	 * bucket->priority; a priority of ~0 indicates a btree bucket. Priority
-	 * is increased on cache hit, and periodically all the buckets on the
-	 * heap have their priority scaled down by a linear function.
-	 */
+	/* For the btree cache and anything allocation related */
 	struct mutex		bucket_lock;
+
+	/* log2(bucket_size), in sectors */
 	unsigned short		bucket_bits;
+
+	/* log2(block_size), in sectors */
 	unsigned short		block_bits;
+
+	/*
+	 * Default number of pages for a new btree node - may be less than a
+	 * full bucket
+	 */
 	unsigned		btree_pages;
+
+	/*
+	 * Lists of struct btrees; lru is the list for structs that have memory
+	 * allocated for actual btree node, freed is for structs that do not.
+	 */
+	struct list_head	lru;
+	struct list_head	freed;
+
+	/* Number of elements in lru list */
 	unsigned		bucket_cache_used;
 
-	/* Refcount for when we can't write the priorities to disk until a
-	 * btree write finishes.
+	/*
+	 * If we need to allocate memory for a new btree node and that
+	 * allocation fails, we can cannibalize another node in the btree cache
+	 * to satisfy the allocation. However, only one thread can be doing this
+	 * at a time, for obvious reasons - try_harder and try_wait are
+	 * basically a lock for this that we can wait on asynchronously. The
+	 * btree_root() macro releases the lock when it returns.
+	 */
+	struct closure		*try_harder;
+	closure_list_t		try_wait;
+
+	/*
+	 * When we free a btree node, we increment the gen of the bucket the
+	 * node is in - but we can't rewrite the prios and gens until we
+	 * finished whatever it is we were doing, otherwise after a crash the
+	 * btree node would be freed but for say a split, we might not have the
+	 * pointers to the new nodes inserted into the btree yet.
+	 *
+	 * This is a refcount that blocks prio_write() until the new keys are
+	 * written.
 	 */
 	atomic_t		prio_blocked;
 	closure_list_t		bucket_wait;
 
+	/*
+	 * For any bio we don't skip we subtract the number of sectors from
+	 * rescale; when it hits 0 we rescale all the bucket priorities.
+	 */
 	atomic_t		rescale;
+	/*
+	 * When we invalidate buckets, we use both the priority and the amount
+	 * of good data to determine which buckets to reuse first - to weight
+	 * those together consistently we keep track of the smallest nonzero
+	 * priority of any bucket.
+	 */
 	uint16_t		min_prio;
+
+	/*
+	 * max(gen - gc_gen) for all buckets. When it gets too big we have to gc
+	 * to keep gens from wrapping around.
+	 */
 	uint8_t			need_gc;
 	struct gc_stat		gc_stats;
 	size_t			nbuckets;
-
-	struct list_head	lru;
-	struct list_head	freed;
-	struct closure		*try_harder;
-	closure_list_t		try_wait;
 
 	struct work_struct	gc_work;
 	struct mutex		gc_lock;
 	/* Where in the btree gc currently is */
 	struct bkey		gc_done;
-	/* Protected by bucket_lock */
+
+	/*
+	 * The allocation code needs gc_mark in struct bucket to be correct, but
+	 * it's not while a gc is in progress. Protected by bucket_lock.
+	 */
 	int			gc_mark_valid;
+
 	/* Counts how many sectors bio_insert has added to the cache */
 	atomic_t		sectors_to_gc;
 
@@ -425,12 +502,21 @@ struct cache_set {
 	BKEY_PADDED(uuid_bucket);
 	struct closure		uuid_write;
 
+	/*
+	 * A btree node on disk could have too many bsets for an iterator to fit
+	 * on the stack - this is a single element mempool for btree_read_work()
+	 */
 	struct mutex		fill_lock;
 	struct btree_iter	*fill_iter;
 
+	/*
+	 * btree_sort() is a merge sort and requires temporary space - single
+	 * element mempool
+	 */
 	struct mutex		sort_lock;
 	struct bset		*sort;
 
+	/* List of buckets we're currently writing data to */
 	struct list_head	data_buckets;
 	spinlock_t		data_bucket_lock;
 

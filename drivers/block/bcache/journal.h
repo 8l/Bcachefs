@@ -1,6 +1,16 @@
 #ifndef _BCACHE_JOURNAL_H
 #define _BCACHE_JOURNAL_H
 
+/*
+ * On disk format for a journal entry:
+ * seq is monotonically increasing; every journal entry has its own unique
+ * sequence number.
+ *
+ * last_seq is the oldest journal entry that still has keys the btree hasn't
+ * flushed to disk yet.
+ *
+ * version is for on disk format changes.
+ */
 struct jset {
 	uint64_t		csum;
 	uint64_t		magic;
@@ -23,7 +33,8 @@ struct jset {
 	};
 };
 
-/* Only used for holding the journal entries we read in btree_journal_read()
+/*
+ * Only used for holding the journal entries we read in btree_journal_read()
  * during cache_registration
  */
 struct journal_replay {
@@ -32,7 +43,8 @@ struct journal_replay {
 	struct jset		j;
 };
 
-/* We put two of these in struct journal; we used them for writes to the
+/*
+ * We put two of these in struct journal; we used them for writes to the
  * journal that are being staged or in flight.
  */
 struct journal_write {

@@ -141,8 +141,8 @@ struct bkey *__btree_iter_init(struct btree *, struct btree_iter *,
 	__btree_iter_init(b, iter, search, 0)
 
 void bset_init(struct btree *, struct bset *);
-void bset_build_tree_noalloc(struct btree *, unsigned);
 void bset_build_tree(struct btree *, unsigned);
+void bset_fix_invalidated_key(struct btree *, struct bkey *);
 
 struct bkey *__bset_search(struct btree *, unsigned, const struct bkey *);
 #define bset_search(b, i, search)				\

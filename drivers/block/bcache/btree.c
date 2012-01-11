@@ -1360,15 +1360,6 @@ static bool fix_overlapping_extents(struct btree *b, struct bkey *k,
 				    struct btree_iter *iter,
 				    struct btree_op *op)
 {
-	void rebuild(struct bkey *j)
-	{
-		for (int i = 0; i < b->nsets; i++)
-			if (j < end(b->sets[i])) {
-				bset_build_tree_noalloc(b, i);
-				return;
-			}
-	}
-
 	struct bset *w = write_block(b);
 
 	while (1) {
@@ -1424,7 +1415,7 @@ static bool fix_overlapping_extents(struct btree *b, struct bkey *k,
 
 				cut_front(k, m);
 				cut_back(&START_KEY(k), j);
-				rebuild(j);
+				bset_fix_invalidated_key(b, j);
 				return false;
 			}
 
@@ -1437,7 +1428,7 @@ static bool fix_overlapping_extents(struct btree *b, struct bkey *k,
 				cut_front(j, j);
 			else {
 				__cut_back(&START_KEY(k), j);
-				rebuild(j);
+				bset_fix_invalidated_key(b, j);
 			}
 		}
 	}

@@ -257,7 +257,7 @@ int alloc_discards(struct cache *ca)
 bool bucket_add_unused(struct cache *c, struct bucket *b)
 {
 	if (c->prio_alloc == prio_buckets(c) &&
-	    c->cache_replacement_policy)
+	    CACHE_REPLACEMENT(&c->sb) == CACHE_REPLACEMENT_FIFO)
 		return false;
 
 	b->prio = 0;
@@ -407,7 +407,7 @@ static void invalidate_buckets(struct cache *c)
 	    c->invalidate_needs_gc)
 		return;
 
-	switch (c->cache_replacement_policy) {
+	switch (CACHE_REPLACEMENT(&c->sb)) {
 	case CACHE_REPLACEMENT_LRU:
 		invalidate_buckets_lru(c);
 		break;

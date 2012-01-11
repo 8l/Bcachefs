@@ -88,6 +88,11 @@ struct cache_sb {
 BITMASK(CACHE_SYNC,	struct cache_sb, flags, 0, 1);
 
 BITMASK(BDEV_CACHE_MODE, struct cache_sb, flags, 0, 4);
+#define CACHE_MODE_WRITETHROUGH	0U
+#define CACHE_MODE_WRITEBACK	1U
+#define CACHE_MODE_WRITEAROUND	2U
+#define CACHE_MODE_NONE		3U
+
 BITMASK(BDEV_STATE,	struct cache_sb, flags, 61, 2);
 #define BDEV_STATE_NONE		0U
 #define BDEV_STATE_CLEAN	1U
@@ -142,13 +147,6 @@ struct prio_set {
 };
 
 #include "journal.h"
-
-enum cache_mode {
-	CACHE_MODE_WRITETHROUGH,
-	CACHE_MODE_WRITEBACK,
-	CACHE_MODE_WRITEAROUND,
-	CACHE_MODE_NONE,
-};
 
 struct cache_accounting_set {
 	struct kobject		kobj;
@@ -228,9 +226,6 @@ struct cached_dev {
 	struct cache_set	*c;
 	unsigned		id;
 
-	/* Used for the dirty io rb tree, and the recent io hash */
-	spinlock_t		lock;
-
 	/* Refcount on the cache set. Always nonzero when we're caching. */
 	atomic_t		count;
 	atomic_t		unregister;
@@ -243,27 +238,8 @@ struct cached_dev {
 	mempool_t		*bio_passthrough;
 	struct bio_set		*bio_split;
 
-	/*
-	 * Nonzero, and writeback has a refcount (d->count), iff there is dirty
-	 * data in the cache
-	 */
-	atomic_long_t		last_refilled;
-
-	unsigned long		sequential_cutoff;
-	unsigned		readahead;
-
-	enum cache_mode		cache_mode:3;
-
-	unsigned		sequential_merge:1;
-	unsigned		verify:1;
-	unsigned		data_csum:1;
-
-	unsigned		writeback_metadata:1;
-	unsigned		writeback_running:1;
-	unsigned char		writeback_percent;
-	unsigned		writeback_delay;
-
-	struct cache_accounting	stats;
+	/* Used for the dirty io rb tree, and the recent io hash */
+	spinlock_t		lock;
 
 	/*
 	 * Writes take a read lock from start to finish; scanning for dirty data
@@ -280,6 +256,12 @@ struct cached_dev {
 	struct rb_root		dirty;
 
 	/*
+	 * Nonzero, and writeback has a refcount (d->count), iff there is dirty
+	 * data in the cache
+	 */
+	atomic_long_t		last_refilled;
+
+	/*
 	 * Internal to the writeback code, so refill_dirty() and read_dirty()
 	 * can keep track of where they're at.
 	 */
@@ -290,11 +272,27 @@ struct cached_dev {
 	atomic_t		in_flight;
 	struct delayed_work	refill;
 
+	/* For tracking sequential IO */
 #define RECENT_IO_BITS	7
 #define RECENT_IO	(1 << RECENT_IO_BITS)
 	struct io		io[RECENT_IO];
 	struct hlist_head	io_hash[RECENT_IO + 1];
 	struct list_head	io_lru;
+
+	/* The rest of this all shows up in sysfs */
+	unsigned long		sequential_cutoff;
+	unsigned		readahead;
+
+	unsigned		sequential_merge:1;
+	unsigned		verify:1;
+	unsigned		data_csum:1;
+
+	unsigned		writeback_metadata:1;
+	unsigned		writeback_running:1;
+	unsigned char		writeback_percent;
+	unsigned		writeback_delay;
+
+	struct cache_accounting	stats;
 };
 
 struct cache {
@@ -305,15 +303,15 @@ struct cache {
 
 	struct kobject		kobj;
 	struct block_device	*bdev;
+
+	/* XXX: move to cache_set */
 	struct dentry		*debug;
 
-	struct bucket		*buckets;
-
+	/* XXX: replace with bios allocated from bio_meta mempool */
 	struct bio		*uuid_bio;
 
-	DECLARE_HEAP(struct bucket *, heap);
-
 	struct closure		prio;
+	/* XXX: replace with bios allocated from bio_meta mempool */
 	struct bio		*prio_bio;
 	struct prio_set		*disk_buckets;
 
@@ -324,9 +322,6 @@ struct cache {
 	 * gc can mark them as metadata), prio_next[] contains the buckets
 	 * allocated for the next prio write.
 	 */
-	/* Bucket that journal uses */
-	uint64_t		prio_start;
-
 	uint64_t		*prio_buckets;
 	uint64_t		*prio_next;
 	unsigned		prio_write;
@@ -337,27 +332,39 @@ struct cache {
 	 * < 0: priority write in progress
 	 */
 	atomic_t		prio_written;
+
+	/* Allocation stuff: */
+	struct bucket		*buckets;
+
+	DECLARE_HEAP(struct bucket *, heap);
+
+	/*
+	 * max(gen - disk_gen) for all buckets. When it gets too big we have to
+	 * call prio_write() to keep gens from wrapping.
+	 */
 	uint8_t			need_save_prio;
+
+	/*
+	 * If nonzero, we know we aren't going to find any buckets to invalidate
+	 * until a gc finishes - otherwise we could pointlessly burn a ton of
+	 * cpu
+	 */
 	unsigned		invalidate_needs_gc:1;
 
-	unsigned		cache_replacement_policy:3;
 	size_t			fifo_last_bucket;
 
 	DECLARE_FIFO(long, free);
 	DECLARE_FIFO(long, free_inc);
 	DECLARE_FIFO(long, unused);
 
-	atomic_long_t		meta_sectors_written;
-	atomic_long_t		btree_sectors_written;
-	atomic_long_t		sectors_written;
+	bool			discard; /* Get rid of? */
+	struct list_head	discards;
+	struct page		*discard_page;
 
+	/* The rest of this all shows up in sysfs */
 #define IO_ERROR_SHIFT		20
 	atomic_t		io_errors;
 	atomic_t		io_count;
-
-	bool			discard;
-	struct list_head	discards;
-	struct page		*discard_page;
 
 	unsigned		journal_next;
 	unsigned		journal_last;
@@ -365,6 +372,9 @@ struct cache {
 
 	struct bio		journal_bio;
 	struct bio_vec		journal_bv[8];
+	atomic_long_t		meta_sectors_written;
+	atomic_long_t		btree_sectors_written;
+	atomic_long_t		sectors_written;
 };
 
 struct gc_stat {

@@ -212,7 +212,7 @@ static unsigned cache_mode(struct search *s)
 	if (r >= 0)
 		return r;
 #endif
-	return s->op.d->cache_mode;
+	return BDEV_CACHE_MODE(&s->op.d->sb);
 }
 
 static bool verify(struct search *s)

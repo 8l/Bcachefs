@@ -452,7 +452,7 @@ static void __journal_meta(struct cache_set *c)
 	bkey_copy(&w->data->uuid_bucket, &c->uuid_bucket);
 
 	for_each_cache(ca, c)
-		w->data->prio_bucket[ca->sb.nr_this_dev] = ca->prio_start;
+		w->data->prio_bucket[ca->sb.nr_this_dev] = ca->prio_buckets[0];
 
 	w->data->magic = jset_magic(c);
 }
@@ -472,8 +472,6 @@ void bcache_journal_next(struct cache_set *s)
 	w->need_write		= false;
 	w->data->keys		= 0;
 	w->data->seq		= ++s->journal.seq;
-
-	__journal_meta(s);
 
 	if (fifo_full(&s->journal.pin))
 		pr_debug("journal_pin full (%zu)", fifo_used(&s->journal.pin));
@@ -509,6 +507,7 @@ static void journal_write(struct cache_set *c)
 
 	c->journal.blocks_free -= set_blocks(w->data, c);
 
+	__journal_meta(c);
 	w->data->last_seq	= last_seq(&c->journal);
 	w->data->csum		= csum_set(w->data);
 
@@ -602,7 +601,6 @@ void bcache_journal_meta(struct cache_set *c, struct closure *cl)
 		if (cl)
 			BUG_ON(!closure_wait(&c->journal.cur->wait, cl));
 
-		__journal_meta(c);
 		__journal_try_write(c, true);
 	}
 }

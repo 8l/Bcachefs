@@ -612,12 +612,6 @@ static void prio_write_done(struct closure *cl)
 
 	mutex_lock(&c->set->bucket_lock);
 
-	for (unsigned i = 0; i < prio_buckets(c); i++)
-		c->prio_buckets[i] = c->prio_next[i];
-
-	c->prio_alloc = 0;
-	c->need_save_prio = 0;
-
 	set_closure_fn(&c->prio, NULL, NULL);
 	closure_put(&c->prio);
 
@@ -635,8 +629,22 @@ static void prio_write_journal(struct closure *cl)
 		 fifo_used(&c->free_inc), fifo_used(&c->unused));
 	blktrace_msg(c, "Journalling priorities: " buckets_free(c));
 
-	c->prio_start = c->prio_next[0];
+	mutex_lock(&c->set->bucket_lock);
+
+	for (unsigned i = 0; i < prio_buckets(c); i++)
+		c->prio_buckets[i] = c->prio_next[i];
+
+	c->prio_alloc = 0;
+	c->need_save_prio = 0;
+
+	/*
+	 * We have to call bcache_journal_meta() with bucket_lock still held,
+	 * because after we set prio_buckets = prio_next things are inconsistent
+	 * until the next journal entry is updated
+	 */
 	bcache_journal_meta(c->set, cl);
+
+	mutex_unlock(&c->set->bucket_lock);
 
 	return_f(cl, prio_write_done, system_wq);
 }
@@ -841,7 +849,7 @@ SHOW(__cached_dev)
 
 	if (attr == &sysfs_cache_mode)
 		return sprint_string_list(buf, bcache_cache_modes + 1,
-					  d->cache_mode);
+					  BDEV_CACHE_MODE(&d->sb));
 
 	var_printf(verify,		"%i");
 	var_printf(data_csum,		"%i");
@@ -904,12 +912,10 @@ STORE(__cached_dev)
 		if (v < 0)
 			return v;
 
-		if (v != d->cache_mode) {
+		if ((unsigned) v != BDEV_CACHE_MODE(&d->sb)) {
 			SET_BDEV_CACHE_MODE(&d->sb, v);
 			write_bdev_super(d, NULL);
 		}
-
-		d->cache_mode = v;
 	}
 
 	if (attr == &sysfs_label) {
@@ -1329,7 +1335,6 @@ static const char *register_bdev(struct cache_sb *sb, struct page *sb_page,
 	d->sb_bio.bi_io_vec[0].bv_page = sb_page;
 	d->bdev = bdev;
 	d->bdev->bd_holder = d;
-	d->cache_mode = BDEV_CACHE_MODE(&d->sb);
 
 	d->disk = alloc_disk(1);
 	if (!d->disk)
@@ -1869,8 +1874,7 @@ static void run_cache_set(struct cache_set *c)
 
 		err = "IO error reading priorities";
 		for_each_cache(ca, c) {
-			ca->prio_start = j->prio_bucket[ca->sb.nr_this_dev];
-			if (prio_read(ca, ca->prio_start))
+			if (prio_read(ca, j->prio_bucket[ca->sb.nr_this_dev]))
 				goto err;
 		}
 
@@ -2064,7 +2068,7 @@ SHOW(__cache)
 
 	if (attr == &sysfs_cache_replacement_policy)
 		return sprint_string_list(buf, cache_replacement_policies,
-					  c->cache_replacement_policy);
+					  CACHE_REPLACEMENT(&c->sb));
 
 	if (attr == &sysfs_priority_stats) {
 		int cmp(const void *l, const void *r)
@@ -2160,13 +2164,12 @@ STORE(__cache)
 			return v;
 
 		if ((unsigned) v != CACHE_REPLACEMENT(&c->sb)) {
+			mutex_lock(&c->set->bucket_lock);
 			SET_CACHE_REPLACEMENT(&c->sb, v);
+			mutex_unlock(&c->set->bucket_lock);
+
 			bcache_write_super(c->set, &cl);
 		}
-
-		mutex_lock(&c->set->bucket_lock);
-		c->cache_replacement_policy = v;
-		mutex_unlock(&c->set->bucket_lock);
 	}
 
 	if (attr == &sysfs_freelist_percent) {
@@ -2338,8 +2341,6 @@ static const char *register_cache(struct cache_sb *sb, struct page *sb_page,
 
 	if (blk_queue_discard(bdev_get_queue(c->bdev)))
 		c->discard = CACHE_DISCARD(&c->sb);
-
-	c->cache_replacement_policy = CACHE_REPLACEMENT(&c->sb);
 
 	err = "error creating kobject";
 	if (kobject_add(&c->kobj, &disk_to_dev(bdev->bd_disk)->kobj, "bcache"))

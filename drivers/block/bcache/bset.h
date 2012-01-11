@@ -108,7 +108,7 @@ static inline void keylist_free(struct keylist *l)
 
 void keylist_copy(struct keylist *, struct keylist *);
 struct bkey *keylist_pop(struct keylist *);
-int keylist_realloc(struct keylist *, int);
+int keylist_realloc(struct keylist *, int, struct cache_set *);
 
 void bkey_copy_single_ptr(struct bkey *, const struct bkey *, unsigned);
 bool __cut_front(const struct bkey *, struct bkey *);

@@ -476,6 +476,8 @@ static void journal_write_endio(struct bio *bio, int error)
 		return;
 
 	closure_run_wait(&w->wait, bcache_wq);
+	/* atomic_set() unlocks this journal_write */
+	smp_mb();
 	atomic_set(&w->c->journal.io, -1);
 	schedule_work(&w->c->journal.work);
 }
@@ -597,10 +599,17 @@ void bcache_journal(struct closure *cl)
 	}
 
 	w = c->journal.cur;
+	w->need_write = true;
 	b = __set_blocks(w->data, w->data->keys + n, c);
 
 	if (b * c->sb.block_size > PAGE_SECTORS << JSET_BITS ||
 	    b * c->sb.block_size > c->journal.sectors_free) {
+		/* XXX: If we were inserting so many keys that they won't fit in
+		 * an _empty_ journal write, we'll deadlock. For now, handle
+		 * this in keylist_realloc() - but something to think about.
+		 */
+		BUG_ON(!w->data->keys);
+
 		/* XXX: tracepoint */
 		BUG_ON(!closure_wait(&w->wait, cl));
 
@@ -610,7 +619,6 @@ void bcache_journal(struct closure *cl)
 
 	memcpy(end(w->data), op->keys.list, n * sizeof(uint64_t));
 	w->data->keys += n;
-	w->need_write = true;
 
 	op->journal = &fifo_back(&c->journal.pin);
 	atomic_inc(op->journal);

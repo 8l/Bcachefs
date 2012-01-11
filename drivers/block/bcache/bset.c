@@ -33,18 +33,28 @@ void keylist_copy(struct keylist *dest, struct keylist *src)
 	}
 }
 
-int keylist_realloc(struct keylist *l, int nptrs)
+int keylist_realloc(struct keylist *l, int nptrs, struct cache_set *c)
 {
-	unsigned n = (uint64_t *) l->top - l->list;
-	unsigned size = roundup_pow_of_two(n + 2 + nptrs);
+	unsigned oldsize = (uint64_t *) l->top - l->list;
+	unsigned newsize = oldsize + 2 + nptrs;
 	uint64_t *new;
 
-	if (size <= KEYLIST_INLINE ||
-	    roundup_pow_of_two(n) == size)
+	/* The journalling code doesn't handle the case where the keys to insert
+	 * is bigger than an empty write: If we just return -ENOMEM here,
+	 * bio_insert() and bio_invalidate() will insert the keys created so far
+	 * and finish the rest when the keylist is empty.
+	 */
+	if (newsize * sizeof(uint64_t) > block_bytes(c) - sizeof(struct jset))
+		return -ENOMEM;
+
+	newsize = roundup_pow_of_two(newsize);
+
+	if (newsize <= KEYLIST_INLINE ||
+	    roundup_pow_of_two(oldsize) == newsize)
 		return 0;
 
 	new = krealloc(l->list == l->d ? NULL : l->list,
-		       sizeof(uint64_t) * size, GFP_NOIO);
+		       sizeof(uint64_t) * newsize, GFP_NOIO);
 
 	if (!new)
 		return -ENOMEM;
@@ -53,7 +63,7 @@ int keylist_realloc(struct keylist *l, int nptrs)
 		memcpy(new, l->list, sizeof(uint64_t) * KEYLIST_INLINE);
 
 	l->list = new;
-	l->top = (struct bkey *) (&l->list[n]);
+	l->top = (struct bkey *) (&l->list[oldsize]);
 
 	return 0;
 }

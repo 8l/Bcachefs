@@ -487,7 +487,8 @@ static void bio_insert(struct closure *cl)
 
 		/* 1 for the device pointer and 1 for the chksum */
 		if (keylist_realloc(&op->keys,
-				    1 + (op->d->data_csum ? 1 : 0)))
+				    1 + (op->d->data_csum ? 1 : 0),
+				    op->d->c))
 			return_f(cl, bcache_journal);
 
 		k = op->keys.top;
@@ -578,7 +579,7 @@ static void bio_invalidate(struct search *s)
 
 	while (bio_sectors(bio)) {
 		unsigned len = min(bio_sectors(bio), 1U << 14);
-		if (keylist_realloc(&s->op.keys, 0))
+		if (keylist_realloc(&s->op.keys, 0, s->op.d->c))
 			return;
 
 		bio->bi_sector	+= len;

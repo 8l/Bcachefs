@@ -364,7 +364,7 @@ void bcache_writeback_exit(void)
 int __init bcache_writeback_init(void)
 {
 	if (!(dirty_cache = KMEM_CACHE(dirty, 0)) ||
-	    !(dirty_wq = create_singlethread_workqueue("dirty_wq"))) {
+	    !(dirty_wq = create_singlethread_workqueue("bcache_writeback"))) {
 		bcache_writeback_exit();
 		return -ENOMEM;
 	} else

@@ -106,39 +106,44 @@ int submit_bbio_split(struct bio *bio, struct cache_set *c,
 
 void count_io_errors(struct cache *c, int error, const char *m)
 {
-	/* The halflife of an error is:
+	/*
+	 * The halflife of an error is:
 	 * log2(1/2)/log2(127/128) * refresh ~= 88 * refresh
 	 */
-	int n, errors, count = 0, refresh = c->set->error_decay;
 
-	if (refresh) {
-		count = atomic_inc_return(&c->io_count);
-		while (count > refresh) {
-			int old_count = count;
-			n = count - refresh;
-			count = atomic_cmpxchg(&c->io_count, old_count, n);
-			if (count == old_count) {
-				int old_errors;
+	if (c->set->error_decay) {
+		unsigned count = atomic_inc_return(&c->io_count);
+
+		while (count > c->set->error_decay) {
+			unsigned errors;
+			unsigned old = count;
+			unsigned new = count - c->set->error_decay;
+
+			/*
+			 * First we subtract refresh from count; each time we
+			 * succesfully do so, we rescale the errors once:
+			 */
+
+			count = atomic_cmpxchg(&c->io_count, old, new);
+
+			if (count == old) {
+				count = new;
+
 				errors = atomic_read(&c->io_errors);
 				do {
-					old_errors = errors;
-					n = ((uint64_t) errors * 127) / 128;
+					old = errors;
+					new = ((uint64_t) errors * 127) / 128;
 					errors = atomic_cmpxchg(&c->io_errors,
-								old_errors,
-								n);
-				} while (old_errors != errors);
-
-				pr_debug("Errors scaled from %d to %d\n",
-					 n, errors);
+								old, new);
+				} while (old != errors);
 			}
 		}
 	}
 
 	if (error) {
 		char buf[BDEVNAME_SIZE];
-		errors = atomic_add_return(1 << IO_ERROR_SHIFT, &c->io_errors);
-		pr_debug("Errors: %d, Count: %d, Refresh: %d",
-			 errors, count, refresh);
+		unsigned errors = atomic_add_return(1 << IO_ERROR_SHIFT,
+						    &c->io_errors);
 		errors >>= IO_ERROR_SHIFT;
 
 		if (errors < c->set->error_limit)

@@ -363,6 +363,36 @@ found:
 	return ret;
 }
 
+static void bio_insert_error(struct closure *cl)
+{
+	struct btree_op *op = container_of(cl, struct btree_op, cl);
+
+	/*
+	 * Our data write just errored, which means we've got a bunch of keys to
+	 * insert that point to data that wasn't succesfully written.
+	 *
+	 * We don't have to insert those keys but we still have to invalidate
+	 * that region of the cache - so, if we just strip off all the pointers
+	 * from the keys we'll accomplish just that.
+	 */
+
+	struct bkey *src = op->keys.bottom, *dst = op->keys.bottom;
+
+	while (src != op->keys.top) {
+		struct bkey *n = next(src);
+
+		SET_KEY_PTRS(src, 0);
+		bkey_copy(dst, src);
+
+		dst = next(dst);
+		src = n;
+	}
+
+	op->keys.top = dst;
+
+	bcache_journal(cl);
+}
+
 static void bio_insert_endio(struct bio *bio, int error)
 {
 	struct closure *cl = bio->bi_private;
@@ -374,21 +404,9 @@ static void bio_insert_endio(struct bio *bio, int error)
 		if (op->insert_type == INSERT_WRITEBACK)
 			s->error = error;
 
-		if (op->insert_type == INSERT_WRITE) {
-			/* XXX: technically racy, if bio_insert() split and
-			 * there was more than one error - should set
-			 * s->insert.fn to something else
-			 */
-			for (struct bkey *k = op->keys.bottom;
-			     k < op->keys.top;
-			     k = next(k)) {
-				void *p = next(k);
-				size_t len = p - (void *) op->keys.top;
-
-				SET_KEY_PTRS(k, 0);
-				memmove(next(k), p, len);
-			}
-		} else
+		if (op->insert_type == INSERT_WRITE)
+			cl->fn = bio_insert_error;
+		else
 			cl->fn = NULL;
 	}
 

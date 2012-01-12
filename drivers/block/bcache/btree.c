@@ -1397,7 +1397,11 @@ static bool fix_overlapping_extents(struct btree *b, struct bkey *k,
 		if (!j || bkey_cmp(k, &START_KEY(j)) <= 0)
 			break;
 
+		if (bkey_cmp(j, &START_KEY(k)) <= 0)
+			continue;
+
 		if (op->insert_type == INSERT_READ &&
+		    KEY_SIZE(j) &&
 		    (!KEY_PTRS(j) ||
 		     !ptr_bad(b, j))) {
 			/* Could split this key in two if necessary: since we
@@ -1481,7 +1485,7 @@ bool btree_insert_keys(struct btree *b, struct btree_op *op)
 	 */
 	bool ret = false;
 	struct bset *i = write_block(b);
-	struct bkey *k, *m;
+	struct bkey *k, *m, *prev;
 	unsigned oldsize = count_data(b);
 
 	while ((k = keylist_pop(&op->keys))) {
@@ -1497,47 +1501,50 @@ bool btree_insert_keys(struct btree *b, struct btree_op *op)
 
 		if (!b->level) {
 			struct btree_iter iter;
-			m = btree_iter_init(b, &iter, &START_KEY(k));
 
-			BUG_ON(!m || m < i->start);
+			struct bkey search = KEY(KEY_DEV(k), KEY_START(k), 0);
+
+			/*
+			 * bset_search() returns the first key that is strictly
+			 * greater than the search key - but for back merging,
+			 * we want to find the first key that is greater than or
+			 * equal to KEY_START(k) - unless KEY_START(k) is 0.
+			 */
+			if (search.key)
+				search.key--;
+
+			prev = NULL;
+			m = btree_iter_init(b, &iter, &search);
 
 			if (fix_overlapping_extents(b, k, &iter, op))
 				continue;
 
-			while (m != end(i) && bkey_cmp(k, &START_KEY(m)) > 0)
-				m = next(m);
-#if 0
-			if (!key_merging_disabled(b->c) &&
-			    m != i->start) {
-				m = prev(m);
+			while (m != end(i) &&
+			       bkey_cmp(k, &START_KEY(m)) > 0)
+				prev = m, m = next(m);
 
-				status = "overwrote back";
-				if (KEY_PTRS(m) == KEY_PTRS(k) && !KEY_SIZE(m))
-					goto copy;
+			if (key_merging_disabled(b->c))
+				goto insert;
 
-				/* m is in the tree, if we merge we're done */
+			/* prev is in the tree, if we merge we're done */
+			status = "back merging";
+			if (prev &&
+			    bkey_try_merge(b, prev, k))
+				goto merged;
 
-				status = "back merging";
-				if (bkey_try_merge(b, m, k))
-					goto merged;
+			status = "overwrote front";
+			if (m != end(i) &&
+			    KEY_PTRS(m) == KEY_PTRS(k) && !KEY_SIZE(m))
+				goto copy;
 
-				m = next(m);
-			}
-#endif
-			if (!key_merging_disabled(b->c) &&
-			    m != end(i)) {
-				status = "overwrote front";
-				if (KEY_PTRS(m) == KEY_PTRS(k) && !KEY_SIZE(m))
-					goto copy;
-
-				status = "front merge";
-				if (bkey_try_merge(b, k, m))
-					goto copy;
-			}
+			status = "front merge";
+			if (m != end(i) &&
+			    bkey_try_merge(b, k, m))
+				goto copy;
 		} else
 			m = bset_search(b, &b->sets[b->nsets], k);
 
-		shift_keys(b, m, k);
+insert:		shift_keys(b, m, k);
 copy:		bkey_copy(m, k);
 merged:		ret = true;
 

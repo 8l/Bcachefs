@@ -598,7 +598,8 @@ static void bio_complete(struct closure *cl)
 	BUG_ON(!keylist_empty(&s->op.keys));
 	keylist_free(&s->op.keys);
 
-	if (s->op.insert_type & INSERT_WRITE)
+	if (s->op.insert_type == INSERT_WRITE ||
+	    s->op.insert_type == INSERT_WRITEBACK)
 		up_read_non_owner(&d->writeback_lock);
 
 	if (s->cache_bio) {

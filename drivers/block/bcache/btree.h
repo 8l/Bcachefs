@@ -62,11 +62,11 @@ struct btree_op {
 
 	/* Btree insertion type */
 	enum {
-		INSERT_READ		= 0,
-		INSERT_WRITE		= 1,
-		INSERT_WRITEBACK	= 3,
-		INSERT_UNDIRTY		= 4,
-		INSERT_REPLAY		= 6
+		INSERT_READ,
+		INSERT_WRITE,
+		INSERT_WRITEBACK,
+		INSERT_UNDIRTY,
+		INSERT_REPLAY,
 	} insert_type:8;
 
 	/*

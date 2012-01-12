@@ -601,7 +601,8 @@ void bcache_journal(struct closure *cl)
 	struct journal_write *w;
 	size_t b, n = ((uint64_t *) op->keys.top) - op->keys.list;
 
-	if (!(op->insert_type & INSERT_WRITE) ||
+	if ((op->insert_type != INSERT_WRITE &&
+	     op->insert_type != INSERT_WRITEBACK) ||
 	    !CACHE_SYNC(&c->sb))
 		goto out;
 

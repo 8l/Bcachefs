@@ -88,7 +88,7 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Kent Overstreet <kent.overstreet@gmail.com>");
 
 const char * const bcache_insert_types[] = {
-	"read", "write", NULL, "writeback", "undirty", NULL, "replay"
+	"read", "write", "writeback", "undirty", "replay"
 };
 
 #define MAX_NEED_GC		64

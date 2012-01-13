@@ -66,7 +66,6 @@ static int bcache_major, bcache_minor;
 
 struct workqueue_struct *bcache_wq;
 
-static void cache_init_journal(struct cache *);
 static void cached_dev_run(struct cached_dev *);
 static int cached_dev_attach(struct cached_dev *, struct cache_set *);
 static void cached_dev_detach(struct cached_dev *);
@@ -1821,7 +1820,6 @@ static void run_cache_set(struct cache_set *c)
 
 		btree_gc_finish(c);
 
-		c->journal.cur = c->journal.w;
 		if (!fifo_full(&c->journal.pin))
 			bcache_journal_next(c);
 		bcache_journal_replay(c, &journal, &op);
@@ -1836,8 +1834,6 @@ static void run_cache_set(struct cache_set *c)
 
 			for (int i = 0; i < ca->sb.keys; i++)
 				ca->sb.d[i] = ca->sb.first_bucket + i;
-
-			cache_init_journal(ca);
 		}
 
 		btree_gc_finish(c);
@@ -2094,7 +2090,6 @@ static void cache_free(struct kobject *kobj)
 	free_fifo(&c->free_inc);
 	free_fifo(&c->free);
 	free_fifo(&c->unused);
-	free_fifo(&c->journal);
 
 	if (c->sb_bio.bi_inline_vecs[0].bv_page)
 		put_page(c->sb_bio.bi_io_vec[0].bv_page);
@@ -2106,18 +2101,6 @@ static void cache_free(struct kobject *kobj)
 
 	kfree(c);
 	module_put(THIS_MODULE);
-}
-
-static void cache_init_journal(struct cache *c)
-{
-	if (!c->sb.keys)
-		return;
-
-	c->journal_start = c->sb.bucket_size * c->sb.d[0];
-	c->journal_end   = c->sb.bucket_size * (c->sb.d[0] + c->sb.keys);
-
-	c->journal_area_start = c->journal_start;
-	c->journal_area_end = c->journal_end;
 }
 
 static struct cache *cache_alloc(struct cache_sb *sb)
@@ -2162,8 +2145,7 @@ static struct cache *cache_alloc(struct cache_sb *sb)
 	free = max_t(size_t, free, 16);
 	free = max_t(size_t, free, prio_buckets(c) + 4);
 
-	if (!init_fifo(&c->journal,	JOURNAL_PIN, GFP_KERNEL) ||
-	    !init_fifo(&c->free,	free, GFP_KERNEL) ||
+	if (!init_fifo(&c->free,	free, GFP_KERNEL) ||
 	    !init_fifo(&c->free_inc,	free << 2, GFP_KERNEL) ||
 	    !init_fifo(&c->unused,	free << 2, GFP_KERNEL) ||
 	    !init_heap(&c->heap,	free << 3, GFP_KERNEL) ||
@@ -2185,8 +2167,6 @@ static struct cache *cache_alloc(struct cache_sb *sb)
 
 	if (alloc_discards(c))
 		goto err;
-
-	cache_init_journal(c);
 
 	return c;
 err:

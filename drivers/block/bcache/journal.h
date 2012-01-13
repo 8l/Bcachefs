@@ -30,20 +30,10 @@ struct journal_replay {
 	struct jset		j;
 };
 
-/* For keeping track of the space in the journal that's used by the open
- * journal entries
- */
-struct journal_seq {
-	uint64_t	seq;
-	sector_t	sector;
-};
-
 /* We put two of these in struct journal; we used them for writes to the
  * journal that are being staged or in flight.
  */
 struct journal_write {
-	BKEY_PADDED(key);
-
 	struct jset		*data;
 #define JSET_BITS		3
 
@@ -59,9 +49,11 @@ struct journal {
 	closure_list_t		wait;
 	atomic_t		io;
 
-	unsigned		sectors_free;
+	unsigned		blocks_free;
 	uint64_t		seq;
 	DECLARE_FIFO(atomic_t, pin);
+
+	BKEY_PADDED(key);
 
 	struct journal_write	w[2], *cur;
 };
@@ -73,7 +65,7 @@ struct journal {
 #define JOURNAL_PIN	20000
 
 #define journal_full(j)						\
-	(!KEY_PTRS(&(j)->cur->key) || fifo_full(&(j)->pin))
+	(!(j)->blocks_free || fifo_full(&(j)->pin))
 
 struct closure;
 struct cache_set;

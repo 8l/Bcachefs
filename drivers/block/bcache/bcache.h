@@ -308,13 +308,10 @@ struct cache {
 	struct list_head	discards;
 	struct page		*discard_page;
 
-	sector_t		journal_area_start;
-	sector_t		journal_area_end;
+	unsigned		journal_next;
+	unsigned		journal_last;
+	uint64_t		journal_seq[SB_JOURNAL_BUCKETS];
 
-	/* Free journal sectors */
-	sector_t		journal_start;
-	sector_t		journal_end;
-	DECLARE_FIFO(struct journal_seq, journal);
 	struct bio		journal_bio;
 	struct bio_vec		journal_bv[8];
 };

@@ -219,25 +219,50 @@ do {									\
 
 #define fifo_idx(fifo, p)	(((p) - &fifo_front(fifo)) & (fifo)->mask)
 
-#define fifo_push(fifo, i)						\
+#define fifo_push_back(fifo, i)						\
 ({									\
-	bool _r = !fifo_full(fifo);					\
+	bool _r = !fifo_full((fifo));					\
 	if (_r) {							\
-		(fifo)->data[(fifo)->back++] = i;			\
+		(fifo)->data[(fifo)->back++] = (i);			\
 		(fifo)->back &= (fifo)->mask;				\
 	}								\
 	_r;								\
 })
 
-#define fifo_pop(fifo, i)						\
+#define fifo_pop_front(fifo, i)						\
 ({									\
-	bool _r = !fifo_empty(fifo);					\
+	bool _r = !fifo_empty((fifo));					\
 	if (_r) {							\
-		i = (fifo)->data[(fifo)->front++];			\
+		(i) = (fifo)->data[(fifo)->front++];			\
 		(fifo)->front &= (fifo)->mask;				\
 	}								\
 	_r;								\
 })
+
+#define fifo_push_front(fifo, i)					\
+({									\
+	bool _r = !fifo_full((fifo));					\
+	if (_r) {							\
+		--(fifo)->front;					\
+		(fifo)->front &= (fifo)->mask;				\
+		(fifo)->data[(fifo)->front] = (i);			\
+	}								\
+	_r;								\
+})
+
+#define fifo_pop_back(fifo, i)						\
+({									\
+	bool _r = !fifo_empty((fifo));					\
+	if (_r) {							\
+		--(fifo)->back;						\
+		(fifo)->back &= (fifo)->mask;				\
+		(i) = (fifo)->data[(fifo)->back]			\
+	}								\
+	_r;								\
+})
+
+#define fifo_push(fifo, i)	fifo_push_back(fifo, (i))
+#define fifo_pop(fifo, i)	fifo_pop_front(fifo, (i))
 
 #define fifo_swap(l, r)							\
 do {									\

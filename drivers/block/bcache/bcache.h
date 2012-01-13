@@ -215,8 +215,7 @@ struct cached_dev {
 	struct bio		sb_bio;
 	struct bio_vec		sb_bv[1];
 
-	struct closure		*sb_writer;
-	struct semaphore	sb_write;
+	struct closure_with_waitlist sb_write;
 
 	struct kobject		kobj;
 	struct block_device	*bdev;
@@ -398,8 +397,7 @@ struct cache_set {
 	struct work_struct	unregister;
 	struct list_head	devices;
 
-	struct mutex		sb_write;
-	struct closure		*sb_writer;
+	struct closure_with_waitlist sb_write;
 
 	mempool_t		*search;
 	mempool_t		*bio_meta;

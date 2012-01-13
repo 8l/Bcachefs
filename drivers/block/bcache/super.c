@@ -350,10 +350,7 @@ static void write_bdev_super_endio(struct bio *bio, int error)
 	struct cached_dev *d = bio->bi_private;
 	/* XXX: error checking */
 
-	if (d->sb_writer)
-		closure_put(d->sb_writer);
-	d->sb_writer = NULL;
-	up(&d->sb_write);
+	closure_put(&d->sb_write.cl);
 }
 
 static void __write_super(struct cache_sb *sb, struct bio *bio)
@@ -390,25 +387,22 @@ static void __write_super(struct cache_sb *sb, struct bio *bio)
 	submit_bio(REQ_WRITE, bio);
 }
 
-void write_bdev_super(struct cached_dev *d, struct closure *cl)
+void write_bdev_super(struct cached_dev *d, struct closure *parent)
 {
+	struct closure *cl = &d->sb_write.cl;
 	struct bio *bio = &d->sb_bio;
 
-	down(&d->sb_write);
+	closure_lock(&d->sb_write, parent);
 
 	bio_reset(bio);
 	bio->bi_bdev	= d->bdev;
 	bio->bi_end_io	= write_bdev_super_endio;
 	bio->bi_private = d;
 
-	if (cl)
-		closure_get(cl);
-	d->sb_writer = cl;
-
+	closure_get(cl);
 	__write_super(&d->sb, bio);
 
-	if (cl)
-		closure_sync(cl);
+	return_f(cl, NULL, NULL);
 }
 
 static void write_super_endio(struct bio *bio, int error)
@@ -416,16 +410,17 @@ static void write_super_endio(struct bio *bio, int error)
 	struct cache *c = bio->bi_private;
 
 	count_io_errors(c, error, "writing superblock");
-	closure_put(c->set->sb_writer);
+	closure_put(&c->set->sb_write.cl);
 }
 
-void bcache_write_super(struct cache_set *c, struct closure *cl)
+void bcache_write_super(struct cache_set *c, struct closure *parent)
 {
+	struct closure *cl = &c->sb_write.cl;
 	struct cache *ca;
 
-	mutex_lock(&c->sb_write);
+	closure_lock(&c->sb_write, parent);
+
 	c->sb.seq++;
-	c->sb_writer = cl;
 
 	for_each_cache(ca, c) {
 		struct bio *bio = &ca->sb_bio;
@@ -445,8 +440,7 @@ void bcache_write_super(struct cache_set *c, struct closure *cl)
 		__write_super(&ca->sb, bio);
 	}
 
-	closure_sync(cl);
-	mutex_unlock(&c->sb_write);
+	return_f(cl, NULL, NULL);
 }
 
 /* UUID io */
@@ -1018,6 +1012,7 @@ static void cached_dev_run(struct cached_dev *d)
 
 		SET_BDEV_STATE(&d->sb, BDEV_STATE_STALE);
 		write_bdev_super(d, &cl);
+		closure_sync(&cl);
 	}
 
 	add_disk(d->disk);
@@ -1044,7 +1039,9 @@ void cached_dev_detach_finish(struct work_struct *w)
 
 	memset(&d->sb.set_uuid, 0, 16);
 	SET_BDEV_STATE(&d->sb, BDEV_STATE_NONE);
+
 	write_bdev_super(d, &cl);
+	closure_sync(&cl);
 
 	memcpy(d->c->uuids[d->id].uuid, invalid_uuid, 16);
 	d->c->uuids[d->id].invalidated = cpu_to_le32(get_seconds());
@@ -1137,12 +1134,10 @@ static int cached_dev_attach(struct cached_dev *d, struct cache_set *c)
 		uuid_write(c);
 
 		memcpy(d->sb.set_uuid, c->sb.set_uuid, 16);
-#if 0
-		SET_BDEV_STATE(&d->sb, d->writeback
-			     ? BDEV_STATE_DIRTY
-			     : BDEV_STATE_CLEAN);
-#endif
+		SET_BDEV_STATE(&d->sb, BDEV_STATE_CLEAN);
+
 		write_bdev_super(d, &cl);
+		closure_sync(&cl);
 
 		msg = "inserted new";
 	} else {
@@ -1257,7 +1252,7 @@ static struct cached_dev *cached_dev_alloc(void)
 
 	INIT_LIST_HEAD(&d->list);
 	spin_lock_init(&d->lock);
-	sema_init(&d->sb_write, 1);
+	closure_init_unlocked(&d->sb_write);
 	INIT_WORK(&d->detach, cached_dev_detach_finish);
 
 	init_timer(&d->stats.timer);
@@ -1578,7 +1573,7 @@ STORE(__cache_set)
 
 		if (sync != CACHE_SYNC(&c->sb)) {
 			SET_CACHE_SYNC(&c->sb, sync);
-			bcache_write_super(c, &cl);
+			bcache_write_super(c, NULL);
 		}
 	}
 
@@ -1867,8 +1862,8 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	mutex_init(&c->gc_lock);
 	mutex_init(&c->fill_lock);
 	mutex_init(&c->sort_lock);
-	mutex_init(&c->sb_write);
 	spin_lock_init(&c->sort_time_lock);
+	closure_init_unlocked(&c->sb_write);
 	spin_lock_init(&c->btree_read_time_lock);
 
 	INIT_WORK(&c->unregister, cache_set_unregister);
@@ -2043,7 +2038,7 @@ static void run_cache_set(struct cache_set *c)
 
 	closure_sync(&op.cl);
 	c->sb.last_mount = get_seconds();
-	bcache_write_super(c, &op.cl);
+	bcache_write_super(c, NULL);
 
 	list_for_each_entry_safe(d, t, &uncached_devices, list)
 		cached_dev_attach(d, c);
@@ -2233,7 +2228,7 @@ STORE(__cache)
 
 		if (v != CACHE_DISCARD(&c->sb)) {
 			SET_CACHE_DISCARD(&c->sb, v);
-			bcache_write_super(c->set, &cl);
+			bcache_write_super(c->set, NULL);
 		}
 	}
 
@@ -2248,7 +2243,7 @@ STORE(__cache)
 			SET_CACHE_REPLACEMENT(&c->sb, v);
 			mutex_unlock(&c->set->bucket_lock);
 
-			bcache_write_super(c->set, &cl);
+			bcache_write_super(c->set, NULL);
 		}
 	}
 

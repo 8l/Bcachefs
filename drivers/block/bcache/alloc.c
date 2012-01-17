@@ -145,7 +145,7 @@ static void do_discard(struct cache *c)
 
 		d->bio.bi_sector	= bucket_to_sector(c->set, d->bucket);
 		d->bio.bi_bdev		= c->bdev;
-		d->bio.bi_rw		= DISCARD_NOBARRIER;
+		d->bio.bi_rw		= REQ_WRITE|(1 << BIO_RW_DISCARD);
 		d->bio.bi_max_vecs	= 1;
 		d->bio.bi_io_vec	= d->bio.bi_inline_vecs;
 		d->bio.bi_end_io	= discard_endio;

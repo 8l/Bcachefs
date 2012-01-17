@@ -30,7 +30,7 @@
 #else
 
 #define REQ_UNPLUG		0U
-#define DISCARD_NOBARRIER	REQ_DISCARD
+#define BIO_RW_DISCARD		__REQ_DISCARD
 #define current_is_writer(x)	true
 
 #endif

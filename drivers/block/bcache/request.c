@@ -1185,7 +1185,7 @@ skip:		s->cache_bio = s->orig_bio;
 
 		bio_invalidate(s);
 
-		if (bio->bi_rw & (1 << BIO_RW_DISCARD) &&
+		if ((bio->bi_rw & (1 << BIO_RW_DISCARD)) &&
 		    !blk_queue_discard(bdev_get_queue(s->op.d->bdev)))
 			bio_endio(bio, 0);
 		else {

@@ -297,62 +297,71 @@ err:
 	return ret;
 }
 
-static void btree_flush_write(struct cache_set *s)
+static void btree_flush_write(struct cache_set *c)
 {
-	struct btree *b, *i;
+	/*
+	 * Try to find the btree node with that references the oldest journal
+	 * entry, best is our current candidate and is locked if non NULL:
+	 */
+	struct btree *b, *best;
 
-	while (!s->root->level) {
-		i = s->root;
-		rw_lock(true, i, 0);
+	/*
+	 * The root of the btree isn't on the lru list. Normally this is fine
+	 * because only leaf nodes can have references to journal entries -
+	 * unless the root _is_ a leaf node. So we have to special case that:
+	 */
 
-		if (i == s->root)
+	while (!c->root->level) {
+		best = c->root;
+		rw_lock(true, best, 0);
+
+		if (best == c->root && !best->level)
 			goto found;
-		rw_unlock(true, i);
+		rw_unlock(true, best);
 	}
 
-	mutex_lock(&s->bucket_lock);
+	mutex_lock(&c->bucket_lock);
 
-	i = NULL;
-	list_for_each_entry(b, &s->lru, lru) {
+	best = NULL;
+	list_for_each_entry(b, &c->lru, lru) {
 		if (!down_write_trylock(&b->lock))
 			continue;
 
-		if (!b->write || !b->write->journal)
-			goto next;
-
-		if (i && journal_pin_cmp(s, i->write, b->write)) {
-			rw_unlock(true, i);
-			i = NULL;
-		}
-
-		if (!i) {
-			i = b;
+		if (!b->write || !b->write->journal) {
+			rw_unlock(true, b);
 			continue;
 		}
-next:
-		rw_unlock(true, b);
+
+		if (!best)
+			best = b;
+		else if (journal_pin_cmp(c, best->write, b->write)) {
+			rw_unlock(true, best);
+			best = b;
+		} else
+			rw_unlock(true, b);
 	}
 
-	if (!i) {
-		/* We can't find the best btree, just pick the first */
-		list_for_each_entry(b, &s->lru, lru)
-			if (!b->level && b->write) {
-				i = b;
-				break;
-			}
+	if (best)
+		goto out;
 
-		mutex_unlock(&s->bucket_lock);
-		if (!i)
-			return;
+	/* We can't find the best btree node, just pick the first */
+	list_for_each_entry(b, &c->lru, lru)
+		if (!b->level && b->write) {
+			best = b;
+			mutex_unlock(&c->bucket_lock);
+			rw_lock(true, best, best->level);
+			goto found;
+		}
 
-		rw_lock(true, i, i->level);
-	} else
-		mutex_unlock(&s->bucket_lock);
+out:
+	mutex_unlock(&c->bucket_lock);
+
+	if (!best)
+		return;
 found:
-	if (i->write)
-		btree_write(i, true, NULL);
-	rw_unlock(true, i);
-	pr_debug("");
+	if (best->write)
+		btree_write(best, true, NULL);
+	rw_unlock(true, best);
 }
 
 static void journal_alloc(struct cache_set *c)

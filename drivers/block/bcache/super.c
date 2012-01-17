@@ -422,7 +422,7 @@ static void write_super_endio(struct bio *bio, int error)
 	closure_put(c->set->sb_writer, bcache_wq);
 }
 
-static void write_super(struct cache_set *c, struct closure *cl)
+void bcache_write_super(struct cache_set *c, struct closure *cl)
 {
 	struct cache *ca;
 
@@ -434,9 +434,10 @@ static void write_super(struct cache_set *c, struct closure *cl)
 		struct bio *bio = &ca->sb_bio;
 
 		ca->sb.version		= BCACHE_SB_VERSION;
-		ca->sb.flags		= c->sb.flags;
 		ca->sb.seq		= c->sb.seq;
 		ca->sb.last_mount	= c->sb.last_mount;
+
+		SET_CACHE_SYNC(&ca->sb, CACHE_SYNC(&c->sb));
 
 		bio_reset(bio);
 		bio->bi_bdev	= ca->bdev;
@@ -1467,7 +1468,7 @@ STORE(__cache_set)
 
 		if (sync != CACHE_SYNC(&c->sb)) {
 			SET_CACHE_SYNC(&c->sb, sync);
-			write_super(c, &cl);
+			bcache_write_super(c, &cl);
 		}
 	}
 
@@ -1875,7 +1876,7 @@ static void run_cache_set(struct cache_set *c)
 
 	closure_sync(&op.cl);
 	c->sb.last_mount = get_seconds();
-	write_super(c, &op.cl);
+	bcache_write_super(c, &op.cl);
 
 	list_for_each_entry_safe(d, t, &uncached_devices, list)
 		cached_dev_attach(d, c);
@@ -1937,7 +1938,7 @@ found:
 	if (ca->sb.seq > c->sb.seq) {
 		c->sb.version		= ca->sb.version;
 		memcpy(c->sb.set_uuid, ca->sb.set_uuid, 16);
-		c->sb.flags		= ca->sb.flags;
+		c->sb.flags             = ca->sb.flags;
 		c->sb.seq		= ca->sb.seq;
 		pr_debug("set version = %llu", c->sb.version);
 	}
@@ -2069,9 +2070,20 @@ SHOW_LOCKED(cache)
 STORE(__cache)
 {
 	struct cache *c = container_of(kobj, struct cache, kobj);
+	struct closure cl;
+	closure_init_stack(&cl);
 
-	if (blk_queue_discard(bdev_get_queue(c->bdev)))
-		sysfs_strtoul(discard, c->discard);
+	if (attr == &sysfs_discard) {
+		bool v = strtoul_or_return(buf);
+
+		if (blk_queue_discard(bdev_get_queue(c->bdev)))
+			c->discard = v;
+
+		if (v != CACHE_DISCARD(&c->sb)) {
+			SET_CACHE_DISCARD(&c->sb, v);
+			bcache_write_super(c->set, &cl);
+		}
+	}
 
 	if (attr == &sysfs_cache_replacement_policy) {
 		unsigned i;
@@ -2093,6 +2105,11 @@ STORE(__cache)
 		mutex_lock(&c->set->bucket_lock);
 		c->cache_replacement_policy = i;
 		mutex_unlock(&c->set->bucket_lock);
+
+		if (i != CACHE_REPLACEMENT(&c->sb)) {
+			SET_CACHE_REPLACEMENT(&c->sb, i);
+			bcache_write_super(c->set, &cl);
+		}
 	}
 
 	if (attr == &sysfs_freelist_percent) {
@@ -2260,6 +2277,11 @@ static const char *register_cache(struct cache_sb *sb, struct page *sb_page,
 	c->sb_bio.bi_io_vec[0].bv_page = sb_page;
 	c->bdev = bdev;
 	c->bdev->bd_holder = c;
+
+	if (blk_queue_discard(bdev_get_queue(c->bdev)))
+		c->discard = CACHE_DISCARD(&c->sb);
+
+	c->cache_replacement_policy = CACHE_REPLACEMENT(&c->sb);
 
 	err = "error creating kobject";
 	if (kobject_add(&c->kobj, &disk_to_dev(bdev->bd_disk)->kobj, "bcache"))

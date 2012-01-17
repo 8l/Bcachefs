@@ -93,6 +93,9 @@ BITMASK(BDEV_STATE,	struct cache_sb, flags, 61, 2);
 #define BDEV_STATE_DIRTY	2U
 #define BDEV_STATE_STALE	3U
 
+BITMASK(CACHE_DISCARD,	struct cache_sb, flags, 1, 1);
+BITMASK(CACHE_REPLACEMENT, struct cache_sb, flags, 2, 3);
+
 /* Version 1: Seed pointer into btree node checksum
  */
 #define BCACHE_BSET_VERSION	1
@@ -791,6 +794,8 @@ void prio_write(struct cache *, struct closure *);
 void write_bdev_super(struct cached_dev *, struct closure *);
 bool cache_set_error(struct cache_set *, const char *, ...);
 int bcache_make_request(struct request_queue *, struct bio *);
+
+void bcache_write_super(struct cache_set *, struct closure *);
 
 extern struct kmem_cache *search_cache, *passthrough_cache;
 extern struct workqueue_struct *bcache_wq;

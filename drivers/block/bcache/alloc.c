@@ -83,7 +83,14 @@ static void discard_finish(struct work_struct *w)
 {
 	struct discard *d = container_of(w, struct discard, work);
 	struct cache *c = d->c;
+	char buf[BDEVNAME_SIZE];
 	bool run = false;
+
+	if (!test_bit(BIO_UPTODATE, &d->bio.bi_flags)) {
+		printk(KERN_NOTICE "bcache: discard error on %s, disabling\n",
+		       bdevname(c->bdev, buf));
+		d->c->discard = 0;
+	}
 
 	mutex_lock(&c->set->bucket_lock);
 	if (fifo_empty(&c->free) ||
@@ -104,11 +111,6 @@ static void discard_finish(struct work_struct *w)
 static void discard_endio(struct bio *bio, int error)
 {
 	struct discard *d = container_of(bio, struct discard, bio);
-
-	if (error) {
-		printk(KERN_NOTICE "bcache: discard error, disabling\n");
-		d->c->discard = 0;
-	}
 
 	PREPARE_WORK(&d->work, discard_finish);
 	schedule_work(&d->work);

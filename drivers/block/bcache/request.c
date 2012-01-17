@@ -33,7 +33,6 @@ struct search {
 
 	/* IO error returned to s->bio */
 	short			error;
-
 };
 
 struct kmem_cache *search_cache;
@@ -1004,6 +1003,16 @@ static bool should_writeback(struct cached_dev *d, struct bio *bio)
 		: CUTOFF_WRITEBACK;
 }
 
+static void request_invalidate_resubmit(struct closure *cl)
+{
+	struct btree_op *op = container_of(cl, struct btree_op, cl);
+	struct search *s = container_of(op, struct search, op);
+	struct bio *bio = &s->bio.bio;
+
+	closure_bio_submit(bio, &s->cl, op->d->c->bio_split);
+	return_f(cl, bcache_journal);
+}
+
 static void request_write_resubmit(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
@@ -1033,7 +1042,7 @@ skip:		s->cache_bio = s->orig_bio;
 
 		bio_invalidate(s);
 		if (closure_bio_submit(bio, &s->cl, s->op.d->c->bio_split))
-			return_f(&s->op.cl, request_resubmit);
+			return_f(&s->op.cl, request_invalidate_resubmit);
 
 		closure_put(&s->op.cl, bcache_wq);
 		return;

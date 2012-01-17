@@ -694,7 +694,8 @@ int get_congested(struct cache_set *c)
 	unsigned fract;
 	int ret, i;
 
-	if (!c->congested_threshold_us)
+	if (!c->congested_read_threshold_us &&
+	    !c->congested_write_threshold_us)
 		return 0;
 
 	i = local_clock_us() - c->congested_last_us;

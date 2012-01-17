@@ -421,9 +421,12 @@ struct cache_set {
 	struct journal		journal;
 
 #define CONGESTED_MAX		1024
-	unsigned		congested_threshold_us;
 	unsigned		congested_last_us;
 	atomic_t		congested;
+
+	/* The rest of this all shows up in sysfs */
+	unsigned		congested_read_threshold_us;
+	unsigned		congested_write_threshold_us;
 
 	atomic_long_t		writeback_keys_done;
 	atomic_long_t		writeback_keys_failed;

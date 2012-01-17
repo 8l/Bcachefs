@@ -155,13 +155,17 @@ void bcache_endio(struct cache_set *c, struct bio *bio,
 	struct bbio *b = container_of(bio, struct bbio, bio);
 	struct cache *ca = PTR_CACHE(c, &b->key, 0);
 
-	if (c->congested_threshold_us) {
+	unsigned threshold = bio->bi_rw & REQ_WRITE
+		? c->congested_write_threshold_us
+		: c->congested_read_threshold_us;
+
+	if (threshold) {
 		unsigned t = local_clock_us();
 
 		int us = t - b->submit_time_us;
 		int congested = atomic_read(&c->congested);
 
-		if (us > (int) c->congested_threshold_us) {
+		if (us > (int) threshold) {
 			int ms = us / 1024;
 			c->congested_last_us = t;
 

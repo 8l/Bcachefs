@@ -198,7 +198,8 @@ read_attribute(writeback_keys_done);
 read_attribute(writeback_keys_failed);
 read_attribute(io_errors);
 read_attribute(congested);
-rw_attribute(congested_threshold_us);
+rw_attribute(congested_read_threshold_us);
+rw_attribute(congested_write_threshold_us);
 
 rw_attribute(sequential_cutoff);
 rw_attribute(sequential_merge);
@@ -1440,7 +1441,11 @@ SHOW(__cache_set)
 
 	sysfs_hprint(congested,
 		     ((uint64_t) get_congested(c)) << 9);
-	sysfs_print(congested_threshold_us,	c->congested_threshold_us);
+	sysfs_print(congested_read_threshold_us,
+		    c->congested_read_threshold_us);
+	sysfs_print(congested_write_threshold_us,
+		    c->congested_write_threshold_us);
+
 	sysfs_print(active_journal_entries,	fifo_used(&c->journal.pin));
 	sysfs_printf(verify,			"%i", c->verify);
 	sysfs_printf(key_merging_disabled,	"%i", c->key_merging_disabled);
@@ -1489,7 +1494,10 @@ STORE(__cache_set)
 		c->shrink.shrink(&c->shrink, v, NULL);
 	}
 
-	sysfs_strtoul(congested_threshold_us, c->congested_threshold_us);
+	sysfs_strtoul(congested_read_threshold_us,
+		      c->congested_read_threshold_us);
+	sysfs_strtoul(congested_write_threshold_us,
+		      c->congested_write_threshold_us);
 
 	if (attr == &sysfs_io_error_limit)
 		c->error_limit = strtoul_or_return(buf) << IO_ERROR_SHIFT;
@@ -1642,7 +1650,8 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 		&sysfs_io_error_limit,
 		&sysfs_io_error_halflife,
 		&sysfs_congested,
-		&sysfs_congested_threshold_us,
+		&sysfs_congested_read_threshold_us,
+		&sysfs_congested_write_threshold_us,
 		&sysfs_clear_stats,
 		NULL
 	};
@@ -1743,7 +1752,8 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 
 	c->fill_iter->size = sb->bucket_size / sb->block_size;
 
-	c->congested_threshold_us = 2000;
+	c->congested_read_threshold_us	= 2000;
+	c->congested_write_threshold_us	= 20000;
 	c->error_limit	= 8 << IO_ERROR_SHIFT;
 
 	return c;

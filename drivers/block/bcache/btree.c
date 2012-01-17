@@ -471,7 +471,7 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
  * mca -> memory cache
  */
 
-#define mca_reserve(c)	((c->root ? c->root->level : 1) * 4 + 4)
+#define mca_reserve(c)	((c->root ? c->root->level : 1) * 8 + 16)
 
 static void mca_data_free(struct btree *b)
 {
@@ -968,7 +968,7 @@ void __btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 
 #define btree_mark_key(b, k)	__btree_mark_key(b->c, b->level, k)
 
-static int btree_gc_mark(struct btree *b, size_t *keys, struct gc_stat *gc)
+static int btree_gc_mark(struct btree *b, unsigned *keys, struct gc_stat *gc)
 {
 	uint8_t ret = 0;
 	struct bkey *k;
@@ -1006,35 +1006,156 @@ static int btree_gc_mark(struct btree *b, size_t *keys, struct gc_stat *gc)
 	return ret;
 }
 
+static struct btree *btree_gc_alloc(struct btree *b, struct bkey *k,
+				    struct btree_op *op)
+{
+	/*
+	 * We block priorities from being written for the duration of garbage
+	 * collection, so we can't sleep in btree_alloc() -> pop_bucket(), or
+	 * we'd risk deadlock - so we don't pass it our closure.
+	 */
+	struct btree *n = btree_alloc(b->c, b->level, NULL);
+
+	if (!IS_ERR_OR_NULL(n)) {
+		btree_sort(b, 0, n->sets[0].data);
+		bkey_copy_key(&n->key, &b->key);
+		swap(b, n);
+
+		memcpy(k->ptr, b->key.ptr,
+		       sizeof(uint64_t) * KEY_PTRS(&b->key));
+
+		__bkey_put(b->c, &b->key);
+		atomic_inc(&b->c->prio_blocked);
+		b->prio_blocked++;
+
+		btree_free(n, op);
+		__up_write(&n->lock);
+
+		b->lock.writer_task = NULL;
+		rwsem_release(&b->lock.dep_map, 1, _THIS_IP_);
+	}
+
+	return b;
+}
+
+/*
+ * Leaving this at 2 until we've got incremental garbage collection done; it
+ * could be higher (and has been tested with 4) except that garbage collection
+ * could take much longer, adversely affecting latency.
+ */
+#define GC_MERGE_NODES	2
+
+struct gc_merge_info {
+	struct btree	*b;
+	struct bkey	*k;
+	unsigned	keys;
+};
+
+static void btree_gc_coalesce(struct btree *b, struct btree_op *op,
+			      struct gc_stat *gc, struct gc_merge_info *r)
+{
+	unsigned nodes = 0, keys = 0, blocks, i;
+
+	while (nodes < GC_MERGE_NODES && r[nodes].b)
+		keys += r[nodes++].keys;
+
+	blocks = btree_default_blocks(b->c) * 2 / 3;
+
+	if (nodes < 2 ||
+	    __set_blocks(b->sets[0].data, keys, b->c) > blocks * (nodes - 1))
+		return;
+
+	for (i = nodes - 1; i; --i) {
+		if (r[i].b->written)
+			r[i].b = btree_gc_alloc(r[i].b, r[i].k, op);
+
+		if (r[i].b->written)
+			return;
+	}
+
+	for (i = nodes - 1; i; --i) {
+		struct bset *n1 = r[i].b->sets->data;
+		struct bset *n2 = r[i - 1].b->sets->data;
+		struct bkey *last = NULL;
+
+		keys = 0;
+
+		if (i == 1) {
+			/*
+			 * Last node we're not getting rid of - we're getting
+			 * rid of the node at r[0]. Have to try and fit all of
+			 * the remaining keys into this node; we can't ensure
+			 * they will always fit due to rounding and variable
+			 * length keys (shouldn't be possible in practice,
+			 * though)
+			 */
+			if (__set_blocks(n1, n1->keys + r->keys,
+					 b->c) > btree_blocks(r[i].b))
+				return;
+
+			if (r->b->written) {
+				/*
+				 * We're about to free this node, and we have to
+				 * make btree_sort() remove stale ptrs
+				 */
+				r->b->written = 0;
+				btree_sort(r->b, 0, NULL);
+				n2 = r->b->sets->data;
+			}
+
+			keys = n2->keys;
+			last = &r->b->key;
+		} else
+			for (struct bkey *k = n2->start;
+			     k < end(n2);
+			     k = next(k)) {
+				if (__set_blocks(n1, n1->keys + keys +
+						 bkey_u64s(k), b->c) > blocks)
+					break;
+
+				last = k;
+				keys += bkey_u64s(k);
+			}
+
+		BUG_ON(__set_blocks(n1, n1->keys + keys,
+				    b->c) > btree_blocks(r[i].b));
+
+		if (last) {
+			bkey_copy_key(&r[i].b->key, last);
+			bkey_copy_key(r[i].k, last);
+		}
+
+		memcpy(end(n1),
+		       n2->start,
+		       (void *) node(n2, keys) - (void *) n2->start);
+
+		n1->keys += keys;
+
+		memmove(n2->start,
+			node(n2, keys),
+			(void *) end(n2) - (void *) node(n2, keys));
+
+		n2->keys -= keys;
+
+		r[i].keys	= n1->keys;
+		r[i - 1].keys	= n2->keys;
+	}
+
+	btree_free(r->b, op);
+	__up_write(&r->b->lock);
+
+	pr_debug("coalesced %u nodes", nodes);
+
+	gc->nodes--;
+	nodes--;
+
+	memmove(&r[0], &r[1], sizeof(struct gc_merge_info) * nodes);
+	memset(&r[nodes], 0, sizeof(struct gc_merge_info));
+}
+
 static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 			    struct closure *writes, struct gc_stat *gc)
 {
-	struct btree *alloc(struct btree *r, struct bkey *k)
-	{
-		/* can't sleep in pop_bucket(), as we block priorities from
-		 * being written
-		 */
-		struct btree *n = btree_alloc(r->c, r->level, NULL);
-
-		if (!IS_ERR_OR_NULL(n)) {
-			btree_sort(r, 0, n->sets[0].data);
-			bkey_copy_key(&n->key, &r->key);
-			swap(r, n);
-
-			memcpy(k->ptr, r->key.ptr,
-			       sizeof(uint64_t) * KEY_PTRS(&r->key));
-
-			__bkey_put(b->c, &r->key);
-			atomic_inc(&b->c->prio_blocked);
-			b->prio_blocked++;
-
-			btree_free(n, op);
-			rw_unlock(true, n);
-		}
-
-		return r;
-	}
-
 	void write(struct btree *r)
 	{
 		if (!r->written)
@@ -1047,67 +1168,57 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 			btree_write(r, true, NULL);
 		}
 
-		rw_unlock(true, r);
+		__up_write(&r->lock);
 	}
 
 	int ret = 0, stale;
-	size_t keys, pkeys = 0;
-	struct btree *r, *p = NULL;
-	struct bkey *k;
+	struct gc_merge_info r[GC_MERGE_NODES];
 
-	while ((k = next_recurse_key(b, &b->c->gc_done))) {
-		r = get_bucket(b->c, k, b->level - 1, op);
-		if (IS_ERR(r)) {
-			ret = PTR_ERR(r);
+	memset(r, 0, sizeof(r));
+
+	while ((r->k = next_recurse_key(b, &b->c->gc_done))) {
+		r->b = get_bucket(b->c, r->k, b->level - 1, op);
+
+		if (IS_ERR(r->b)) {
+			ret = PTR_ERR(r->b);
 			break;
 		}
 
-		keys = 0;
-		stale = btree_gc_mark(r, &keys, gc);
+		/*
+		 * Fake out lockdep, because I'm a terrible person: it's just
+		 * not possible to express our lock ordering to lockdep, because
+		 * lockdep works at most in terms of a small fixed number of
+		 * subclasses, and we're just iterating through all of them in a
+		 * fixed order.
+		 */
+		r->b->lock.writer_task = NULL;
+		rwsem_release(&r->b->lock.dep_map, 1, _THIS_IP_);
+
+		r->keys	= 0;
+		stale = btree_gc_mark(r->b, &r->keys, gc);
 
 		if (!b->written &&
-		    (r->level || stale > 10 ||
+		    (r->b->level || stale > 10 ||
 		     b->c->gc_always_rewrite))
-			r = alloc(r, k);
+			r->b = btree_gc_alloc(r->b, r->k, op);
 
-		if (r->level)
-			ret = btree_gc_recurse(r, op, writes, gc);
+		if (r->b->level)
+			ret = btree_gc_recurse(r->b, op, writes, gc);
 
 		if (ret) {
-			write(r);
+			write(r->b);
 			break;
 		}
 
-		pkeys = __set_blocks(b->sets[0].data, pkeys + keys, b->c);
-		if (p && pkeys < (btree_blocks(b) * 2) / 3) {
-			if (r->written)
-				r = alloc(r, k);
+		bkey_copy_key(&b->c->gc_done, r->k);
 
-			if (!r->written) {
-				pr_debug("coalescing");
+		btree_gc_coalesce(b, op, gc, r);
 
-				for (unsigned i = 0; i <= p->nsets; i++)
-					r->sets[++r->nsets].data =
-						p->sets[i].data;
+		if (r[GC_MERGE_NODES - 1].b)
+			write(r[GC_MERGE_NODES - 1].b);
 
-				btree_sort(r, 0, NULL);
-
-				btree_free(p, op);
-				rw_unlock(true, p);
-
-				p = NULL;
-				keys = r->sets[0].data->keys;
-				gc->nodes--;
-			}
-		}
-
-		if (p)
-			write(p);
-
-		lock_set_subclass(&r->lock.dep_map, 0, _THIS_IP_);
-		p = r;
-		pkeys = keys;
-		bkey_copy_key(&b->c->gc_done, k);
+		memmove(&r[1], &r[0],
+			sizeof(struct gc_merge_info) * (GC_MERGE_NODES - 1));
 
 		/* When we've got incremental GC working, we'll want to do
 		 * if (should_resched())
@@ -1122,8 +1233,8 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 #endif
 	}
 
-	if (p)
-		write(p);
+	for (unsigned i = 1; i < GC_MERGE_NODES && r[i].b; i++)
+		write(r[i].b);
 
 	/* Might have freed some children, must remove their keys */
 	btree_sort(b, 0, NULL);
@@ -1135,7 +1246,7 @@ static int btree_gc_root(struct btree *b, struct btree_op *op,
 			 struct closure *writes, struct gc_stat *gc)
 {
 	struct btree *n = NULL;
-	size_t keys = 0;
+	unsigned keys = 0;
 	int ret = 0, stale = btree_gc_mark(b, &keys, gc);
 
 	if (b->level || stale > 10)

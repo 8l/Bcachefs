@@ -657,40 +657,39 @@ void bset_fix_lookup_table(struct btree *b, struct bkey *k)
 		}
 }
 
-struct bkey *__bset_search(struct btree *b, struct bset_tree *t,
-			   const struct bkey *search)
+struct bset_search_iter {
+	struct bkey *l, *r;
+};
+
+__attribute__((optimize(3), hot))
+static struct bset_search_iter bset_search_write_set(struct btree *b,
+						     struct bset_tree *t,
+						     const struct bkey *search)
 {
-	struct bkey *l = t->data->start, *r = end(t->data);
-	unsigned j = 1;
+	unsigned li = 0, ri = t->size;
 
-	if (!t->size)
-		goto linear_search;
+	while (li + 1 != ri) {
+		unsigned m = (li + ri) >> 1;
 
-	if (t->data == write_block(b)) {
-		unsigned li = 0, ri = t->size;
-
-		while (li + 1 != ri) {
-			unsigned m = (li + ri) >> 1;
-
-			if (bkey_cmp(table_to_bkey(t, m), search) > 0)
-				ri = m;
-			else
-				li = m;
-		}
-
-		l = table_to_bkey(t, li);
-		if (ri < t->size)
-			r = table_to_bkey(t, ri);
-		goto linear_search;
+		if (bkey_cmp(table_to_bkey(t, m), search) > 0)
+			ri = m;
+		else
+			li = m;
 	}
 
-	/* prev(end(i)) won't be in the cache */
-	if (bkey_cmp(search, &t->end) >= 0)
-		return end(t->data);
+	return (struct bset_search_iter) {
+		table_to_bkey(t, li),
+		ri < t->size ? table_to_bkey(t, ri) : end(t->data)
+	};
+}
 
-	/* i->start will be in cache since it's right next to the header */
-	if (bkey_cmp(search, t->data->start) < 0)
-		return t->data->start;
+__attribute__((optimize(3), hot))
+static struct bset_search_iter bset_search_tree(struct btree *b,
+						struct bset_tree *t,
+						const struct bkey *search)
+{
+	struct bkey *l, *r;
+	unsigned j = 1;
 
 	while (1) {
 		bool cmp;
@@ -720,7 +719,8 @@ cmp_done:
 				if (--inorder) {
 					f = &t->tree[inorder_prev(j, t->size)];
 					l = cacheline_to_bkey(t, inorder, f->m);
-				}
+				} else
+					l = t->data->start;
 
 				break;
 			}
@@ -734,7 +734,8 @@ cmp_done:
 				if (++inorder != t->size) {
 					f = &t->tree[inorder_next(j, t->size)];
 					r = cacheline_to_bkey(t, inorder, f->m);
-				}
+				} else
+					r = end(t->data);
 
 				break;
 			}
@@ -742,23 +743,68 @@ cmp_done:
 			j = j * 2 + 1;
 		}
 	}
-linear_search:
-#ifdef CONFIG_BCACHE_EDEBUG
-	BUG_ON(r != end(t->data) &&
-	       bkey_cmp(r, search) <= 0);
 
-	BUG_ON(l != t->data->start &&
+	return (struct bset_search_iter) {l, r};
+}
+
+__attribute__((optimize(3), hot))
+struct bkey *__bset_search(struct btree *b, struct bset_tree *t,
+			   const struct bkey *search)
+{
+	struct bset_search_iter i;
+
+	/*
+	 * First, we search for a cacheline, then lastly we do a linear search
+	 * within that cacheline.
+	 *
+	 * To search for the cacheline, there's three different possibilities:
+	 *  * The set is too small to have a search tree, so we just do a linear
+	 *    search over the whole set.
+	 *  * The set is the one we're currently inserting into; keeping a full
+	 *    auxiliary search tree up to date would be too expensive, so we
+	 *    use a much simpler lookup table to do a binary search -
+	 *    bset_search_write_set().
+	 *  * Or we use the auxiliary search tree we constructed earlier -
+	 *    bset_search_tree()
+	 */
+
+	if (unlikely(!t->size)) {
+		i.l = t->data->start;
+		i.r = end(t->data);
+	} else if (t->data != write_block(b)) {
+		/*
+		 * Each node in the auxiliary search tree covers a certain range
+		 * of bits, and keys above and below the set it covers might
+		 * differ outside those bits - so we have to special case the
+		 * start and end - handle that here:
+		 */
+
+		if (unlikely(bkey_cmp(search, &t->end) >= 0))
+			return end(t->data);
+
+		if (unlikely(bkey_cmp(search, t->data->start) < 0))
+			return t->data->start;
+
+		i = bset_search_tree(b, t, search);
+	} else
+		i = bset_search_write_set(b, t, search);
+
+#ifdef CONFIG_BCACHE_EDEBUG
+	BUG_ON(i.r != end(t->data) &&
+	       bkey_cmp(i.r, search) <= 0);
+
+	BUG_ON(i.l != t->data->start &&
 	       t->data != write_block(b) &&
 	       bkey_cmp(tree_to_prev_bkey(t,
-			  inorder_to_tree(bkey_to_cacheline(t, l), t)),
+			  inorder_to_tree(bkey_to_cacheline(t, i.l), t)),
 			search) > 0);
 #endif
 
-	while (l != r &&
-	       bkey_cmp(l, search) <= 0)
-		l = next(l);
+	while (likely(i.l != i.r) &&
+	       bkey_cmp(i.l, search) <= 0)
+		i.l = next(i.l);
 
-	return l;
+	return i.l;
 }
 
 /* Btree iterator */

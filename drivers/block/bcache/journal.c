@@ -227,20 +227,32 @@ bsearch:
 void bcache_journal_mark(struct cache_set *c, struct list_head *list)
 {
 	atomic_t p = { 0 };
-	struct journal_replay *i =
-		list_first_entry(list, struct journal_replay, list);
-	uint64_t last = i->j.seq - 1;
+	struct journal_replay *i;
+	struct journal *j = &c->journal;
+	uint64_t last = j->seq;
 
-	list_for_each_entry(i, list, list) {
-		while (++last != i->j.seq) {
-			BUG_ON(!fifo_push(&c->journal.pin, p));
-			atomic_set(&fifo_back(&c->journal.pin), 0);
+	/*
+	 * journal.pin should never fill up - we never write a journal
+	 * entry when it would fill up. But if for some reason it does, we
+	 * iterate over the list in reverse order so that we can just skip that
+	 * refcount instead of bugging.
+	 */
+
+	list_for_each_entry_reverse(i, list, list) {
+		BUG_ON(last < i->j.seq);
+		i->pin = NULL;
+
+		while (last-- != i->j.seq)
+			if (fifo_free(&j->pin) > 1) {
+				fifo_push_front(&j->pin, p);
+				atomic_set(&fifo_front(&j->pin), 0);
+			}
+
+		if (fifo_free(&j->pin) > 1) {
+			fifo_push_front(&j->pin, p);
+			i->pin = &fifo_front(&j->pin);
+			atomic_set(i->pin, 1);
 		}
-
-		BUG_ON(!fifo_push(&c->journal.pin, p));
-		atomic_set(&fifo_back(&c->journal.pin), 1);
-
-		i->pin = &fifo_back(&c->journal.pin);
 
 		for (struct bkey *k = i->j.start; k < end(&i->j); k = next(k)) {
 			for (unsigned j = 0; j < KEY_PTRS(k); j++) {
@@ -264,19 +276,17 @@ int bcache_journal_replay(struct cache_set *s, struct list_head *list,
 	struct journal_replay *i =
 		list_entry(list->prev, struct journal_replay, list);
 
-	uint64_t start = i->j.last_seq, end = i->j.seq, last = start - 1;
+	uint64_t start = i->j.last_seq, end = i->j.seq, n = start;
 
 	op->insert_type = INSERT_REPLAY;
 
 	list_for_each_entry(i, list, list) {
-		BUG_ON(atomic_read(i->pin) != 1);
+		BUG_ON(i->pin && atomic_read(i->pin) != 1);
 
-		last++;
-		BUG_ON(last > i->j.seq);
-		if (last != i->j.seq)
+		if (n != i->j.seq)
 			err_printk("journal entries %llu-%llu "
 				   "missing! (replaying %llu-%llu)\n",
-				   last, i->j.seq - 1, start, end);
+				   n, i->j.seq - 1, start, end);
 
 		for (struct bkey *k = i->j.start; k < end(&i->j); k = next(k)) {
 			pr_debug("%s", pkey(k));
@@ -294,8 +304,9 @@ int bcache_journal_replay(struct cache_set *s, struct list_head *list,
 			keys++;
 		}
 
-		atomic_dec(i->pin);
-		last = i->j.seq;
+		if (i->pin)
+			atomic_dec(i->pin);
+		n = i->j.seq + 1;
 		entries++;
 	}
 

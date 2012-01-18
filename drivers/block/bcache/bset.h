@@ -12,10 +12,12 @@ struct btree_iter {
 	 * btree_gc_recurse() */
 };
 
-static inline int64_t bkey_cmp(const struct bkey *l, const struct bkey *r)
+static __always_inline int64_t bkey_cmp(const struct bkey *l,
+					const struct bkey *r)
 {
-	return (int64_t) KEY_DEV(l) - (int64_t) KEY_DEV(r)
-		?: (int64_t) l->key - (int64_t) r->key;
+	return unlikely(KEY_DEV(l) != KEY_DEV(r))
+		? (int64_t) KEY_DEV(l) - (int64_t) KEY_DEV(r)
+		: (int64_t) l->key - (int64_t) r->key;
 }
 
 static inline size_t bkey_u64s(const struct bkey *k)

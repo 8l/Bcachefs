@@ -236,6 +236,7 @@ struct cached_dev {
 	atomic_t		running;
 
 	mempool_t		*bio_passthrough;
+	mempool_t		*unaligned_bvec;
 	struct bio_set		*bio_split;
 
 	/* Used for the dirty io rb tree, and the recent io hash */

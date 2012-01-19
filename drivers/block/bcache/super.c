@@ -1151,10 +1151,12 @@ static void cached_dev_free(struct kobject *kobj)
 		blkdev_put(d->bdev, FMODE_READ|FMODE_WRITE);
 	}
 
-	if (d->bio_split)
-		bioset_free(d->bio_split);
 	if (d->bio_passthrough)
 		mempool_destroy(d->bio_passthrough);
+	if (d->unaligned_bvec)
+		mempool_destroy(d->unaligned_bvec);
+	if (d->bio_split)
+		bioset_free(d->bio_split);
 
 	printk(KERN_INFO "bcache: Device %s unregistered\n", name);
 
@@ -1239,6 +1241,8 @@ static struct cached_dev *cached_dev_alloc(void)
 	bcache_writeback_init_cached_dev(d);
 
 	if (!(d->bio_split = bioset_create(4, offsetof(struct bbio, bio))) ||
+	    !(d->unaligned_bvec = mempool_create_kmalloc_pool(1,
+				sizeof(struct bio_vec) * BIO_MAX_PAGES)) ||
 	    !(d->bio_passthrough =
 			mempool_create_slab_pool(32, passthrough_cache)))
 		goto err;

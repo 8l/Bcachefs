@@ -607,8 +607,8 @@ static void bio_complete(struct closure *cl)
 		bio_put(s->cache_bio);
 	}
 
-	if (s->allocated_vec)
-		kfree(s->bio.bio.bi_io_vec);
+	if (s->unaligned_bvec)
+		mempool_free(s->bio.bio.bi_io_vec, d->unaligned_bvec);
 
 	__bio_complete(s);
 
@@ -805,24 +805,18 @@ static struct search *do_bio_hook(struct bio *bio, struct cached_dev *d)
 	s->op.lock		= -1;
 	s->task			= get_current();
 	s->orig_bio		= bio;
+	s->recoverable		= 1;
 	__do_bio_hook(s);
 
-	if (bio->bi_size == bio_segments(bio) * PAGE_SIZE)
-		goto recoverable;
+	if (bio->bi_size != bio_segments(bio) * PAGE_SIZE) {
+		bv = mempool_alloc(d->unaligned_bvec, GFP_NOIO);
+		memcpy(bv, bio_iovec(bio),
+		       sizeof(struct bio_vec) * bio_segments(bio));
 
-	pr_debug("bio with vecs not page aligned");
+		s->bio.bio.bi_io_vec	= bv;
+		s->unaligned_bvec	= 1;
+	}
 
-	bv = kmemdup(bio_iovec(bio),
-		     sizeof(struct bio_vec) * bio_segments(bio),
-		     GFP_NOIO);
-	if (!bv)
-		goto nonrecoverable;
-
-	s->bio.bio.bi_io_vec	= bv;
-	s->allocated_vec	= 1;
-recoverable:
-	s->recoverable		= 1;
-nonrecoverable:
 	return s;
 }
 
@@ -890,7 +884,7 @@ static void request_read_error(struct closure *cl)
 		__do_bio_hook(s);
 		s->bio.bio.bi_io_vec = bv;
 
-		if (!s->allocated_vec)
+		if (!s->unaligned_bvec)
 			bio_for_each_segment(bv, s->orig_bio, i)
 				bv->bv_offset = 0, bv->bv_len = PAGE_SIZE;
 		else
@@ -917,7 +911,7 @@ static void do_verify(struct search *s)
 	struct closure *cl = &s->cl;
 	int i;
 
-	if (!s->allocated_vec)
+	if (!s->unaligned_bvec)
 		bio_for_each_segment(bv, s->orig_bio, i)
 			bv->bv_offset = 0, bv->bv_len = PAGE_SIZE;
 

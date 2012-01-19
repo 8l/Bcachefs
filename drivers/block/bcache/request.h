@@ -17,7 +17,7 @@ struct search {
 	unsigned		bio_done:1;
 	unsigned		lookup_done:1;
 	unsigned		recoverable:1;
-	unsigned		allocated_vec:1;
+	unsigned		unaligned_bvec:1;
 
 	/* IO error returned to s->bio */
 	short			error;

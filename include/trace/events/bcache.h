@@ -21,7 +21,6 @@ DECLARE_EVENT_CLASS(bcache_request,
 		__field(sector_t,	sector			)
 		__field(dev_t,		orig_sector		)
 		__field(unsigned int,	nr_sector		)
-		__field(unsigned int,	cgroup			)
 		__array(char,		rwbs,	6		)
 		__array(char,		comm,	TASK_COMM_LEN	)
 	),
@@ -33,13 +32,11 @@ DECLARE_EVENT_CLASS(bcache_request,
 		__entry->sector		= bio->bi_sector;
 		__entry->orig_sector	= bio->bi_sector - 16;
 		__entry->nr_sector	= bio->bi_size >> 9;
-		__entry->cgroup         = get_blkio_cgroup_id(bio);
 		blk_fill_rwbs(__entry->rwbs, bio->bi_rw, bio->bi_size);
 		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
 	),
 
-	TP_printk("(%d) %d,%d %s %llu + %u [%s] (from %d,%d @ %llu)",
-		  __entry->cgroup,
+	TP_printk("%d,%d %s %llu + %u [%s] (from %d,%d @ %llu)",
 		  MAJOR(__entry->dev), MINOR(__entry->dev),
 		  __entry->rwbs,
 		  (unsigned long long)__entry->sector,
@@ -72,7 +69,6 @@ DECLARE_EVENT_CLASS(bcache_bio,
 		__field(dev_t,		dev			)
 		__field(sector_t,	sector			)
 		__field(unsigned int,	nr_sector		)
-		__field(unsigned int,	cgroup			)
 		__array(char,		rwbs,	6		)
 		__array(char,		comm,	TASK_COMM_LEN	)
 	),
@@ -81,13 +77,11 @@ DECLARE_EVENT_CLASS(bcache_bio,
 		__entry->dev		= bio->bi_bdev->bd_dev;
 		__entry->sector		= bio->bi_sector;
 		__entry->nr_sector	= bio->bi_size >> 9;
-		__entry->cgroup         = get_blkio_cgroup_id(bio);
 		blk_fill_rwbs(__entry->rwbs, bio->bi_rw, bio->bi_size);
 		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
 	),
 
-	TP_printk("(%d) %d,%d  %s %llu + %u [%s]",
-		  __entry->cgroup,
+	TP_printk("%d,%d  %s %llu + %u [%s]",
 		  MAJOR(__entry->dev), MINOR(__entry->dev),
 		  __entry->rwbs,
 		  (unsigned long long)__entry->sector,
@@ -193,7 +187,6 @@ DECLARE_EVENT_CLASS(bcache_cache_bio,
 		__field(sector_t,	sector			)
 		__field(sector_t,	orig_sector		)
 		__field(unsigned int,	nr_sector		)
-		__field(unsigned int,	cgroup			)
 		__array(char,		rwbs,	6		)
 		__array(char,		comm,	TASK_COMM_LEN	)
 	),
@@ -204,13 +197,11 @@ DECLARE_EVENT_CLASS(bcache_cache_bio,
 		__entry->sector		= bio->bi_sector;
 		__entry->orig_sector	= orig_sector;
 		__entry->nr_sector	= bio->bi_size >> 9;
-		__entry->cgroup         = get_blkio_cgroup_id(bio);
 		blk_fill_rwbs(__entry->rwbs, bio->bi_rw, bio->bi_size);
 		memcpy(__entry->comm, current->comm, TASK_COMM_LEN);
 	),
 
-	TP_printk("(%d) %d,%d  %s %llu + %u [%s] (from %d,%d %llu)",
-		  __entry->cgroup,
+	TP_printk("%d,%d  %s %llu + %u [%s] (from %d,%d %llu)",
 		  MAJOR(__entry->dev), MINOR(__entry->dev),
 		  __entry->rwbs,
 		  (unsigned long long)__entry->sector,

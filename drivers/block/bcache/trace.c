@@ -2,7 +2,6 @@
 #include "btree.h"
 #include "request.h"
 
-#include <linux/blkio-track.h>
 #include <linux/module.h>
 
 #define CREATE_TRACE_POINTS

@@ -1255,20 +1255,23 @@ static void bio_passthrough_submit(struct closure *cl)
 	} while (n != bio);
 }
 
-static int bio_passthrough(struct cached_dev *d, struct bio *bio)
+static void bio_passthrough(struct cached_dev *d, struct bio *bio)
 {
 	struct bio_passthrough *s;
 
 	if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
-		if (!blk_queue_discard(bdev_get_queue(d->bdev))) {
+		if (!blk_queue_discard(bdev_get_queue(d->bdev)))
 			bio_endio(bio, 0);
-			return 0;
-		} else
-			return 1;
+		else
+			generic_make_request(bio);
+
+		return;
 	}
 
-	if (bio_max_sectors(bio) << 9 >= bio->bi_size)
-		return 1;
+	if (bio_max_sectors(bio) << 9 >= bio->bi_size) {
+		generic_make_request(bio);
+		return;
+	}
 
 	s = mempool_alloc(d->bio_passthrough, GFP_NOIO);
 
@@ -1283,7 +1286,6 @@ static int bio_passthrough(struct cached_dev *d, struct bio *bio)
 	bio->bi_private	= &s->cl;
 
 	bio_passthrough_submit(&s->cl);
-	return 0;
 }
 
 /* The entry point */
@@ -1297,16 +1299,16 @@ int bcache_make_request(struct request_queue *q, struct bio *bio)
 	bio->bi_sector += 16;
 
 	if (!bio_has_data(bio))
-		return 1;
+		generic_make_request(bio);
+	else if (!cached_dev_get(d))
+		bio_passthrough(d, bio);
+	else {
+		s = do_bio_hook(bio, d);
+		trace_bcache_request_start(&s->op, bio);
+		check_should_skip(s);
 
-	if (!cached_dev_get(d))
-		return bio_passthrough(d, bio);
-
-	s = do_bio_hook(bio, d);
-	trace_bcache_request_start(&s->op, bio);
-	check_should_skip(s);
-
-	(bio->bi_rw & REQ_WRITE ? request_write : request_read)(s);
+		(bio->bi_rw & REQ_WRITE ? request_write : request_read)(s);
+	}
 	return 0;
 }
 

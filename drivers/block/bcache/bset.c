@@ -459,18 +459,25 @@ struct bkey *table_to_bkey(struct bset_tree *t, unsigned cacheline)
 
 /* Auxiliary search trees */
 
-static unsigned bfloat_mantissa(const struct bkey *k, struct bkey_float *f)
+static inline unsigned shift128(uint64_t high, uint64_t low, unsigned shift)
 {
-	unsigned r;
-	BUG_ON(f->exponent == 127);
+	/* shift is 7 bits, so mask2 is ~0 iff the high bit in shift is set */
+	unsigned ret, mask = 0 - (shift >> 6);
+	shift &= 63;
 
-	if (f->exponent < 64)
-		r = (k->key >> f->exponent) |
-			(KEY_DEV(k) << (64 - f->exponent));
-	else
-		r = KEY_DEV(k) >> (f->exponent & 63);
+	ret  = low >> shift;
+	ret |= (high << 1) << (63U - shift);
 
-	return r & BKEY_MANTISSA_MASK;
+	ret &= ~mask;
+	ret |=  mask & (high >> shift);
+
+	return ret;
+}
+
+static inline unsigned bfloat_mantissa(const struct bkey *k,
+				       struct bkey_float *f)
+{
+	return shift128(k->header, k->key, f->exponent) & BKEY_MANTISSA_MASK;
 }
 
 static void make_bfloat(struct bset_tree *t, unsigned j)
@@ -498,7 +505,7 @@ static void make_bfloat(struct bset_tree *t, unsigned j)
 	f->exponent = max_t(int, f->exponent - BKEY_MANTISSA_BITS, 0);
 
 	if (bfloat_mantissa(m, f) != bfloat_mantissa(p, f))
-		f->mantissa = bfloat_mantissa(m, f);
+		f->mantissa = bfloat_mantissa(m, f) - 1;
 	else
 		f->exponent = 127;
 }
@@ -689,59 +696,58 @@ static struct bset_search_iter bset_search_tree(struct btree *b,
 						const struct bkey *search)
 {
 	struct bkey *l, *r;
-	unsigned j = 1;
+	struct bkey_float *f;
+	unsigned inorder, j, n = 1;
 
-	while (1) {
-		bool cmp;
-		unsigned shifted_key;
-		struct bkey_float *f = &t->tree[j];
+	do {
+		unsigned p = n << 4;
+		p &= ((int) (p - t->size)) >> 31;
 
-		if (j << 4 < t->size)
-			prefetch(&t->tree[j << 4]);
+		prefetch(&t->tree[p]);
 
-		if (f->exponent < 64)
-			shifted_key = (search->key >> f->exponent) |
-				(KEY_DEV(search) << (64 - f->exponent));
-		else if (f->exponent < 127)
-			shifted_key = KEY_DEV(search) >> (f->exponent & 63);
-		else {
-			cmp = bkey_cmp(tree_to_bkey(t, j), search) > 0;
-			goto cmp_done;
-		}
+		j = n;
+		f = &t->tree[j];
 
-		cmp = f->mantissa > (shifted_key & BKEY_MANTISSA_MASK);
-cmp_done:
-		if (cmp) {
-			if (j * 2 >= t->size) {
-				unsigned inorder = to_inorder(j, t);
-				r = cacheline_to_bkey(t, inorder, f->m);
+		/*
+		 * n = (f->mantissa > bfloat_mantissa())
+		 *	? j * 2
+		 *	: j * 2 + 1;
+		 *
+		 * We need to subtract 1 from f->mantissa for the sign bit trick
+		 * to work  - that's done in make_bfloat()
+		 */
+		if (likely(f->exponent != 127))
+			n = j * 2 + (((unsigned)
+				      (f->mantissa -
+				       bfloat_mantissa(search, f))) >> 31);
+		else
+			n = (bkey_cmp(tree_to_bkey(t, j), search) > 0)
+				? j * 2
+				: j * 2 + 1;
+	} while (n < t->size);
 
-				if (--inorder) {
-					f = &t->tree[inorder_prev(j, t->size)];
-					l = cacheline_to_bkey(t, inorder, f->m);
-				} else
-					l = t->data->start;
+	inorder = to_inorder(j, t);
 
-				break;
-			}
+	/*
+	 * n would have been the node we recursed to - the low bit tells us if
+	 * we recursed left or recursed right.
+	 */
+	if (n & 1) {
+		l = cacheline_to_bkey(t, inorder, f->m);
 
-			j = j * 2;
-		} else {
-			if (j * 2 + 1 >= t->size) {
-				unsigned inorder = to_inorder(j, t);
-				l = cacheline_to_bkey(t, inorder, f->m);
+		if (++inorder != t->size) {
+			f = &t->tree[inorder_next(j, t->size)];
+			r = cacheline_to_bkey(t, inorder, f->m);
+		} else
+			r = end(t->data);
+	} else {
+		r = cacheline_to_bkey(t, inorder, f->m);
 
-				if (++inorder != t->size) {
-					f = &t->tree[inorder_next(j, t->size)];
-					r = cacheline_to_bkey(t, inorder, f->m);
-				} else
-					r = end(t->data);
-
-				break;
-			}
-
-			j = j * 2 + 1;
-		}
+		if (--inorder) {
+			f = &t->tree[inorder_prev(j, t->size)];
+			l = cacheline_to_bkey(t, inorder, f->m);
+		} else
+			l = t->data->start;
 	}
 
 	return (struct bset_search_iter) {l, r};

@@ -2078,7 +2078,8 @@ SHOW(__cache)
 	sysfs_print(io_errors,
 		    atomic_read(&c->io_errors) >> IO_ERROR_SHIFT);
 
-	sysfs_print(freelist_percent, c->free.size * 100 / c->sb.nbuckets);
+	sysfs_print(freelist_percent, c->free.size * 100 /
+		    ((size_t) c->sb.nbuckets));
 
 	if (attr == &sysfs_cache_replacement_policy)
 		return sprint_string_list(buf, cache_replacement_policies,

@@ -378,7 +378,7 @@ static void invalidate_buckets_random(struct cache *c)
 		size_t n;
 		get_random_bytes(&n, sizeof(n));
 
-		n %= c->sb.nbuckets - c->sb.first_bucket;
+		n %= (size_t) (c->sb.nbuckets - c->sb.first_bucket);
 		n += c->sb.first_bucket;
 
 		b = c->buckets + n;

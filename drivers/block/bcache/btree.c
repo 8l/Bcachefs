@@ -85,9 +85,6 @@
  * Test module load/unload
  */
 
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Kent Overstreet <kent.overstreet@gmail.com>");
-
 const char * const bcache_insert_types[] = {
 	"read", "write", "writeback", "undirty", "replay"
 };

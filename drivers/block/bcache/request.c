@@ -1165,18 +1165,18 @@ skip:		s->cache_bio = s->orig_bio;
 		bio_get(s->cache_bio);
 
 		bio_invalidate(s);
+		trace_bcache_write_skip(s->orig_bio);
 
-		if ((bio->bi_rw & (1 << BIO_RW_DISCARD)) &&
-		    !blk_queue_discard(bdev_get_queue(s->op.d->bdev)))
-			bio_endio(bio, 0);
-		else {
-			trace_bcache_write_skip(s->orig_bio);
-			if (closure_bio_submit(bio, &s->cl,
-					       s->op.d->c->bio_split))
-				return_f(&s->op.cl,
-					 request_invalidate_resubmit,
-					 bcache_wq);
-		}
+		if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
+			if (blk_queue_discard(bdev_get_queue(s->op.d->bdev)))
+				generic_make_request(bio);
+			else
+				bio_endio(bio, 0);
+		} else if (closure_bio_submit(bio, &s->cl,
+					      s->op.d->c->bio_split))
+			return_f(&s->op.cl,
+				 request_invalidate_resubmit,
+				 bcache_wq);
 
 		closure_put(&s->op.cl);
 		return;

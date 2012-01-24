@@ -459,25 +459,26 @@ struct bkey *table_to_bkey(struct bset_tree *t, unsigned cacheline)
 
 /* Auxiliary search trees */
 
-static inline unsigned shift128(uint64_t high, uint64_t low, unsigned shift)
+static inline uint64_t shrd128(uint64_t high, uint64_t low, uint8_t shift)
 {
-	/* shift is 7 bits, so mask2 is ~0 iff the high bit in shift is set */
-	unsigned ret, mask = 0 - (shift >> 6);
-	shift &= 63;
-
-	ret  = low >> shift;
-	ret |= (high << 1) << (63U - shift);
-
-	ret &= ~mask;
-	ret |=  mask & (high >> shift);
-
-	return ret;
+#ifdef CONFIG_X86_64
+	asm("shrd %[shift],%[high],%[low]"
+	    : [low] "+Rm" (low)
+	    : [high] "R" (high),
+	    [shift] "ci" (shift)
+	    : "cc");
+#else
+	low >>= shift;
+	low  |= (high << 1) << (63U - shift);
+#endif
+	return low;
 }
 
 static inline unsigned bfloat_mantissa(const struct bkey *k,
 				       struct bkey_float *f)
 {
-	return shift128(k->header, k->key, f->exponent) & BKEY_MANTISSA_MASK;
+	const uint64_t *p = &k->key - (f->exponent >> 6);
+	return shrd128(p[-1], p[0], f->exponent & 63) & BKEY_MANTISSA_MASK;
 }
 
 static void make_bfloat(struct bset_tree *t, unsigned j)
@@ -499,7 +500,7 @@ static void make_bfloat(struct bset_tree *t, unsigned j)
 
 	if (KEY_DEV(l) != KEY_DEV(r))
 		f->exponent = fls64(KEY_DEV(r) ^ KEY_DEV(l)) + 64;
-	else if (l->key != r->key)
+	else
 		f->exponent = fls64(r->key ^ l->key);
 
 	f->exponent = max_t(int, f->exponent - BKEY_MANTISSA_BITS, 0);
@@ -668,7 +669,7 @@ struct bset_search_iter {
 	struct bkey *l, *r;
 };
 
-__attribute__((optimize(3), hot))
+__attribute__((optimize(3)))
 static struct bset_search_iter bset_search_write_set(struct btree *b,
 						     struct bset_tree *t,
 						     const struct bkey *search)
@@ -690,7 +691,7 @@ static struct bset_search_iter bset_search_write_set(struct btree *b,
 	};
 }
 
-__attribute__((optimize(3), hot))
+__attribute__((optimize(3)))
 static struct bset_search_iter bset_search_tree(struct btree *b,
 						struct bset_tree *t,
 						const struct bkey *search)
@@ -753,7 +754,7 @@ static struct bset_search_iter bset_search_tree(struct btree *b,
 	return (struct bset_search_iter) {l, r};
 }
 
-__attribute__((optimize(3), hot))
+__attribute__((optimize(3)))
 struct bkey *__bset_search(struct btree *b, struct bset_tree *t,
 			   const struct bkey *search)
 {

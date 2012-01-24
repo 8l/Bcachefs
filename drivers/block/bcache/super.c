@@ -134,55 +134,6 @@ STORE(fn)								\
 	return ret;							\
 }
 
-#define __attribute(_name, _mode)					\
-	static struct attribute sysfs_##_name =				\
-		{ .name = #_name, .mode = _mode }
-
-#define write_attribute(n)	__attribute(n, S_IWUSR)
-#define read_attribute(n)	__attribute(n, S_IRUGO)
-#define rw_attribute(n)		__attribute(n, S_IRUGO|S_IWUSR)
-
-#define sysfs_printf(file, fmt, ...)					\
-	if (attr == &sysfs_ ## file)					\
-		return snprintf(buf, PAGE_SIZE, fmt "\n", __VA_ARGS__)
-
-#define sysfs_print(file, var)						\
-	if (attr == &sysfs_ ## file)					\
-		return snprint(buf, PAGE_SIZE, var)
-
-#define sysfs_hprint(file, val)						\
-	if (attr == &sysfs_ ## file) {					\
-		ssize_t ret = hprint(buf, val);				\
-		strcat(buf, "\n");					\
-		return ret + 1;						\
-	}
-
-#define var_printf(_var, fmt)	sysfs_printf(_var, fmt, var(_var))
-#define var_print(_var)		sysfs_print(_var, var(_var))
-#define var_hprint(_var)	sysfs_hprint(_var, var(_var))
-
-#define sysfs_strtoul(file, var)					\
-	if (attr == &sysfs_ ## file)					\
-		return strtoul_safe(buf, var) ?: (ssize_t) size;
-
-#define sysfs_strtoul_clamp(file, var, min, max)			\
-	if (attr == &sysfs_ ## file)					\
-		return strtoul_safe_clamp(buf, var, min, max)		\
-			?: (ssize_t) size;
-
-#define strtoul_or_return(cp)						\
-({									\
-	unsigned long _v;						\
-	int _r = strict_strtoul(cp, 10, &_v);				\
-	if (_r)								\
-		return _r;						\
-	_v;								\
-})
-
-#define sysfs_hatoi(file, var)						\
-	if (attr == &sysfs_ ## file)					\
-		return strtoi_h(buf, &var) ?: (ssize_t) size;
-
 write_attribute(attach);
 write_attribute(detach);
 write_attribute(unregister);
@@ -205,9 +156,11 @@ read_attribute(metadata_written);
 read_attribute(btree_avg_keys_written);
 read_attribute(active_journal_entries);
 
-read_attribute(average_seconds_between_gc);
-read_attribute(gc_ms_max);
-read_attribute(seconds_since_gc);
+sysfs_time_stats_attribute(btree_gc,	sec, ms);
+sysfs_time_stats_attribute(btree_split, sec, us);
+sysfs_time_stats_attribute(btree_sort,	ms,  us);
+sysfs_time_stats_attribute(try_harder,	ms,  us);
+
 read_attribute(btree_nodes);
 read_attribute(btree_used_percent);
 read_attribute(average_key_size);
@@ -1483,13 +1436,10 @@ SHOW(__cache_set)
 	sysfs_print(btree_cache_max_chain,	cache_max_chain(c));
 	sysfs_print(cache_available_percent,	100 - c->gc_stats.in_use);
 
-	sysfs_print(average_seconds_between_gc,
-		    DIV_SAFE(get_seconds() - c->sb.last_mount,
-			     c->gc_stats.count));
-
-	sysfs_print(gc_ms_max,		c->gc_stats.ms_max);
-	sysfs_print(seconds_since_gc,	!c->gc_stats.last ? -1 :
-		    (long) (get_seconds() - c->gc_stats.last));
+	sysfs_print_time_stats(&c->btree_gc_time,	btree_gc, sec, ms);
+	sysfs_print_time_stats(&c->btree_split_time,	btree_split, sec, us);
+	sysfs_print_time_stats(&c->sort_time,		btree_sort, ms, us);
+	sysfs_print_time_stats(&c->try_harder_time,	try_harder, ms, us);
 
 	sysfs_print(btree_used_percent,	btree_used(c));
 	sysfs_print(btree_nodes,	c->gc_stats.nodes);
@@ -1751,10 +1701,11 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 
 	static struct attribute *cache_set_internal_files[] = {
 		&sysfs_active_journal_entries,
-		&sysfs_average_seconds_between_gc,
-		&sysfs_gc_ms_max,
-		&sysfs_seconds_since_gc,
-		&sysfs_trigger_gc,
+
+		sysfs_time_stats_attribute_list(btree_gc, sec, ms)
+		sysfs_time_stats_attribute_list(btree_split, sec, us)
+		sysfs_time_stats_attribute_list(btree_sort, ms, us)
+		sysfs_time_stats_attribute_list(try_harder, ms, us)
 
 		&sysfs_btree_avg_keys_written,
 		&sysfs_btree_nodes,
@@ -1765,8 +1716,10 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 		&sysfs_cache_read_races,
 		&sysfs_writeback_keys_done,
 		&sysfs_writeback_keys_failed,
-#ifdef CONFIG_BCACHE_DEBUG
+
+		&sysfs_trigger_gc,
 		&sysfs_prune_cache,
+#ifdef CONFIG_BCACHE_DEBUG
 		&sysfs_verify,
 		&sysfs_key_merging_disabled,
 #endif
@@ -1816,6 +1769,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	mutex_init(&c->fill_lock);
 	mutex_init(&c->sort_lock);
 	mutex_init(&c->sb_write);
+	spin_lock_init(&c->sort_time_lock);
 
 	INIT_WORK(&c->unregister, cache_set_unregister);
 	INIT_LIST_HEAD(&c->list);

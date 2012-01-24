@@ -121,6 +121,8 @@ static inline void rw_unlock(bool w, struct btree *b)
 	} while (_r == -EINTR);						\
 									\
 	if ((c)->try_harder == &(op)->cl) {				\
+		time_stats_update(&(c)->try_harder_time,		\
+				  (c)->try_harder_start);		\
 		(c)->try_harder = NULL;					\
 		__closure_wake_up(&(c)->try_wait);			\
 	}								\

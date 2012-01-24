@@ -786,6 +786,7 @@ err:
 
 	/* XXX: tracepoint */
 	c->try_harder = cl;
+	c->try_harder_start = local_clock();
 	b = ERR_PTR(-ENOMEM);
 
 	list_for_each_entry_reverse(i, &c->lru, lru)
@@ -1365,7 +1366,7 @@ size_t btree_gc_finish(struct cache_set *c)
 static void btree_gc(struct cache_set *c)
 {
 	int ret;
-	unsigned long available, time = jiffies;
+	unsigned long available;
 	struct bucket *b;
 	struct cache *ca;
 
@@ -1373,6 +1374,7 @@ static void btree_gc(struct cache_set *c)
 	struct closure writes;
 	struct btree_op op;
 
+	uint64_t start_time = local_clock();
 	trace_bcache_gc_start(c->sb.set_uuid);
 
 	memset(&stats, 0, sizeof(struct gc_stat));
@@ -1415,11 +1417,7 @@ static void btree_gc(struct cache_set *c)
 
 	available = btree_gc_finish(c);
 
-	time = jiffies_to_msecs(jiffies - time);
-
-	stats.count	= c->gc_stats.count + 1;
-	stats.ms_max	= max_t(unsigned, c->gc_stats.ms_max, time);
-	stats.last	= get_seconds();
+	time_stats_update(&c->btree_gc_time, start_time);
 
 	stats.key_bytes *= sizeof(uint64_t);
 	stats.dirty	<<= 9;
@@ -1736,6 +1734,7 @@ static int btree_split(struct btree *b, struct btree_op *op)
 {
 	bool split, root = b == b->c->root;
 	struct btree *n1, *n2 = NULL, *n3 = NULL;
+	uint64_t start_time = local_clock();
 
 	n1 = bcache_btree_alloc(b->c, b->level, &op->cl);
 	if (IS_ERR(n1))
@@ -1821,6 +1820,8 @@ static int btree_split(struct btree *b, struct btree_op *op)
 
 	rw_unlock(true, n1);
 	btree_free(b, op);
+
+	time_stats_update(&b->c->btree_split_time, start_time);
 
 	return 0;
 err_free2:

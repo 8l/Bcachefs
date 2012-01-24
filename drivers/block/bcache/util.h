@@ -335,6 +335,56 @@ int strtoull_h(const char *, unsigned long long *);
 		     ? "%s\n" : "%i\n", var)
 
 ssize_t hprint(char *buf, int64_t v);
+
+#define sysfs_attribute(_name, _mode)					\
+	static struct attribute sysfs_##_name =				\
+		{ .name = #_name, .mode = _mode }
+
+#define write_attribute(n)	sysfs_attribute(n, S_IWUSR)
+#define read_attribute(n)	sysfs_attribute(n, S_IRUGO)
+#define rw_attribute(n)		sysfs_attribute(n, S_IRUGO|S_IWUSR)
+
+#define sysfs_printf(file, fmt, ...)					\
+	if (attr == &sysfs_ ## file)					\
+		return snprintf(buf, PAGE_SIZE, fmt "\n", __VA_ARGS__)
+
+#define sysfs_print(file, var)						\
+	if (attr == &sysfs_ ## file)					\
+		return snprint(buf, PAGE_SIZE, var)
+
+#define sysfs_hprint(file, val)						\
+	if (attr == &sysfs_ ## file) {					\
+		ssize_t ret = hprint(buf, val);				\
+		strcat(buf, "\n");					\
+		return ret + 1;						\
+	}
+
+#define var_printf(_var, fmt)	sysfs_printf(_var, fmt, var(_var))
+#define var_print(_var)		sysfs_print(_var, var(_var))
+#define var_hprint(_var)	sysfs_hprint(_var, var(_var))
+
+#define sysfs_strtoul(file, var)					\
+	if (attr == &sysfs_ ## file)					\
+		return strtoul_safe(buf, var) ?: (ssize_t) size;
+
+#define sysfs_strtoul_clamp(file, var, min, max)			\
+	if (attr == &sysfs_ ## file)					\
+		return strtoul_safe_clamp(buf, var, min, max)		\
+			?: (ssize_t) size;
+
+#define strtoul_or_return(cp)						\
+({									\
+	unsigned long _v;						\
+	int _r = strict_strtoul(cp, 10, &_v);				\
+	if (_r)								\
+		return _r;						\
+	_v;								\
+})
+
+#define sysfs_hatoi(file, var)						\
+	if (attr == &sysfs_ ## file)					\
+		return strtoi_h(buf, &var) ?: (ssize_t) size;
+
 bool is_zero(const char *p, size_t n);
 int parse_uuid(const char *s, char *uuid);
 
@@ -342,6 +392,59 @@ ssize_t sprint_string_list(char *buf, const char * const list[],
 			   size_t selected);
 
 ssize_t read_string_list(const char *buf, const char * const list[]);
+
+struct time_stats {
+	/*
+	 * all fields are in nanoseconds, averages are ewmas stored left shifted
+	 * by 8
+	 */
+	uint64_t	max_duration;
+	uint64_t	average_duration;
+	uint64_t	average_frequency;
+	uint64_t	last;
+};
+
+void time_stats_update(struct time_stats *stats, uint64_t time);
+
+static const uint64_t __time_ns		= 1;
+static const uint64_t __time_us		= 1000;
+static const uint64_t __time_ms		= 1000000;
+static const uint64_t __time_sec	= 1000000000;
+
+#define sysfs_print_time_stats(stats, name,				\
+			       frequency_units,				\
+			       duration_units)				\
+do {									\
+	sysfs_print(name ## _average_frequency_ ## frequency_units,	\
+		    ((stats)->average_frequency >> 8) /			\
+		     __time_ ## frequency_units);			\
+	sysfs_print(name ## _average_duration_ ## duration_units,	\
+		    ((stats)->average_duration >> 8) /			\
+		    __time_ ## duration_units);				\
+	sysfs_print(name ## _max_duration_ ## duration_units,		\
+		    ((stats)->max_duration) /				\
+		    __time_ ## duration_units);				\
+	sysfs_print(name ## _last_ ## frequency_units,			\
+		    !(stats)->last ? -1LL				\
+		    : (int64_t) ((local_clock() - (stats)->last) /	\
+				 __time_ ## frequency_units));		\
+} while (0)
+
+#define sysfs_time_stats_attribute(name,				\
+				   frequency_units,			\
+				   duration_units)			\
+read_attribute(name ## _average_frequency_ ## frequency_units);		\
+read_attribute(name ## _average_duration_ ## duration_units);		\
+read_attribute(name ## _max_duration_ ## duration_units);		\
+read_attribute(name ## _last_ ## frequency_units)
+
+#define sysfs_time_stats_attribute_list(name,				\
+					frequency_units,		\
+					duration_units)			\
+&sysfs_ ## name ## _average_frequency_ ## frequency_units,		\
+&sysfs_ ## name ## _average_duration_ ## duration_units,		\
+&sysfs_ ## name ## _max_duration_ ## duration_units,			\
+&sysfs_ ## name ## _last_ ## frequency_units,
 
 #define __DIV_SAFE(n, d, zero)						\
 ({									\

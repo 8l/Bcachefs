@@ -922,6 +922,7 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 	struct bset *out = new;
 	struct bkey *k, *last = NULL;
 	bool remove_stale = new || !b->written;
+	uint64_t start_time;
 
 	bool (*bad)(struct btree *, const struct bkey *) = remove_stale
 		? ptr_bad
@@ -950,6 +951,8 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 		order = ilog2(bucket_pages(b->c));
 	}
 
+	start_time = local_clock();
+
 	while (!btree_iter_end(iter)) {
 		if (fixup && !b->level)
 			btree_sort_fixup(iter);
@@ -973,8 +976,12 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 	if (!fixup && !start && !remove_stale)
 		btree_verify(b, out);
 
-	if (new)
+	if (new) {
+		spin_lock(&b->c->sort_time_lock);
+		time_stats_update(&b->c->sort_time, start_time);
+		spin_unlock(&b->c->sort_time_lock);
 		return;
+	}
 
 	b->nsets = start;
 
@@ -999,6 +1006,12 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 
 	if (!new && b->written)
 		bset_build_tree(b, &b->sets[start]);
+
+	if (!start) {
+		spin_lock(&b->c->sort_time_lock);
+		time_stats_update(&b->c->sort_time, start_time);
+		spin_unlock(&b->c->sort_time_lock);
+	}
 
 	pr_debug("sorted %i keys", b->sets[start].data->keys);
 	check_key_order(b, b->sets[start].data);

@@ -375,10 +375,6 @@ struct cache {
 };
 
 struct gc_stat {
-	unsigned		count;
-	unsigned		ms_max;
-	time_t			last;
-
 	size_t			nodes;
 	size_t			key_bytes;
 
@@ -448,6 +444,7 @@ struct cache_set {
 	 */
 	struct closure		*try_harder;
 	closure_list_t		try_wait;
+	uint64_t		try_harder_start;
 
 	/*
 	 * When we free a btree node, we increment the gen of the bucket the
@@ -536,6 +533,12 @@ struct cache_set {
 	/* The rest of this all shows up in sysfs */
 	unsigned		congested_read_threshold_us;
 	unsigned		congested_write_threshold_us;
+
+	spinlock_t		sort_time_lock;
+	struct time_stats	sort_time;
+	struct time_stats	btree_gc_time;
+	struct time_stats	btree_split_time;
+	struct time_stats	try_harder_time;
 
 	atomic_long_t		cache_read_races;
 	atomic_long_t		writeback_keys_done;

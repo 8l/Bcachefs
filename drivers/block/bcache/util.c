@@ -160,6 +160,34 @@ int parse_uuid(const char *s, char *uuid)
 }
 EXPORT_SYMBOL_GPL(parse_uuid);
 
+void time_stats_update(struct time_stats *stats, uint64_t start_time)
+{
+	uint64_t now		= local_clock();
+	uint64_t duration	= time_after64(now, start_time)
+		? now - start_time : 0;
+	uint64_t last		= time_after64(now, stats->last)
+		? now - stats->last : 0;
+
+	stats->max_duration = max(stats->max_duration, duration);
+
+	if (stats->last) {
+		stats->average_duration *= 7;
+		stats->average_duration += duration << 8;
+		stats->average_duration /= 8;
+
+		if (stats->average_frequency) {
+			stats->average_frequency *= 7;
+			stats->average_frequency += last << 8;
+			stats->average_frequency /= 8;
+		} else
+			stats->average_frequency  = last << 8;
+	} else
+		stats->average_duration  = duration << 8;
+
+	stats->last = now ?: 1;
+}
+EXPORT_SYMBOL_GPL(time_stats_update);
+
 #ifdef CONFIG_BCACHE_LATENCY_DEBUG
 unsigned latency_warn_ms;
 #endif

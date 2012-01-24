@@ -1226,17 +1226,17 @@ static int release_dev(struct gendisk *b, fmode_t mode)
 	return 0;
 }
 
-static int lioctl_dev(struct block_device *b, fmode_t mode,
-		      unsigned int cmd, unsigned long arg)
+static int ioctl_dev(struct block_device *b, fmode_t mode,
+		     unsigned int cmd, unsigned long arg)
 {
 	struct cached_dev *d = b->bd_disk->private_data;
-	return d->bdev->bd_disk->fops->locked_ioctl(d->bdev, mode, cmd, arg);
+	return __blkdev_driver_ioctl(d->bdev, mode, cmd, arg);
 }
 
 static const struct block_device_operations bcache_ops = {
 	.open		= open_dev,
 	.release	= release_dev,
-	.locked_ioctl	= lioctl_dev,
+	.ioctl		= ioctl_dev,
 	.owner		= THIS_MODULE,
 };
 

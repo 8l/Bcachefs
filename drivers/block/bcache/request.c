@@ -483,7 +483,7 @@ static void bio_insert(struct closure *cl)
 			if (op->insert_type == INSERT_WRITEBACK)
 				bcache_writeback_start(op->d);
 
-			s->bio_done = true;
+			s->bio_insert_done = true;
 		}
 
 		set_closure_fn(cl, bcache_journal, bcache_wq);
@@ -505,16 +505,16 @@ err:
 		 * closure, then invalidate in btree and do normal
 		 * write
 		 */
-		s->bio_done	= true;
-		s->error	= -ENOMEM;
+		s->bio_insert_done	= true;
+		s->error		= -ENOMEM;
 		set_closure_fn(cl, NULL, NULL);
 		break;
 	case INSERT_WRITE:
-		s->skip		= true;
+		s->skip			= true;
 		bio_invalidate(s);
 		break;
 	case INSERT_READ:
-		s->bio_done	= true;
+		s->bio_insert_done	= true;
 	}
 
 	/* IO never happened, so bbio key isn't set up, so we can't call
@@ -550,7 +550,7 @@ static void bio_invalidate(struct search *s)
 			    &KEY(s->op.d->id, bio->bi_sector, len));
 	}
 
-	s->bio_done = true;
+	s->bio_insert_done = true;
 }
 
 void bcache_btree_insert_async(struct closure *cl)
@@ -559,18 +559,18 @@ void bcache_btree_insert_async(struct closure *cl)
 	struct search *s = container_of(op, struct search, op);
 again:
 	if (bcache_btree_insert(op, op->d->c)) {
-		s->error	= -ENOMEM;
-		s->bio_done	= true;
+		s->error		= -ENOMEM;
+		s->bio_insert_done	= true;
 	}
 
 	keylist_free(&s->op.keys);
 
-	if (s->skip && !s->bio_done) {
+	if (s->skip && !s->bio_insert_done) {
 		bio_invalidate(s);
 		goto again;
 	}
 
-	return_f(cl, !s->bio_done
+	return_f(cl, !s->bio_insert_done
 		 ? bio_insert : NULL, bcache_wq);
 }
 
@@ -1069,7 +1069,7 @@ static void __request_read(struct closure *cl)
 	struct bio *bio = &s->bio.bio;
 	unsigned reada = op->d->readahead;
 
-	int ret = btree_root(search_recurse, op->d->c, op, bio, &reada);
+	int ret = btree_root(search_recurse, op->d->c, op, &reada);
 
 	if (ret == -ENOMEM) {
 		closure_put(&s->cl);
@@ -1081,7 +1081,7 @@ static void __request_read(struct closure *cl)
 
 	s->lookup_done = true;
 
-	if (!op->cache_hit) {
+	if (!s->cache_hit_done) {
 		if (s->cache_miss)
 			generic_make_request(s->cache_miss);
 		s->cache_miss = bio;

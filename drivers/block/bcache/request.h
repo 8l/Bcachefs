@@ -13,11 +13,16 @@ struct search {
 	struct bio		*cache_miss;
 	unsigned		cache_bio_sectors;
 
-	unsigned		skip:1;
-	unsigned		bio_done:1;
-	unsigned		lookup_done:1;
 	unsigned		recoverable:1;
 	unsigned		unaligned_bvec:1;
+	unsigned		skip:1;
+
+	unsigned		bio_insert_done:1;
+	/*
+	 *If true, s->bio was a cache hit and is already submitted
+	 */
+	unsigned		cache_hit_done:1;
+	unsigned		lookup_done:1;
 
 	/* IO error returned to s->bio */
 	short			error;

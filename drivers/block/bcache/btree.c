@@ -1989,16 +1989,21 @@ void bcache_btree_set_root(struct btree *b)
 
 /* Cache lookup */
 
-static int cache_hit(struct btree *b, struct btree_op *op,
-		     struct bio *bio, struct bkey *k)
+/*
+ * Read from a single key, handling the initial cache miss if the key starts in
+ * the middle of the bio
+ */
+static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
+				    struct bkey *k)
 {
+	struct search *s = container_of(op, struct search, op);
+	struct bio *bio = &s->bio.bio;
+
 	unsigned sectors, ptr;
 	struct bio *n;
 	int offset(void)	{ return bio->bi_sector - KEY_START(k); }
 
 	while (offset() < 0) {
-		struct search *s = container_of(op, struct search, op);
-
 		sectors = min_t(unsigned, -offset(), bio_max_sectors(bio));
 
 		n = bio_split_get(bio, sectors, op->d);
@@ -2030,7 +2035,7 @@ static int cache_hit(struct btree *b, struct btree_op *op,
 			return -ENOMEM;
 
 		if (n == bio)
-			op->cache_hit = true;
+			s->cache_hit_done = true;
 
 		bio_key = &container_of(n, struct bbio, bio)->key;
 
@@ -2052,15 +2057,17 @@ static int cache_hit(struct btree *b, struct btree_op *op,
 
 		trace_bcache_cache_hit(n);
 		__submit_bbio(n, b->c);
-	} while (!op->cache_hit &&
+	} while (!s->cache_hit_done &&
 		 bio->bi_sector < k->key);
 
 	return 0;
 }
 
-int btree_search_recurse(struct btree *b, struct btree_op *op,
-			 struct bio *bio, unsigned *reada)
+int btree_search_recurse(struct btree *b, struct btree_op *op, unsigned *reada)
 {
+	struct search *s = container_of(op, struct search, op);
+	struct bio *bio = &s->bio.bio;
+
 	int ret = 0;
 	struct bkey *k;
 	struct btree_iter iter;
@@ -2091,10 +2098,10 @@ int btree_search_recurse(struct btree *b, struct btree_op *op,
 		}
 
 		ret = b->level
-			? btree(search_recurse, k, b, op, bio, reada)
-			: cache_hit(b, op, bio, k);
+			? btree(search_recurse, k, b, op, reada)
+			: submit_partial_cache_hit(b, op, k);
 	} while (!ret &&
-		 !op->cache_hit &&
+		 !s->cache_hit_done &&
 		 bkey_cmp(k, &KEY(op->d->id, bio_end(bio), 0)) < 0);
 
 	return ret;

@@ -186,6 +186,7 @@ rw_attribute(writeback_running);
 rw_attribute(writeback_percent);
 rw_attribute(writeback_delay);
 rw_attribute(synchronous);
+rw_attribute(async_journal);
 rw_attribute(discard);
 rw_attribute(running);
 rw_attribute(label);
@@ -1426,6 +1427,7 @@ SHOW(__cache_set)
 	struct cache_set *c = container_of(kobj, struct cache_set, kobj);
 
 	sysfs_print(synchronous,		CACHE_SYNC(&c->sb));
+	sysfs_print(async_journal,		CACHE_ASYNC_JOURNAL(&c->sb));
 	sysfs_hprint(bucket_size,		bucket_bytes(c));
 	sysfs_hprint(block_size,		block_bytes(c));
 	sysfs_print(tree_depth,			c->root->level);
@@ -1497,6 +1499,15 @@ STORE(__cache_set)
 		if (sync != CACHE_SYNC(&c->sb)) {
 			SET_CACHE_SYNC(&c->sb, sync);
 			bcache_write_super(c, &cl);
+		}
+	}
+
+	if (attr == &sysfs_async_journal) {
+		bool sync = strtoul_or_return(buf);
+
+		if (sync != CACHE_ASYNC_JOURNAL(&c->sb)) {
+			SET_CACHE_ASYNC_JOURNAL(&c->sb, sync);
+			bcache_write_super(c, NULL);
 		}
 	}
 
@@ -1684,6 +1695,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	static struct attribute *cache_set_files[] = {
 		&sysfs_unregister,
 		&sysfs_synchronous,
+		&sysfs_async_journal,
 		&sysfs_bucket_size,
 		&sysfs_block_size,
 		&sysfs_tree_depth,

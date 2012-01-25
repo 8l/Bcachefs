@@ -85,26 +85,24 @@ struct cache_sb {
 	uint64_t		d[SB_JOURNAL_BUCKETS];	/* journal buckets */
 };
 
-BITMASK(CACHE_SYNC,	struct cache_sb, flags, 0, 1);
+BITMASK(CACHE_SYNC,		struct cache_sb, flags, 0, 1);
+BITMASK(CACHE_DISCARD,		struct cache_sb, flags, 1, 1);
+BITMASK(CACHE_REPLACEMENT,	struct cache_sb, flags, 2, 3);
+#define CACHE_REPLACEMENT_LRU	0U
+#define CACHE_REPLACEMENT_FIFO	1U
+#define CACHE_REPLACEMENT_RANDOM 2U
+BITMASK(CACHE_ASYNC_JOURNAL,	struct cache_sb, flags, 5, 1);
 
-BITMASK(BDEV_CACHE_MODE, struct cache_sb, flags, 0, 4);
+BITMASK(BDEV_CACHE_MODE,	struct cache_sb, flags, 0, 4);
 #define CACHE_MODE_WRITETHROUGH	0U
 #define CACHE_MODE_WRITEBACK	1U
 #define CACHE_MODE_WRITEAROUND	2U
 #define CACHE_MODE_NONE		3U
-
-BITMASK(BDEV_STATE,	struct cache_sb, flags, 61, 2);
+BITMASK(BDEV_STATE,		struct cache_sb, flags, 61, 2);
 #define BDEV_STATE_NONE		0U
 #define BDEV_STATE_CLEAN	1U
 #define BDEV_STATE_DIRTY	2U
 #define BDEV_STATE_STALE	3U
-
-BITMASK(CACHE_DISCARD,	struct cache_sb, flags, 1, 1);
-
-BITMASK(CACHE_REPLACEMENT, struct cache_sb, flags, 2, 3);
-#define CACHE_REPLACEMENT_LRU	0U
-#define CACHE_REPLACEMENT_FIFO	1U
-#define CACHE_REPLACEMENT_RANDOM 2U
 
 /* Version 1: Seed pointer into btree node checksum
  */

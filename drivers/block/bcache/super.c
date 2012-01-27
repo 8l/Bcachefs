@@ -196,6 +196,7 @@ rw_attribute(key_merging_disabled);
 rw_attribute(gc_always_rewrite);
 rw_attribute(freelist_percent);
 rw_attribute(cache_replacement_policy);
+rw_attribute(btree_shrinker_disabled);
 
 read_attribute(cache_hits);
 read_attribute(cache_misses);
@@ -1469,6 +1470,7 @@ SHOW(__cache_set)
 	sysfs_printf(verify,			"%i", c->verify);
 	sysfs_printf(key_merging_disabled,	"%i", c->key_merging_disabled);
 	sysfs_printf(gc_always_rewrite,		"%i", c->gc_always_rewrite);
+	sysfs_printf(btree_shrinker_disabled,	"%i", c->shrinker_disabled);
 
 	if (attr == &sysfs_bset_tree_stats)
 		return bset_print_stats(c, buf);
@@ -1528,6 +1530,7 @@ STORE(__cache_set)
 	sysfs_strtoul(verify,			c->verify);
 	sysfs_strtoul(key_merging_disabled,	c->key_merging_disabled);
 	sysfs_strtoul(gc_always_rewrite,	c->gc_always_rewrite);
+	sysfs_strtoul(btree_shrinker_disabled,	c->shrinker_disabled);
 
 	return size;
 }
@@ -1724,6 +1727,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 		&sysfs_key_merging_disabled,
 #endif
 		&sysfs_gc_always_rewrite,
+		&sysfs_btree_shrinker_disabled,
 		NULL
 	};
 	KTYPE(cache_set_internal, unregister_fake);

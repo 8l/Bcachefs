@@ -476,6 +476,8 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
  */
 
 #define mca_reserve(c)	((c->root ? c->root->level : 1) * 8 + 16)
+#define mca_can_free(c)						\
+	max_t(int, 0, c->bucket_cache_used - mca_reserve(c))
 
 static void mca_data_free(struct btree *b)
 {
@@ -590,43 +592,55 @@ static int mca_reap(struct btree *b, struct closure *cl)
 static int bcache_shrink_buckets(struct shrinker *shrink,
 				 struct shrink_control *sc)
 {
-	struct btree *oldest_bucket(struct cache_set *c)
-	{
-		struct btree *ret = NULL, *b;
-		list_for_each_entry(b, &c->lru, lru)
-			if (!ret || time_after(ret->jiffies, b->jiffies))
-				ret = b;
-		return ret;
-	}
-
 	struct cache_set *c = container_of(shrink, struct cache_set, shrink);
 	struct btree *b;
-	int nr = sc->nr_to_scan, ret = 0, reserve = mca_reserve(c);
+	int nr, orig_nr = sc->nr_to_scan;
 
-	if (!nr) {
-		ret = max_t(int, c->bucket_cache_used - reserve, 0);
-		return ret * c->btree_pages;
-	}
+	if (c->shrinker_disabled)
+		return 0;
 
+	/*
+	 * If not nr, we're supposed to return the number of items we have
+	 * cached. Not allowed to return -1.
+	 */
+	if (!orig_nr)
+		goto out;
+
+	/* Return -1 if we can't do anything right now */
 	if (!mutex_trylock(&c->bucket_lock))
 		return -1;
 
-	nr /= c->btree_pages;
-	ret = max_t(int, c->bucket_cache_used - reserve, 0);
+	if (c->try_harder) {
+		mutex_unlock(&c->bucket_lock);
+		return -1;
+	}
 
-	while (nr && ret && !c->try_harder) {
-		b = oldest_bucket(c);
-		if (mca_reap(b, NULL))
-			break;
+	nr = orig_nr = min_t(int, orig_nr, mca_can_free(c));
 
-		mca_data_free(b);
-		mca_bucket_free(b);
-		rw_unlock(true, b);
-		nr--, ret--;
+	for (unsigned i = c->bucket_cache_used;
+	     i && nr;
+	     --i) {
+		struct btree *b = list_first_entry(&c->lru, struct btree, lru);
+
+		list_rotate_left(&c->lru);
+
+		if (!b->accessed) {
+			if (mca_reap(b, NULL))
+				break;
+
+			mca_data_free(b);
+			mca_bucket_free(b);
+			rw_unlock(true, b);
+			--nr;
+		} else
+			b->accessed = 0;
 	}
 
 	mutex_unlock(&c->bucket_lock);
-	return ret * c->btree_pages;
+	if (orig_nr && nr == orig_nr)
+		return -1;
+out:
+	return mca_can_free(c) * c->btree_pages;
 }
 
 void bcache_btree_cache_free(struct cache_set *c)
@@ -845,7 +859,7 @@ retry:
 		BUG_ON(b->level != level);
 	}
 
-	b->jiffies = jiffies;
+	b->accessed = 1;
 
 	for (; i <= b->nsets && b->sets[i].size; i++) {
 		prefetch(b->sets[i].tree);
@@ -942,7 +956,7 @@ retry:
 	}
 
 	atomic_set(&b->nread, 1);
-	b->jiffies = jiffies;
+	b->accessed = 1;
 	bset_init(b, b->sets[0].data);
 
 	mutex_unlock(&c->bucket_lock);

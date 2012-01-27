@@ -550,6 +550,7 @@ struct cache_set {
 	unsigned		verify:1;
 	unsigned		key_merging_disabled:1;
 	unsigned		gc_always_rewrite:1;
+	unsigned		shrinker_disabled:1;
 
 #define BUCKET_HASH_BITS	12
 	struct hlist_head	bucket_hash[1 << BUCKET_HASH_BITS];
@@ -598,8 +599,8 @@ struct btree {
 	/* Key/pointer for this btree node */
 	BKEY_PADDED(key);
 
-	/* Time this node was last used */
-	unsigned long		jiffies;
+	/* Single bit - set when accessed, cleared by shrinker */
+	unsigned long		accessed;
 	struct rw_semaphore	lock;
 	struct cache_set	*c;
 

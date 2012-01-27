@@ -226,6 +226,10 @@ err:		atomic_set(&b->nread, -1);
 
 	mutex_unlock(&b->c->fill_lock);
 
+	spin_lock(&b->c->btree_read_time_lock);
+	time_stats_update(&b->c->btree_read_time, b->io_start_time);
+	spin_unlock(&b->c->btree_read_time_lock);
+
 	atomic_set(&b->io, -1);
 	closure_wake_up(&b->wait);
 }
@@ -259,6 +263,8 @@ void btree_read(struct btree *b)
 {
 	BUG_ON(b->nsets || b->written);
 	BUG_ON(atomic_xchg(&b->io, 1) != -1);
+
+	b->io_start_time = local_clock();
 
 	btree_bio_init(b);
 	b->bio->bi_rw	       |= READ_SYNC;

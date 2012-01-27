@@ -159,6 +159,7 @@ read_attribute(active_journal_entries);
 sysfs_time_stats_attribute(btree_gc,	sec, ms);
 sysfs_time_stats_attribute(btree_split, sec, us);
 sysfs_time_stats_attribute(btree_sort,	ms,  us);
+sysfs_time_stats_attribute(btree_read,	ms,  us);
 sysfs_time_stats_attribute(try_harder,	ms,  us);
 
 read_attribute(btree_nodes);
@@ -1440,6 +1441,7 @@ SHOW(__cache_set)
 	sysfs_print_time_stats(&c->btree_gc_time,	btree_gc, sec, ms);
 	sysfs_print_time_stats(&c->btree_split_time,	btree_split, sec, us);
 	sysfs_print_time_stats(&c->sort_time,		btree_sort, ms, us);
+	sysfs_print_time_stats(&c->btree_read_time,	btree_read, ms, us);
 	sysfs_print_time_stats(&c->try_harder_time,	try_harder, ms, us);
 
 	sysfs_print(btree_used_percent,	btree_used(c));
@@ -1774,6 +1776,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	mutex_init(&c->sort_lock);
 	mutex_init(&c->sb_write);
 	spin_lock_init(&c->sort_time_lock);
+	spin_lock_init(&c->btree_read_time_lock);
 
 	INIT_WORK(&c->unregister, cache_set_unregister);
 	INIT_LIST_HEAD(&c->list);

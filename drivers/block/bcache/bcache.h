@@ -538,6 +538,8 @@ struct cache_set {
 	struct time_stats	sort_time;
 	struct time_stats	btree_gc_time;
 	struct time_stats	btree_split_time;
+	spinlock_t		btree_read_time_lock;
+	struct time_stats	btree_read_time;
 	struct time_stats	try_harder_time;
 
 	atomic_long_t		cache_read_races;
@@ -666,6 +668,7 @@ struct btree {
 	struct delayed_work	work;
 	closure_list_t		wait;
 
+	uint64_t		io_start_time;
 #ifdef CONFIG_BCACHE_LATENCY_DEBUG
 	unsigned long		wait_time;
 #endif

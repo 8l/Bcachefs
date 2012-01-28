@@ -500,6 +500,22 @@ static int uuid_write(struct cache_set *c)
 	return 0;
 }
 
+static struct uuid_entry *uuid_find(struct cache_set *c, const char *uuid)
+{
+	for (struct uuid_entry *u = c->uuids;
+	     u < c->uuids + c->nr_uuids; u++)
+		if (!memcmp(u->uuid, uuid, 16))
+			return u;
+
+	return NULL;
+}
+
+static struct uuid_entry *uuid_find_empty(struct cache_set *c)
+{
+	static const char zero_uuid[16] = "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+	return uuid_find(c, zero_uuid);
+}
+
 /*
  * Bucket priorities/gens:
  *
@@ -1018,29 +1034,29 @@ static int cached_dev_attach(struct cached_dev *d, struct cache_set *c)
 		return -EINVAL;
 	}
 
-	for (u = c->uuids; u < c->uuids + c->nr_uuids; u++)
-		if (!memcmp(u->uuid, d->sb.uuid, 16)) {
-			if (BDEV_STATE(&d->sb) != BDEV_STATE_STALE &&
-			    BDEV_STATE(&d->sb) != BDEV_STATE_NONE)
-				goto found;
+	u = uuid_find(c, d->sb.uuid);
 
-			memcpy(u->uuid, invalid_uuid, 16);
-			u->invalidated = cpu_to_le32(get_seconds());
-			break;
-		}
-
-	if (BDEV_STATE(&d->sb) == BDEV_STATE_DIRTY) {
-		err_printk("Couldn't find uuid for %s in set\n", buf);
-		return -ENOENT;
+	if (u &&
+	    (BDEV_STATE(&d->sb) == BDEV_STATE_STALE ||
+	     BDEV_STATE(&d->sb) == BDEV_STATE_NONE)) {
+		memcpy(u->uuid, invalid_uuid, 16);
+		u->invalidated = cpu_to_le32(get_seconds());
+		u = NULL;
 	}
 
-	for (u = c->uuids; u < c->uuids + c->nr_uuids; u++)
-		if (is_zero(u->uuid, 16))
-			goto found;
+	if (!u) {
+		if (BDEV_STATE(&d->sb) == BDEV_STATE_DIRTY) {
+			err_printk("Couldn't find uuid for %s in set\n", buf);
+			return -ENOENT;
+		}
 
-	err_printk("Not caching %s, no room for UUID\n", buf);
-	return -EINVAL;
-found:
+		u = uuid_find_empty(c);
+		if (!u) {
+			err_printk("Not caching %s, no room for UUID\n", buf);
+			return -EINVAL;
+		}
+	}
+
 	sprintf(buf, "bdev%zi", u - c->uuids);
 	if (sysfs_create_link(&d->kobj, &c->kobj, "cache") ||
 	    sysfs_create_link(&c->kobj, &d->kobj, buf))

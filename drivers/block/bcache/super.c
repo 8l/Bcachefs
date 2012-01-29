@@ -1039,7 +1039,7 @@ static void cached_dev_free(struct closure *cl)
 
 	if (!IS_ERR_OR_NULL(d->bdev)) {
 		blk_sync_queue(bdev_get_queue(d->bdev));
-		blkdev_put(d->bdev, FMODE_READ|FMODE_WRITE);
+		blkdev_put(d->bdev, FMODE_READ|FMODE_WRITE|FMODE_EXCL);
 	}
 
 	wake_up(&unregister_wait);
@@ -1719,7 +1719,7 @@ static void cache_free(struct kobject *kobj)
 
 	if (!IS_ERR_OR_NULL(c->bdev)) {
 		blk_sync_queue(bdev_get_queue(c->bdev));
-		blkdev_put(c->bdev, FMODE_READ|FMODE_WRITE);
+		blkdev_put(c->bdev, FMODE_READ|FMODE_WRITE|FMODE_EXCL);
 	}
 
 	kfree(c);
@@ -1876,7 +1876,7 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 		 */
 		put_page(sb_page);
 err_close:
-		blkdev_put(bdev, FMODE_READ|FMODE_WRITE);
+		blkdev_put(bdev, FMODE_READ|FMODE_WRITE|FMODE_EXCL);
 err:
 		if (attr != &ksysfs_register_quiet)
 			printk(KERN_DEBUG "bcache: error opening %s: %s\n",

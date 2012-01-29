@@ -39,6 +39,7 @@ void bcache_open_buckets_free(struct cache_set *);
 int bcache_open_buckets_alloc(struct cache_set *);
 
 void cached_dev_request_init(struct cached_dev *d);
+void flash_dev_request_init(struct bcache_device *d);
 
 extern struct kmem_cache *search_cache, *passthrough_cache;
 

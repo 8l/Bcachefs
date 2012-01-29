@@ -1365,9 +1365,181 @@ void cached_dev_request_init(struct cached_dev *d)
 	g->queue->make_request_fn		= cached_dev_make_request;
 	g->queue->unplug_fn			= cached_dev_unplug;
 	g->queue->backing_dev_info.congested_fn = cached_dev_congested;
+	d->disk.cache_miss			= cached_dev_cache_miss;
+	d->disk.ioctl				= cached_dev_ioctl;
+}
 
-	d->disk.cache_miss	= cached_dev_cache_miss;
-	d->disk.ioctl		= cached_dev_ioctl;
+/* Flash backed devices */
+
+static void flash_dev_bio_complete(struct closure *cl)
+{
+	struct search *s = container_of(cl, struct search, cl);
+	struct bcache_device *d = s->op.d;
+
+	__bio_complete(s);
+
+	if (s->cache_bio) {
+		int i;
+		struct bio_vec *bv;
+
+		if (s->op.insert_type == INSERT_READ)
+			__bio_for_each_segment(bv, s->cache_bio, i, 0)
+				__free_page(bv->bv_page);
+		bio_put(s->cache_bio);
+	}
+
+	if (s->unaligned_bvec)
+		mempool_free(s->bio.bio.bi_io_vec, d->unaligned_bvec);
+
+	closure_debug_destroy(&s->cl);
+	mempool_free(s, d->c->search);
+}
+
+static int flash_dev_cache_miss(struct search *s, struct bio *bio,
+				unsigned sectors)
+{
+	sectors = min(sectors, bio_sectors(bio));
+
+	/* Zero fill bio */
+
+	while (sectors) {
+		struct bio_vec *bv = bio_iovec(bio);
+		unsigned j = min(bv->bv_len >> 9, sectors);
+
+		void *p = kmap(bv->bv_page);
+		memset(p + bv->bv_offset, 0, j << 9);
+		kunmap(bv->bv_page);
+
+		bv->bv_len	-= j << 9;
+		bv->bv_offset	+= j << 9;
+
+		bio->bi_sector	+= j;
+		bio->bi_size	-= j << 9;
+
+		bio->bi_idx++;
+		sectors		-= j;
+	}
+
+	bio_endio(bio, 0);
+	return 0;
+}
+
+static void __flash_dev_read(struct closure *cl)
+{
+	struct btree_op *op = container_of(cl, struct btree_op, cl);
+	struct search *s = container_of(op, struct search, op);
+	struct bio *bio = &s->bio.bio;
+	unsigned reada = 0;
+
+	int ret = btree_root(search_recurse, op->d->c, op, &reada);
+
+	if (ret == -ENOMEM) {
+		closure_put(&s->cl);
+		return_f(cl, NULL, NULL);
+	}
+
+	if (ret == -EAGAIN)
+		return_f(cl, __flash_dev_read, bcache_wq);
+
+	s->lookup_done = true;
+
+	if (!s->cache_hit_done)
+		flash_dev_cache_miss(s, bio, bio_sectors(bio));
+
+	return_f(cl, NULL, NULL);
+}
+
+static void flash_dev_read(struct search *s)
+{
+	s->op.insert_type = INSERT_READ;
+
+	__flash_dev_read(&s->op.cl);
+}
+
+static void flash_dev_write(struct search *s)
+{
+	struct bio *bio = &s->bio.bio;
+
+	if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
+		s->op.insert_type = INSERT_WRITE;
+		s->cache_bio	= s->orig_bio;
+		s->skip		= true;
+
+		bio_get(s->cache_bio);
+		bio_invalidate(s);
+		bio_endio(bio, 0);
+
+		closure_put(&s->op.cl);
+	} else {
+		s->op.insert_type = INSERT_WRITEBACK;
+		s->cache_bio	= bio;
+
+		bio_insert(&s->op.cl);
+
+		closure_put(&s->cl);
+	}
+}
+
+static int flash_dev_make_request(struct request_queue *q, struct bio *bio)
+{
+	struct search *s;
+	struct bcache_device *d = bio->bi_bdev->bd_disk->private_data;
+
+	if (!bio_has_data(bio)) {
+		/* XXX */
+		bio_endio(bio, 0);
+		return 0;
+	}
+
+	s = do_bio_hook(bio, d);
+	trace_bcache_request_start(&s->op, bio);
+	set_closure_fn(&s->cl, flash_dev_bio_complete, NULL);
+
+	(bio->bi_rw & REQ_WRITE ? flash_dev_write : flash_dev_read)(s);
+
+	return 0;
+}
+
+static int flash_dev_ioctl(struct bcache_device *d, fmode_t mode,
+			   unsigned int cmd, unsigned long arg)
+{
+	return -ENOTTY;
+}
+
+static void flash_dev_unplug(struct request_queue *q)
+{
+	struct bcache_device *d = q->queuedata;
+	struct cache *ca;
+
+	for_each_cache(ca, d->c)
+		blk_unplug(bdev_get_queue(ca->bdev));
+
+}
+
+static int flash_dev_congested(void *data, int bits)
+{
+	struct bcache_device *d = data;
+	struct request_queue *q;
+	struct cache *ca;
+	int ret = 0;
+
+	for_each_cache(ca, d->c) {
+		q = bdev_get_queue(ca->bdev);
+		ret |= bdi_congested(&q->backing_dev_info, bits);
+	}
+
+	return ret;
+}
+
+void flash_dev_request_init(struct bcache_device *d)
+{
+	struct gendisk *g = d->disk;
+
+	g->queue->make_request_fn		= flash_dev_make_request;
+	g->queue->unplug_fn			= flash_dev_unplug;
+	g->queue->backing_dev_info.congested_fn = flash_dev_congested;
+	d->cache_miss				= flash_dev_cache_miss;
+	d->ioctl				= flash_dev_ioctl;
 }
 
 void bcache_request_exit(void)

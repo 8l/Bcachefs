@@ -8,6 +8,7 @@
 #include <linux/debugfs.h>
 #include <linux/genhd.h>
 #include <linux/module.h>
+#include <linux/random.h>
 #include <linux/sort.h>
 #include <linux/sysfs.h>
 
@@ -67,6 +68,8 @@ struct uuid_entry {
 		uint8_t	pad[128];
 	};
 };
+
+BITMASK(UUID_FLASH_ONLY,	struct uuid_entry, flags, 0, 1);
 
 /* We keep absolute totals of various statistics, and addionally a set of three
  * rolling averages.
@@ -158,6 +161,7 @@ write_attribute(unregister);
 write_attribute(clear_stats);
 write_attribute(trigger_gc);
 write_attribute(prune_cache);
+write_attribute(flash_vol_create);
 
 read_attribute(bucket_size);
 read_attribute(block_size);
@@ -217,6 +221,7 @@ rw_attribute(gc_always_rewrite);
 rw_attribute(freelist_percent);
 rw_attribute(cache_replacement_policy);
 rw_attribute(btree_shrinker_disabled);
+rw_attribute(size);
 
 read_attribute(cache_hits);
 read_attribute(cache_misses);
@@ -1440,6 +1445,137 @@ err:
 	return NULL;
 }
 
+/* Flash only volumes */
+
+SHOW(flash_dev)
+{
+	struct bcache_device *d = container_of(kobj, struct bcache_device,
+					       kobj);
+	struct uuid_entry *u = &d->c->uuids[d->id];
+
+	sysfs_printf(data_csum,	"%i", d->data_csum);
+	sysfs_hprint(size,	u->sectors << 9);
+
+	if (attr == &sysfs_label) {
+		memcpy(buf, u->label, SB_LABEL_SIZE);
+		buf[SB_LABEL_SIZE + 1] = '\0';
+		strcat(buf, "\n");
+		return strlen(buf);
+	}
+
+	return 0;
+}
+
+STORE(flash_dev)
+{
+	struct bcache_device *d = container_of(kobj, struct bcache_device,
+					       kobj);
+	struct uuid_entry *u = &d->c->uuids[d->id];
+
+	sysfs_strtoul(data_csum,	d->data_csum);
+
+	if (attr == &sysfs_size) {
+		uint64_t v;
+		strtoi_h_or_return(buf, v);
+
+		u->sectors = v >> 9;
+		uuid_write(d->c);
+		set_capacity(d->disk, u->sectors);
+	}
+
+	if (attr == &sysfs_label) {
+		memcpy(u->label, buf, SB_LABEL_SIZE);
+		uuid_write(d->c);
+	}
+
+	return size;
+}
+
+static void flash_dev_free(struct kobject *kobj)
+{
+	struct bcache_device *d = container_of(kobj, struct bcache_device,
+					       kobj);
+	bcache_device_free(d);
+	kfree(d);
+}
+
+static int flash_dev_run(struct cache_set *c, struct uuid_entry *u)
+{
+	static struct attribute *flash_dev_files[] = {
+		&sysfs_unregister,
+#if 0
+		&sysfs_data_csum,
+#endif
+		&sysfs_label,
+		&sysfs_size,
+		NULL
+	};
+	KTYPE(flash_dev, flash_dev_free);
+
+	char buf[BDEVNAME_SIZE];
+	struct bcache_device *d = kzalloc(sizeof(struct bcache_device),
+					  GFP_KERNEL);
+	if (!d)
+		return -ENOMEM;
+
+	kobject_init(&d->kobj, &flash_dev_obj);
+
+	if (bcache_device_init(d, block_bytes(c)))
+		goto err;
+
+	bcache_device_attach(d, c, u - c->uuids);
+
+	set_capacity(d->disk, u->sectors);
+	flash_dev_request_init(d);
+	add_disk(d->disk);
+
+	if (kobject_add(&d->kobj, &disk_to_dev(d->disk)->kobj, "bcache"))
+		goto err;
+
+	sprintf(buf, "volume%u", d->id);
+	if (sysfs_create_link(&d->kobj, &c->kobj, "cache") ||
+	    sysfs_create_link(&c->kobj, &d->kobj, buf))
+		goto err;
+
+	return 0;
+err:
+	kobject_put(&d->kobj);
+	return -ENOMEM;
+}
+
+static int flash_devs_run(struct cache_set *c)
+{
+	int ret = 0;
+
+	for (struct uuid_entry *u = c->uuids;
+	     u < c->uuids + c->nr_uuids && !ret;
+	     u++)
+		if (UUID_FLASH_ONLY(u))
+			ret = flash_dev_run(c, u);
+
+	return ret;
+}
+
+static int flash_dev_create(struct cache_set *c, uint64_t size)
+{
+	struct uuid_entry *u = uuid_find_empty(c);
+	if (!u) {
+		err_printk("Can't create volume, no room for UUID\n");
+		return -EINVAL;
+	}
+
+	get_random_bytes(u->uuid, 16);
+	memset(u->label, 0, 32);
+	u->first_reg = u->last_reg = cpu_to_le32(get_seconds());
+
+	SET_UUID_FLASH_ONLY(u, 1);
+	u->sectors = size >> 9;
+
+	uuid_write(c);
+
+	return flash_dev_run(c, u);
+}
+
 /* Cache set - sysfs */
 
 SHOW(__cache_set)
@@ -1587,6 +1723,16 @@ STORE(__cache_set)
 			SET_CACHE_ASYNC_JOURNAL(&c->sb, sync);
 			bcache_write_super(c, NULL);
 		}
+	}
+
+	if (attr == &sysfs_flash_vol_create) {
+		int r;
+		uint64_t v;
+		strtoi_h_or_return(buf, v);
+
+		r = flash_dev_create(c, v);
+		if (r)
+			return r;
 	}
 
 	if (attr == &sysfs_clear_stats) {
@@ -1776,6 +1922,8 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 		&sysfs_unregister,
 		&sysfs_synchronous,
 		&sysfs_async_journal,
+		&sysfs_flash_vol_create,
+
 		&sysfs_bucket_size,
 		&sysfs_block_size,
 		&sysfs_tree_depth,
@@ -2048,6 +2196,8 @@ static void run_cache_set(struct cache_set *c)
 
 	list_for_each_entry_safe(d, t, &uncached_devices, list)
 		cached_dev_attach(d, c);
+
+	flash_devs_run(c);
 
 	return;
 err:

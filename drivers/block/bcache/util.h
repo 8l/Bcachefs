@@ -345,32 +345,42 @@ ssize_t hprint(char *buf, int64_t v);
 #define rw_attribute(n)		sysfs_attribute(n, S_IRUGO|S_IWUSR)
 
 #define sysfs_printf(file, fmt, ...)					\
+do {									\
 	if (attr == &sysfs_ ## file)					\
-		return snprintf(buf, PAGE_SIZE, fmt "\n", __VA_ARGS__)
+		return snprintf(buf, PAGE_SIZE, fmt "\n", __VA_ARGS__);	\
+} while (0)
 
 #define sysfs_print(file, var)						\
+do {									\
 	if (attr == &sysfs_ ## file)					\
-		return snprint(buf, PAGE_SIZE, var)
+		return snprint(buf, PAGE_SIZE, var);			\
+} while (0)
 
 #define sysfs_hprint(file, val)						\
+do {									\
 	if (attr == &sysfs_ ## file) {					\
 		ssize_t ret = hprint(buf, val);				\
 		strcat(buf, "\n");					\
 		return ret + 1;						\
-	}
+	}								\
+} while (0)
 
 #define var_printf(_var, fmt)	sysfs_printf(_var, fmt, var(_var))
 #define var_print(_var)		sysfs_print(_var, var(_var))
 #define var_hprint(_var)	sysfs_hprint(_var, var(_var))
 
 #define sysfs_strtoul(file, var)					\
+do {									\
 	if (attr == &sysfs_ ## file)					\
-		return strtoul_safe(buf, var) ?: (ssize_t) size;
+		return strtoul_safe(buf, var) ?: (ssize_t) size;	\
+} while (0)
 
 #define sysfs_strtoul_clamp(file, var, min, max)			\
+do {									\
 	if (attr == &sysfs_ ## file)					\
 		return strtoul_safe_clamp(buf, var, min, max)		\
-			?: (ssize_t) size;
+			?: (ssize_t) size;				\
+} while (0)
 
 #define strtoul_or_return(cp)						\
 ({									\
@@ -381,9 +391,18 @@ ssize_t hprint(char *buf, int64_t v);
 	_v;								\
 })
 
+#define strtoi_h_or_return(cp, v)					\
+do {									\
+	int _r = strtoi_h(cp, &v);					\
+	if (_r)								\
+		return _r;						\
+} while (0)
+
 #define sysfs_hatoi(file, var)						\
+do {									\
 	if (attr == &sysfs_ ## file)					\
-		return strtoi_h(buf, &var) ?: (ssize_t) size;
+		strtoi_h_or_return(buf, var);				\
+} while (0)
 
 bool is_zero(const char *p, size_t n);
 int parse_uuid(const char *s, char *uuid);

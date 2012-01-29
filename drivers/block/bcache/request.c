@@ -658,32 +658,23 @@ void cache_read_endio(struct bio *bio, int error)
 
 int bcache_get_congested(struct cache_set *c)
 {
-	static const unsigned fract_bits = 6;
-	unsigned fract;
-	int ret, i;
+	int i;
 
 	if (!c->congested_read_threshold_us &&
 	    !c->congested_write_threshold_us)
 		return 0;
 
-	i = local_clock_us() - c->congested_last_us;
+	i = (local_clock_us() - c->congested_last_us) / 1024;
 	if (i < 0)
 		return 0;
 
-	i /= 1024;
 	i += atomic_read(&c->congested);
 	if (i >= 0)
 		return 0;
 
 	i += CONGESTED_MAX;
 
-	fract = i & ((1 << fract_bits) - 1);
-	i >>= fract_bits;
-
-	ret = 1 << i;
-	ret += ((1 << i) * fract) >> fract_bits;
-
-	return ret;
+	return i <= 0 ? 1 : fract_exp_two(i, 6);
 }
 
 static void check_should_skip(struct search *s)

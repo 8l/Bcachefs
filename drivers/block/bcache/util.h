@@ -549,6 +549,18 @@ dup:									\
 #define RB_NEXT(node, type, member)					\
 	(rb_next(node) ? container_of(rb_next(node), type, member) : NULL)
 
+/* Does linear interpolation between powers of two */
+static inline unsigned fract_exp_two(unsigned x, unsigned fract_bits)
+{
+	unsigned fract = x & ~(~0 << fract_bits);
+
+	x >>= fract_bits;
+	x   = 1 << x;
+	x  += (x * fract) >> fract_bits;
+
+	return x;
+}
+
 #define bio_end(bio)	((bio)->bi_sector + bio_sectors(bio))
 
 void bio_reset(struct bio *bio);

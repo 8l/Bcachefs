@@ -1722,6 +1722,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 		sysfs_time_stats_attribute_list(btree_gc, sec, ms)
 		sysfs_time_stats_attribute_list(btree_split, sec, us)
 		sysfs_time_stats_attribute_list(btree_sort, ms, us)
+		sysfs_time_stats_attribute_list(btree_read, ms, us)
 		sysfs_time_stats_attribute_list(try_harder, ms, us)
 
 		&sysfs_btree_avg_keys_written,

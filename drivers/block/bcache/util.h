@@ -407,9 +407,9 @@ struct time_stats {
 void time_stats_update(struct time_stats *stats, uint64_t time);
 
 static const uint64_t __time_ns		= 1;
-static const uint64_t __time_us		= 1000;
-static const uint64_t __time_ms		= 1000000;
-static const uint64_t __time_sec	= 1000000000;
+static const uint64_t __time_us		= NSEC_PER_USEC;
+static const uint64_t __time_ms		= NSEC_PER_MSEC;
+static const uint64_t __time_sec	= NSEC_PER_SEC;
 
 #define sysfs_print_time_stats(stats, name,				\
 			       frequency_units,				\

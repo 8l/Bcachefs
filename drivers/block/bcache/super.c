@@ -3,6 +3,7 @@
 #include "btree.h"
 #include "debug.h"
 #include "request.h"
+#include "sysfs.h"
 
 #include <linux/buffer_head.h>
 #include <linux/debugfs.h>
@@ -114,47 +115,6 @@ static void cached_dev_detach(struct cached_dev *);
 
 #define BTREE_MAX_PAGES		(256 * 1024 / PAGE_SIZE)
 
-/* Sysfs */
-
-#define KTYPE(type, _release)						\
-static const struct sysfs_ops type ## _ops = {				\
-	.show		= type ## _show,				\
-	.store		= type ## _store				\
-};									\
-static struct kobj_type type ## _obj = {				\
-	.release	= _release,					\
-	.sysfs_ops	= &type ## _ops,				\
-	.default_attrs	= type ## _files				\
-}
-
-#define SHOW(fn)							\
-static ssize_t fn ## _show(struct kobject *kobj, struct attribute *attr,\
-			   char *buf)					\
-
-#define STORE(fn)							\
-static ssize_t fn ## _store(struct kobject *kobj, struct attribute *attr,\
-			    const char *buf, size_t size)		\
-
-#define SHOW_LOCKED(fn)							\
-SHOW(fn)								\
-{									\
-	ssize_t ret;							\
-	mutex_lock(&register_lock);					\
-	ret = __ ## fn ## _show(kobj, attr, buf);			\
-	mutex_unlock(&register_lock);					\
-	return ret;							\
-}
-
-#define STORE_LOCKED(fn)						\
-STORE(fn)								\
-{									\
-	ssize_t ret;							\
-	mutex_lock(&register_lock);					\
-	ret = __ ## fn ## _store(kobj, attr, buf, size);		\
-	mutex_unlock(&register_lock);					\
-	return ret;							\
-}
-
 write_attribute(attach);
 write_attribute(detach);
 write_attribute(unregister);
@@ -223,15 +183,6 @@ rw_attribute(freelist_percent);
 rw_attribute(cache_replacement_policy);
 rw_attribute(btree_shrinker_disabled);
 rw_attribute(size);
-
-read_attribute(cache_hits);
-read_attribute(cache_misses);
-read_attribute(cache_bypass_hits);
-read_attribute(cache_bypass_misses);
-read_attribute(cache_hit_ratio);
-read_attribute(cache_readaheads);
-read_attribute(cache_miss_collisions);
-read_attribute(bypassed);
 
 /* Superblock */
 
@@ -791,97 +742,6 @@ static int prio_read(struct cache *c, uint64_t bucket)
 
 /* Cached device - sysfs */
 
-static void scale_accounting(unsigned long data)
-{
-	struct cache_accounting *d = (struct cache_accounting *) data;
-
-	for (int i = 0; i < 7; i++) {
-		unsigned long t = atomic_xchg(&d->all[i], 0);
-		t <<= 16;
-
-		for (int j = 0; j < 4; j++)
-			d->sets[j].all[i] += t;
-	}
-
-	for (int j = 1; j < 4; j++) {
-		struct cache_accounting_set *a = &d->sets[j];
-
-		if (++a->rescale == accounting_rescale[j]) {
-			a->rescale = 0;
-
-			for (int i = 0; i < 7; i++) {
-				a->all[i] *= accounting_weight - 1;
-				a->all[i] /= accounting_weight;
-			}
-		}
-	}
-
-	d->timer.expires += accounting_delay;
-	add_timer(&d->timer);
-}
-
-#define PRINT_ACCOUNTING()						\
-do {									\
-	var_print(cache_hits);						\
-	var_print(cache_misses);					\
-	var_print(cache_bypass_hits);					\
-	var_print(cache_bypass_misses);					\
-									\
-	sysfs_print(cache_hit_ratio,					\
-		    DIV_SAFE(var(cache_hits) * 100,			\
-			     var(cache_hits) + var(cache_misses)));	\
-									\
-	var_print(cache_readaheads);					\
-	var_print(cache_miss_collisions);				\
-	sysfs_hprint(bypassed,	var(sectors_bypassed) << 9);		\
-} while (0)
-
-SHOW(cached_dev_accounting)
-{
-	struct cache_accounting_set *a =
-		container_of(kobj, struct cache_accounting_set, kobj);
-
-#define var(stat)		(a->stat >> 16)
-
-	PRINT_ACCOUNTING();
-
-#undef var
-	return 0;
-}
-
-SHOW(cache_set_accounting)
-{
-	struct cache_set *c = container_of(kobj->parent, struct cache_set,
-					   kobj);
-	int idx = kobj - c->accounting;
-
-#define var(stat)					\
-({							\
-	struct cached_dev *d;				\
-	unsigned long ret = 0;				\
-	list_for_each_entry(d, &c->cached_devs, list)	\
-		ret += d->stats.sets[idx].stat;	\
-	ret >> 16;					\
-})
-
-	PRINT_ACCOUNTING();
-
-#undef var
-	return 0;
-}
-
-static struct attribute *accounting_files[] = {
-	&sysfs_cache_hits,
-	&sysfs_cache_misses,
-	&sysfs_cache_bypass_hits,
-	&sysfs_cache_bypass_misses,
-	&sysfs_cache_hit_ratio,
-	&sysfs_cache_readaheads,
-	&sysfs_cache_miss_collisions,
-	&sysfs_bypassed,
-	NULL
-};
-
 static void unregister_fake(struct kobject *k)
 {
 }
@@ -1052,7 +912,7 @@ STORE(__cached_dev)
 	d_strtoi_h(readahead);
 
 	if (attr == &sysfs_clear_stats)
-		memset(&d->stats.total.all, 0, sizeof(unsigned long) * 7);
+		clear_stats(&d->accounting);
 
 	if (attr == &sysfs_running &&
 	    strtoul_or_return(buf))
@@ -1362,16 +1222,6 @@ static struct cached_dev *cached_dev_alloc(void)
 	};
 	KTYPE(cached_dev, cached_dev_free);
 
-	static const struct sysfs_ops accounting_ops = {
-		.show = cached_dev_accounting_show,
-		.store = NULL
-	};
-	static struct kobj_type accounting_obj = {
-		.release = unregister_fake,
-		.sysfs_ops = &accounting_ops,
-		.default_attrs = accounting_files
-	};
-
 	struct cached_dev *d = kzalloc(sizeof(struct cached_dev), GFP_KERNEL);
 	if (!d)
 		return NULL;
@@ -1380,8 +1230,7 @@ static struct cached_dev *cached_dev_alloc(void)
 	kobject_init(&d->disk.kobj, &cached_dev_obj);
 	INIT_LIST_HEAD(&d->list);
 
-	for (int i = 0; i < 4; i++)
-		kobject_init(&d->stats.sets[i].kobj, &accounting_obj);
+	init_cache_accounting(&d->accounting);
 
 	if (bcache_device_init(&d->disk, 512))
 		goto err;
@@ -1390,12 +1239,6 @@ static struct cached_dev *cached_dev_alloc(void)
 	spin_lock_init(&d->io_lock);
 	closure_init_unlocked(&d->sb_write);
 	INIT_WORK(&d->detach, cached_dev_detach_finish);
-
-	init_timer(&d->stats.timer);
-	d->stats.timer.expires	= jiffies + accounting_delay;
-	d->stats.timer.data	= (unsigned long) &d->stats;
-	d->stats.timer.function	= scale_accounting;
-	add_timer(&d->stats.timer);
 
 	d->sequential_merge		= true;
 	d->sequential_cutoff		= 4 << 20;
@@ -1432,6 +1275,7 @@ static const char *register_bdev(struct cache_sb *sb, struct page *sb_page,
 	struct cache_set *c;
 
 	struct cached_dev *d = cached_dev_alloc();
+
 	if (!d)
 		return err;
 
@@ -1450,11 +1294,8 @@ static const char *register_bdev(struct cache_sb *sb, struct page *sb_page,
 	if (kobject_add(&d->disk.kobj, &part_to_dev(bdev->bd_part)->kobj,
 			"bcache"))
 		goto err;
-
-	for (int i = 0; i < 4; i++)
-		if (kobject_add(&d->stats.sets[i].kobj, &d->disk.kobj,
-				"stats_%s", accounting_types[i]))
-			goto err;
+	if (add_cache_accounting_kobjs(&d->accounting, &d->disk.kobj))
+		goto err;
 
 	list_add(&d->list, &uncached_devices);
 	list_for_each_entry(c, &cache_sets, list)
@@ -1784,6 +1625,7 @@ STORE(__cache_set)
 		atomic_long_set(&c->keys_write_count,		0);
 
 		memset(&c->gc_stats, 0, sizeof(struct gc_stat));
+		clear_stats(&c->accounting);
 	}
 
 	if (attr == &sysfs_trigger_gc)
@@ -1942,10 +1784,9 @@ static void cache_set_unregister(struct work_struct *w)
 
 	mutex_lock(&register_lock);
 
-	kobject_put(&c->internal);
+	destroy_cache_accounting(&c->accounting);
 
-	for (int i = 0; i < 4; i++)
-		kobject_put(&c->accounting[i]);
+	kobject_put(&c->internal);
 
 	list_for_each_entry_safe(d, t, &c->cached_devs, list)
 		cached_dev_detach(d);
@@ -2017,16 +1858,6 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	};
 	KTYPE(cache_set_internal, unregister_fake);
 
-	static const struct sysfs_ops accounting_ops = {
-		.show = cache_set_accounting_show,
-		.store = NULL
-	};
-	static struct kobj_type accounting_obj = {
-		.release = unregister_fake,
-		.sysfs_ops = &accounting_ops,
-		.default_attrs = accounting_files
-	};
-
 	int iter_size;
 	struct cache_set *c = kzalloc(sizeof(struct cache_set), GFP_KERNEL);
 	if (!c)
@@ -2036,8 +1867,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	kobject_init(&c->kobj, &cache_set_obj);
 	kobject_init(&c->internal, &cache_set_internal_obj);
 
-	for (int i = 0; i < 4; i++)
-		kobject_init(&c->accounting[i], &accounting_obj);
+	init_cache_accounting(&c->accounting);
 
 	memcpy(c->sb.set_uuid, sb->set_uuid, 16);
 	c->sb.block_size	= sb->block_size;
@@ -2284,10 +2114,8 @@ static const char *register_cache_set(struct cache *ca)
 	    kobject_add(&c->internal, &c->kobj, "internal"))
 		goto err;
 
-	for (int i = 0; i < 4; i++)
-		if (kobject_add(&c->accounting[i], &c->kobj,
-				"stats_%s", accounting_types[i]))
-			goto err;
+	if (add_cache_accounting_kobjs(&c->accounting, &c->kobj))
+		goto err;
 
 	list_add(&c->list, &cache_sets);
 found:

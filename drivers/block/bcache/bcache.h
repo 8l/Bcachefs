@@ -147,59 +147,7 @@ struct prio_set {
 };
 
 #include "journal.h"
-
-struct cache_accounting_set {
-	struct kobject		kobj;
-	unsigned		rescale;
-
-	union {
-		unsigned long	all[7];
-
-		struct {
-			unsigned long	cache_hits;
-			unsigned long	cache_misses;
-			unsigned long	cache_bypass_hits;
-			unsigned long	cache_bypass_misses;
-
-			unsigned long	cache_readaheads;
-			unsigned long	cache_miss_collisions;
-			unsigned long	sectors_bypassed;
-		};
-	};
-};
-
-struct cache_accounting {
-	union {
-		atomic_t	all[7];
-
-		atomic_t	stats[2][2];
-
-		struct {
-			atomic_t	cache_hits;
-			atomic_t	cache_misses;
-			atomic_t	cache_bypass_hits;
-			atomic_t	cache_bypass_misses;
-
-			atomic_t	cache_readaheads;
-			atomic_t	cache_miss_collisions;
-			atomic_t	sectors_bypassed;
-		};
-	};
-
-	union {
-		struct cache_accounting_set sets[4];
-
-		struct {
-			struct cache_accounting_set total;
-			struct cache_accounting_set five_minute;
-			struct cache_accounting_set hour;
-			struct cache_accounting_set day;
-		};
-	};
-
-	struct timer_list	timer;
-};
-
+#include "stats.h"
 struct search;
 
 struct bcache_device {
@@ -320,6 +268,8 @@ struct cached_dev {
 	struct list_head	io_lru;
 	spinlock_t		io_lock;
 
+	struct cache_accounting	accounting;
+
 	/* The rest of this all shows up in sysfs */
 	unsigned long		sequential_cutoff;
 	unsigned		readahead;
@@ -331,8 +281,6 @@ struct cached_dev {
 	unsigned		writeback_running:1;
 	unsigned char		writeback_percent;
 	unsigned		writeback_delay;
-
-	struct cache_accounting	stats;
 };
 
 struct cache {
@@ -435,7 +383,7 @@ struct cache_set {
 	atomic_t		closing;
 	struct kobject		kobj;
 	struct kobject		internal;
-	struct kobject		accounting[4];
+	struct cache_accounting accounting;
 	struct work_struct	unregister;
 
 	struct bcache_device	**devices;
@@ -939,6 +887,13 @@ void __submit_bbio(struct bio *, struct cache_set *);
 void submit_bbio(struct bio *, struct cache_set *, struct bkey *, unsigned);
 int submit_bbio_split(struct bio *, struct cache_set *,
 		      struct bkey *, unsigned);
+
+void cache_read_endio(struct bio *, int);
+
+struct bcache_cgroup;
+struct cgroup;
+struct bcache_cgroup *cgroup_to_bcache(struct cgroup *cgroup);
+struct bcache_cgroup *bio_to_cgroup(struct bio *bio);
 
 uint8_t inc_gen(struct cache *, struct bucket *);
 void rescale_priorities(struct cache_set *, int);

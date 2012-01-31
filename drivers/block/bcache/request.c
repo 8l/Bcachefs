@@ -30,30 +30,10 @@ struct kmem_cache *search_cache;
 
 /* Cgroup interface */
 
+static struct bcache_cgroup bcache_default_cgroup = { .cache_mode = -1 };
+
 #ifdef CONFIG_CGROUP_BCACHE
-
-static struct bcache_cgroup {
-	struct cgroup_subsys_state	css;
-	/*
-	 * We subtract one from the index into bcache_cache_modes[], so that
-	 * default == -1; this makes it so the rest match up with d->cache_mode,
-	 * and we use d->cache_mode if cgrp->cache_mode < 0
-	 */
-	short				cache_mode;
-	bool				verify;
-	union {
-
-		atomic_t		stats[2][2];
-		struct {
-			atomic_t	cache_hits;
-			atomic_t	cache_misses;
-			atomic_t	cache_bypass_hits;
-			atomic_t	cache_bypass_misses;
-		};
-	};
-} bcache_default_cgroup = { .cache_mode = -1 };
-
-static struct bcache_cgroup *cgroup_to_bcache(struct cgroup *cgroup)
+struct bcache_cgroup *cgroup_to_bcache(struct cgroup *cgroup)
 {
 	struct cgroup_subsys_state *css;
 	return cgroup &&
@@ -62,7 +42,7 @@ static struct bcache_cgroup *cgroup_to_bcache(struct cgroup *cgroup)
 		: &bcache_default_cgroup;
 }
 
-static struct bcache_cgroup *bio_to_cgroup(struct bio *bio)
+struct bcache_cgroup *bio_to_cgroup(struct bio *bio)
 {
 	return cgroup_to_bcache(get_bio_cgroup(bio));
 }
@@ -106,27 +86,27 @@ static int bcache_verify_write(struct cgroup *cgrp, struct cftype *cft, u64 val)
 static u64 bcache_cache_hits_read(struct cgroup *cgrp, struct cftype *cft)
 {
 	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
-	return atomic_read(&bcachecg->cache_hits);
+	return atomic_read(&bcachecg->stats.cache_hits);
 }
 
 static u64 bcache_cache_misses_read(struct cgroup *cgrp, struct cftype *cft)
 {
 	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
-	return atomic_read(&bcachecg->cache_misses);
+	return atomic_read(&bcachecg->stats.cache_misses);
 }
 
 static u64 bcache_cache_bypass_hits_read(struct cgroup *cgrp,
 					 struct cftype *cft)
 {
 	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
-	return atomic_read(&bcachecg->cache_bypass_hits);
+	return atomic_read(&bcachecg->stats.cache_bypass_hits);
 }
 
 static u64 bcache_cache_bypass_misses_read(struct cgroup *cgrp,
 					   struct cftype *cft)
 {
 	struct bcache_cgroup *bcachecg = cgroup_to_bcache(cgrp);
-	return atomic_read(&bcachecg->cache_bypass_misses);
+	return atomic_read(&bcachecg->stats.cache_bypass_misses);
 }
 
 struct cftype bcache_files[] = {
@@ -919,7 +899,7 @@ static void setup_cache_miss(struct search *s, struct cached_dev *d,
 		reada = bdev_sectors(bio->bi_bdev) - bio_end(bio);
 
 	if (reada)
-		atomic_inc(&d->stats.cache_readaheads);
+		mark_cache_readahead(s);
 
 	s->cache_bio_sectors = bio_sectors(bio) + reada;
 
@@ -965,11 +945,7 @@ static void __request_read(struct closure *cl)
 	} else
 		reada = 0;
 
-	atomic_inc(&d->stats.stats[s->skip][s->cache_miss != NULL]);
-#ifdef CONFIG_CGROUP_BCACHE
-	atomic_inc(&bio_to_cgroup(s->orig_bio)->
-		   stats[s->skip][s->cache_miss != NULL]);
-#endif
+	mark_cache_accounting(s, !s->cache_miss, s->skip);
 
 	set_closure_fn(&s->cl, request_read_done_bh, NULL);
 	closure_set_stopped(&s->cl);
@@ -1272,7 +1248,7 @@ rescale:
 	rescale_priorities(c, bio_sectors(bio));
 	return;
 skip:
-	atomic_add(bio_sectors(bio), &d->stats.sectors_bypassed);
+	mark_sectors_bypassed(s, bio_sectors(bio));
 	s->skip = true;
 }
 

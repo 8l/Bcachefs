@@ -1659,11 +1659,7 @@ static bool fix_overlapping_extents(struct btree *b,
 			else if (bkey_cmp(k, check) < 0)
 				cut_front(k, check);
 			else {
-				/* XXX: Hack */
-				struct cached_dev *dc = container_of(op->d,
-					struct cached_dev, disk);
-
-				atomic_inc(&dc->stats.cache_miss_collisions);
+				mark_cache_miss_collision(op);
 				return true;
 			}
 

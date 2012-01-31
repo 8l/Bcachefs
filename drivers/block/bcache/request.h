@@ -1,5 +1,6 @@
 #ifndef _BCACHE_REQUEST_H_
 #define _BCACHE_REQUEST_H_
+#include <linux/cgroup.h>
 
 struct search {
 	/* Stack frame for bio_complete */
@@ -41,5 +42,19 @@ void cached_dev_request_init(struct cached_dev *d);
 void flash_dev_request_init(struct bcache_device *d);
 
 extern struct kmem_cache *search_cache, *passthrough_cache;
+
+struct bcache_cgroup {
+#ifdef CONFIG_CGROUP_BCACHE
+	struct cgroup_subsys_state	css;
+#endif
+	/*
+	 * We subtract one from the index into bcache_cache_modes[], so that
+	 * default == -1; this makes it so the rest match up with d->cache_mode,
+	 * and we use d->cache_mode if cgrp->cache_mode < 0
+	 */
+	short				cache_mode;
+	bool				verify;
+	struct cache_stat_collector	stats;
+};
 
 #endif /* _BCACHE_REQUEST_H_ */

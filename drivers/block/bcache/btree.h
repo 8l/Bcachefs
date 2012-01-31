@@ -44,7 +44,7 @@ static inline void set_gc_sectors(struct cache_set *c)
 
 struct btree_op {
 	struct closure		cl;
-	struct cached_dev	*d;
+	struct bcache_device	*d;
 
 	/* Journal entry we have a refcount on */
 	atomic_t		*journal;

@@ -34,10 +34,11 @@ struct search {
 void cache_read_endio(struct bio *, int);
 int bcache_get_congested(struct cache_set *);
 void bcache_btree_insert_async(struct closure *);
-int bcache_make_request(struct request_queue *, struct bio *);
 
 void bcache_open_buckets_free(struct cache_set *);
 int bcache_open_buckets_alloc(struct cache_set *);
+
+void cached_dev_request_init(struct cached_dev *d);
 
 extern struct kmem_cache *search_cache, *passthrough_cache;
 

@@ -200,6 +200,27 @@ struct cache_accounting {
 	struct timer_list	timer;
 };
 
+struct search;
+
+struct bcache_device {
+	struct kobject		kobj;
+
+	struct cache_set	*c;
+	unsigned		id;
+	struct gendisk		*disk;
+
+	/* If nonzero, we're closing */
+	atomic_t		closing;
+
+	mempool_t		*unaligned_bvec;
+	struct bio_set		*bio_split;
+
+	unsigned		data_csum:1;
+
+	int (*cache_miss)(struct search *, struct bio *, unsigned);
+	int (*ioctl) (struct bcache_device *, fmode_t, unsigned, unsigned long);
+};
+
 struct io {
 	/* Used to track sequential IO so it can be skipped */
 	struct hlist_node	hash;
@@ -212,18 +233,13 @@ struct io {
 
 struct cached_dev {
 	struct list_head	list;
+	struct bcache_device	disk;
+	struct block_device	*bdev;
+
 	struct cache_sb		sb;
 	struct bio		sb_bio;
 	struct bio_vec		sb_bv[1];
-
 	struct closure_with_waitlist sb_write;
-
-	struct kobject		kobj;
-	struct block_device	*bdev;
-	struct gendisk		*disk;
-
-	struct cache_set	*c;
-	unsigned		id;
 
 	/* Refcount on the cache set. Always nonzero when we're caching. */
 	atomic_t		count;
@@ -235,8 +251,6 @@ struct cached_dev {
 	atomic_t		running;
 
 	mempool_t		*bio_passthrough;
-	mempool_t		*unaligned_bvec;
-	struct bio_set		*bio_split;
 
 	/* Used for the dirty io rb tree, and the recent io hash */
 	spinlock_t		lock;
@@ -285,7 +299,6 @@ struct cached_dev {
 
 	unsigned		sequential_merge:1;
 	unsigned		verify:1;
-	unsigned		data_csum:1;
 
 	unsigned		writeback_metadata:1;
 	unsigned		writeback_running:1;
@@ -397,7 +410,9 @@ struct cache_set {
 	struct kobject		internal;
 	struct kobject		accounting[4];
 	struct work_struct	unregister;
-	struct list_head	devices;
+
+	struct bcache_device	**devices;
+	struct list_head	cached_devs;
 
 	struct closure_with_waitlist sb_write;
 
@@ -500,7 +515,7 @@ struct cache_set {
 	struct mutex		verify_lock;
 #endif
 
-	int			nr_uuids;
+	unsigned		nr_uuids;
 	struct uuid_entry	*uuids;
 	BKEY_PADDED(uuid_bucket);
 	struct closure		uuid_write;

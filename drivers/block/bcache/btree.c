@@ -1580,7 +1580,11 @@ static bool fix_overlapping_extents(struct btree *b,
 			else if (bkey_cmp(k, check) < 0)
 				cut_front(k, check);
 			else {
-				atomic_inc(&op->d->stats.cache_miss_collisions);
+				/* XXX: Hack */
+				struct cached_dev *dc = container_of(op->d,
+					struct cached_dev, disk);
+
+				atomic_inc(&dc->stats.cache_miss_collisions);
 				return true;
 			}
 
@@ -2021,19 +2025,15 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 
 	unsigned sectors, ptr;
 	struct bio *n;
+	int ret = 0;
 	int offset(void)	{ return bio->bi_sector - KEY_START(k); }
 
 	while (offset() < 0) {
 		sectors = min_t(unsigned, -offset(), bio_max_sectors(bio));
 
-		n = bio_split_get(bio, sectors, op->d);
-		if (!n)
-			return -ENOMEM;
-
-		if (s->cache_miss)
-			generic_make_request(s->cache_miss);
-
-		s->cache_miss = n;
+		ret = s->op.d->cache_miss(s, bio, sectors);
+		if (ret)
+			return ret;
 	}
 
 	/* XXX: figure out best pointer - for multiple cache devices */

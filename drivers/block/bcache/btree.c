@@ -507,7 +507,7 @@ static void mca_data_free(struct btree *b)
 	t->prev = NULL;
 	t->tree = NULL;
 	t->data = NULL;
-	list_move_tail(&b->lru, &b->c->freed);
+	list_move(&b->list, &b->c->btree_cache_freed);
 	b->c->bucket_cache_used--;
 }
 
@@ -517,6 +517,7 @@ static void mca_bucket_free(struct btree *b)
 
 	b->key.ptr[0] = 0;
 	hlist_del_init_rcu(&b->hash);
+	list_move(&b->list, &b->c->btree_cache_freeable);
 }
 
 static void mca_data_alloc(struct btree *b, struct bkey *k, gfp_t gfp)
@@ -543,7 +544,7 @@ static void mca_data_alloc(struct btree *b, struct bkey *k, gfp_t gfp)
 	if (!t->prev)
 		goto err;
 
-	list_move_tail(&b->lru, &b->c->lru);
+	list_move(&b->list, &b->c->btree_cache);
 	b->c->bucket_cache_used++;
 	return;
 err:
@@ -557,7 +558,7 @@ static struct btree *mca_bucket_alloc(struct cache_set *c,
 	if (!b)
 		return NULL;
 
-	INIT_LIST_HEAD(&b->lru);
+	INIT_LIST_HEAD(&b->list);
 	init_rwsem(&b->lock);
 	INIT_DELAYED_WORK(&b->work, NULL);
 	b->c = c;
@@ -599,14 +600,15 @@ static int bcache_shrink_buckets(struct shrinker *shrink,
 				 struct shrink_control *sc)
 {
 	struct cache_set *c = container_of(shrink, struct cache_set, shrink);
-	struct btree *b;
+	struct btree *b, *t;
+	unsigned i;
 	int nr, orig_nr = sc->nr_to_scan;
 
 	if (c->shrinker_disabled)
 		return 0;
 
 	/*
-	 * If not nr, we're supposed to return the number of items we have
+	 * If nr == 0, we're supposed to return the number of items we have
 	 * cached. Not allowed to return -1.
 	 */
 	if (!orig_nr)
@@ -621,21 +623,41 @@ static int bcache_shrink_buckets(struct shrinker *shrink,
 		return -1;
 	}
 
+	if (list_empty(&c->btree_cache)) {
+		/*
+		 * Can happen right when we first start up, before we've read in
+		 * any btree nodes
+		 */
+		mutex_unlock(&c->bucket_lock);
+		return 0;
+	}
+
+	orig_nr /= c->btree_pages;
 	nr = orig_nr = min_t(int, orig_nr, mca_can_free(c));
 
-	for (unsigned i = c->bucket_cache_used;
+	i = 0;
+	list_for_each_entry_safe(b, t, &c->btree_cache_freeable, list) {
+		if (!nr)
+			break;
+
+		if (++i > 3 &&
+		    !mca_reap(b, NULL)) {
+			mca_data_free(b);
+			rw_unlock(true, b);
+			--nr;
+		}
+	}
+
+	for (i = c->bucket_cache_used;
 	     i && nr;
 	     --i) {
-		struct btree *b = list_first_entry(&c->lru, struct btree, lru);
+		b = list_first_entry(&c->btree_cache, struct btree, list);
+		list_rotate_left(&c->btree_cache);
 
-		list_rotate_left(&c->lru);
-
-		if (!b->accessed) {
-			if (mca_reap(b, NULL))
-				break;
-
-			mca_data_free(b);
+		if (!b->accessed &&
+		    !mca_reap(b, NULL)) {
 			mca_bucket_free(b);
+			mca_data_free(b);
 			rw_unlock(true, b);
 			--nr;
 		} else
@@ -643,8 +665,6 @@ static int bcache_shrink_buckets(struct shrinker *shrink,
 	}
 
 	mutex_unlock(&c->bucket_lock);
-	if (orig_nr && nr == orig_nr)
-		return -1;
 out:
 	return mca_can_free(c) * c->btree_pages;
 }
@@ -662,11 +682,14 @@ void bcache_btree_cache_free(struct cache_set *c)
 
 #ifdef CONFIG_BCACHE_DEBUG
 	if (c->verify_data)
-		list_move_tail(&c->verify_data->lru, &c->lru);
+		list_move(&c->verify_data->list, &c->btree_cache);
 #endif
 
-	while (!list_empty(&c->lru)) {
-		b = list_first_entry(&c->lru, struct btree, lru);
+	list_splice(&c->btree_cache_freeable,
+		    &c->btree_cache);
+
+	while (!list_empty(&c->btree_cache)) {
+		b = list_first_entry(&c->btree_cache, struct btree, list);
 
 		if (b->write)
 			btree_complete_write(b, b->write);
@@ -676,9 +699,10 @@ void bcache_btree_cache_free(struct cache_set *c)
 		mca_data_free(b);
 	}
 
-	while (!list_empty(&c->freed)) {
-		b = list_first_entry(&c->freed, struct btree, lru);
-		list_del(&b->lru);
+	while (!list_empty(&c->btree_cache_freed)) {
+		b = list_first_entry(&c->btree_cache_freed,
+				     struct btree, list);
+		list_del(&b->list);
 		cancel_delayed_work_sync(&b->work);
 		kfree(b);
 	}
@@ -688,10 +712,15 @@ void bcache_btree_cache_free(struct cache_set *c)
 
 int bcache_btree_cache_alloc(struct cache_set *c)
 {
+	/* XXX: doesn't check for errors */
+
 	INIT_WORK(&c->gc_work, btree_gc_work);
 
 	for (int i = 0; i < mca_reserve(c); i++)
 		mca_bucket_alloc(c, &ZERO_KEY, GFP_KERNEL);
+
+	list_splice_init(&c->btree_cache,
+			 &c->btree_cache_freeable);
 
 #ifdef CONFIG_BCACHE_DEBUG
 	mutex_init(&c->verify_lock);
@@ -700,7 +729,7 @@ int bcache_btree_cache_alloc(struct cache_set *c)
 
 	if (c->verify_data &&
 	    c->verify_data->sets[0].data)
-		list_del_init(&c->verify_data->lru);
+		list_del_init(&c->verify_data->list);
 	else
 		c->verify_data = NULL;
 #endif
@@ -741,7 +770,6 @@ static struct btree *alloc_bucket(struct cache_set *c, struct bkey *k,
 	unsigned page_order = ilog2(KEY_SIZE(k) / PAGE_SECTORS ?: 1);
 
 	lockdep_assert_held(&c->bucket_lock);
-	BUG_ON(list_empty(&c->lru));
 retry:
 	if (find_bucket(c, k))
 		return NULL;
@@ -749,16 +777,16 @@ retry:
 	/* btree_free() doesn't free memory; it sticks the node on the end of
 	 * the list. Check if there's any freed nodes there:
 	 */
-	b = list_entry(c->lru.prev, struct btree, lru);
-	if (page_order <= b->page_order &&
-	    !b->key.ptr[0] &&
-	    !mca_reap(b, NULL))
-		goto out;
+	list_for_each_entry(b, &c->btree_cache_freeable, list)
+		if (page_order <= b->page_order &&
+		    !b->key.ptr[0] &&
+		    !mca_reap(b, NULL))
+			goto out;
 
 	/* We never free struct btree itself, just the memory that holds the on
 	 * disk node. Check the freed list before allocating a new one:
 	 */
-	list_for_each_entry(b, &c->freed, lru)
+	list_for_each_entry(b, &c->btree_cache_freed, list)
 		if (!mca_reap(b, NULL)) {
 			mca_data_alloc(b, k, __GFP_NOWARN|GFP_NOIO);
 			if (!b->sets[0].data) {
@@ -777,7 +805,7 @@ out:
 	BUG_ON(atomic_read(&b->io) != -1);
 
 	bkey_copy(&b->key, k);
-	list_move(&b->lru, &c->lru);
+	list_move(&b->list, &c->btree_cache);
 	hlist_del_init_rcu(&b->hash);
 	hlist_add_head_rcu(&b->hash, hash_bucket(c, k));
 	lock_set_subclass(&b->lock.dep_map, level + 1, _THIS_IP_);
@@ -809,7 +837,7 @@ err:
 	c->try_harder_start = local_clock();
 	b = ERR_PTR(-ENOMEM);
 
-	list_for_each_entry_reverse(i, &c->lru, lru)
+	list_for_each_entry_reverse(i, &c->btree_cache, list)
 		if (page_order <= i->page_order) {
 			int e = mca_reap(i, cl);
 			if (e == -EAGAIN)
@@ -933,7 +961,6 @@ static void btree_free(struct btree *b, struct btree_op *op)
 
 	unpop_bucket(b->c, &b->key);
 	mca_bucket_free(b);
-	list_move_tail(&b->lru, &b->c->lru);
 	mutex_unlock(&b->c->bucket_lock);
 }
 
@@ -2063,7 +2090,7 @@ void bcache_btree_set_root(struct btree *b)
 		BUG_ON(PTR_BUCKET(b->c, &b->key, i)->prio != btree_prio);
 
 	mutex_lock(&b->c->bucket_lock);
-	list_del_init(&b->lru);
+	list_del_init(&b->list);
 	mutex_unlock(&b->c->bucket_lock);
 
 	b->c->root = b;

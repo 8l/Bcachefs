@@ -470,10 +470,11 @@ struct cache_set {
 	 * Lists of struct btrees; lru is the list for structs that have memory
 	 * allocated for actual btree node, freed is for structs that do not.
 	 */
-	struct list_head	lru;
-	struct list_head	freed;
+	struct list_head	btree_cache;
+	struct list_head	btree_cache_freeable;
+	struct list_head	btree_cache_freed;
 
-	/* Number of elements in lru list */
+	/* Number of elements in btree_cache + btree_cache_freeable lists */
 	unsigned		bucket_cache_used;
 
 	/*
@@ -705,8 +706,7 @@ struct btree {
 	/* Gets transferred to w->prio_blocked - see the comment there */
 	int			prio_blocked;
 
-	/* Not actually an lru anymore - just for iterating */
-	struct list_head	lru;
+	struct list_head	list;
 	struct delayed_work	work;
 	closure_list_t		wait;
 

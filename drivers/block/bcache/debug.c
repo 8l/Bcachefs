@@ -365,9 +365,9 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 		return -ENOMEM;
 
 	for (int i = 0; i < 3; i++) {
-		BUG_ON(list_empty(&c->lru));
-		all[i] = list_first_entry(&c->lru, struct btree, lru);
-		list_del_init(&all[i]->lru);
+		BUG_ON(list_empty(&c->btree_cache));
+		all[i] = list_first_entry(&c->btree_cache, struct btree, list);
+		list_del_init(&all[i]->list);
 
 		all[i]->key = KEY(0, 0, c->sb.bucket_size);
 		bkey_copy_key(&all[i]->key, &MAX_KEY);

@@ -351,7 +351,7 @@ static void btree_flush_write(struct cache_set *c)
 	mutex_lock(&c->bucket_lock);
 
 	best = NULL;
-	list_for_each_entry(b, &c->lru, lru) {
+	list_for_each_entry(b, &c->btree_cache, list) {
 		if (!down_write_trylock(&b->lock))
 			continue;
 
@@ -373,7 +373,7 @@ static void btree_flush_write(struct cache_set *c)
 		goto out;
 
 	/* We can't find the best btree node, just pick the first */
-	list_for_each_entry(b, &c->lru, lru)
+	list_for_each_entry(b, &c->btree_cache, list)
 		if (!b->level && b->write) {
 			best = b;
 			mutex_unlock(&c->bucket_lock);

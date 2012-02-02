@@ -1622,7 +1622,7 @@ SHOW(__cache_set)
 		struct btree *b;
 
 		mutex_lock(&c->bucket_lock);
-		list_for_each_entry(b, &c->lru, lru)
+		list_for_each_entry(b, &c->btree_cache, list)
 			ret += 1 << (b->page_order + PAGE_SHIFT);
 
 		mutex_unlock(&c->bucket_lock);
@@ -1855,10 +1855,10 @@ static void cache_set_free(struct kobject *kobj)
 	mutex_unlock(&c->gc_lock);
 
 	if (!IS_ERR_OR_NULL(c->root))
-		list_add(&c->root->lru, &c->lru);
+		list_add(&c->root->list, &c->btree_cache);
 
 	/* Should skip this if we're unregistering because of an error */
-	list_for_each_entry(b, &c->lru, lru)
+	list_for_each_entry(b, &c->btree_cache, list)
 		if (b->write)
 			btree_write(b, true, &op);
 
@@ -2047,8 +2047,9 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	INIT_WORK(&c->unregister, cache_set_unregister);
 	INIT_LIST_HEAD(&c->list);
 	INIT_LIST_HEAD(&c->cached_devs);
-	INIT_LIST_HEAD(&c->lru);
-	INIT_LIST_HEAD(&c->freed);
+	INIT_LIST_HEAD(&c->btree_cache);
+	INIT_LIST_HEAD(&c->btree_cache_freeable);
+	INIT_LIST_HEAD(&c->btree_cache_freed);
 	INIT_LIST_HEAD(&c->data_buckets);
 
 	c->search = mempool_create_slab_pool(32, search_cache);
@@ -2130,7 +2131,7 @@ static void run_cache_set(struct cache_set *c)
 		if (IS_ERR_OR_NULL(c->root))
 			goto err;
 
-		list_del_init(&c->root->lru);
+		list_del_init(&c->root->list);
 		rw_unlock(true, c->root);
 
 		err = uuid_read(c, j, &op.cl);

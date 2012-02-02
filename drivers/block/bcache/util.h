@@ -763,6 +763,12 @@ static inline void closure_wake_up(closure_list_t *list)
  * becoming true; i.e. we see event false -> wait -> recheck condition, but the
  * thread that made the event true may have called closure_wake_up() before we
  * added ourself to the wait list.
+ *
+ *  We have to call closure_sync() at the end instead of just
+ * __closure_end_sleep() because a different thread might've called
+ * closure_wake_up() before us and gotten preempted before they dropped the
+ * refcount on our closure. If this was a stack allocated closure, that would be
+ * bad.
  */
 #define __closure_wait_event(list, cl, condition, _block)		\
 ({									\
@@ -781,7 +787,7 @@ static inline void closure_wake_up(closure_list_t *list)
 	}								\
 	__closure_wake_up(list);					\
 	if (block)							\
-		__closure_end_sleep(cl);				\
+		closure_sync(cl);					\
 out:									\
 	ret;								\
 })

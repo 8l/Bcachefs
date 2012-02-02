@@ -482,6 +482,12 @@ read_attribute(name ## _last_ ## frequency_units)
 
 #define DIV_SAFE(n, d)	__DIV_SAFE(n, d, 0)
 
+#define container_of_or_null(ptr, type, member)				\
+({									\
+	typeof(ptr) _ptr = ptr;						\
+	_ptr ? container_of(_ptr, type, member) : NULL;			\
+})
+
 #define RB_INSERT(root, new, member, cmp)				\
 ({									\
 	__label__ dup;							\
@@ -546,16 +552,16 @@ dup:									\
 })
 
 #define RB_FIRST(root, type, member)					\
-	(root ? container_of(rb_first(root), type, member) : NULL)
+	container_of_or_null(rb_first(root), type, member)
 
 #define RB_LAST(root, type, member)					\
-	(root ? container_of(rb_last(root), type, member) : NULL)
+	container_of_or_null(rb_last(root), type, member)
 
-#define RB_PREV(node, type, member)					\
-	(rb_prev(node) ? container_of(rb_prev(node), type, member) : NULL)
+#define RB_NEXT(ptr, member)						\
+	container_of_or_null(rb_next(&(ptr)->member), typeof(*ptr), member)
 
-#define RB_NEXT(node, type, member)					\
-	(rb_next(node) ? container_of(rb_next(node), type, member) : NULL)
+#define RB_PREV(ptr, member)						\
+	container_of_or_null(rb_prev(&(ptr)->member), typeof(*ptr), member)
 
 /* Does linear interpolation between powers of two */
 static inline unsigned fract_exp_two(unsigned x, unsigned fract_bits)

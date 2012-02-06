@@ -10,6 +10,9 @@
 
 #include "util.h"
 
+#define simple_strtoint(c, end, base)	simple_strtol(c, end, base)
+#define simple_strtouint(c, end, base)	simple_strtoul(c, end, base)
+
 #define STRTO_H(name, type)					\
 int name ## _h(const char *cp, type *res)		        \
 {								\
@@ -61,9 +64,9 @@ int name ## _h(const char *cp, type *res)		        \
 }								\
 EXPORT_SYMBOL_GPL(name ## _h);
 
-STRTO_H(strtol, long)
+STRTO_H(strtoint, int)
+STRTO_H(strtouint, unsigned int)
 STRTO_H(strtoll, long long)
-STRTO_H(strtoul, unsigned long)
 STRTO_H(strtoull, unsigned long long)
 
 ssize_t hprint(char *buf, int64_t v)

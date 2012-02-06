@@ -284,16 +284,38 @@ do {									\
 #define ANYSINT_MAX(t)						\
 	((((t) 1 << (sizeof(t) * 8 - 2)) - (t) 1) * (t) 2 + (t) 1)
 
-int strtol_h(const char *, long *);
+int strtoint_h(const char *, int *);
+int strtouint_h(const char *, unsigned int *);
 int strtoll_h(const char *, long long *);
-int strtoul_h(const char *, unsigned long *);
 int strtoull_h(const char *, unsigned long long *);
 
+static inline int strtol_h(const char *cp, long *res)
+{
+#if BITS_PER_LONG == 32
+	return strtoint_h(cp, (int *) res);
+#else
+	return strtoll_h(cp, (long long *) res);
+#endif
+}
+
+static inline int strtoul_h(const char *cp, long *res)
+{
+#if BITS_PER_LONG == 32
+	return strtouint_h(cp, (unsigned int *) res);
+#else
+	return strtoull_h(cp, (unsigned long long *) res);
+#endif
+}
+
 #define strtoi_h(cp, res)						\
-	(__builtin_types_compatible_p(typeof(*res), long)		\
+	(__builtin_types_compatible_p(typeof(*res), int)		\
+	? strtoint_h(cp, (void *) res)					\
+	:__builtin_types_compatible_p(typeof(*res), long)		\
 	? strtol_h(cp, (void *) res)					\
 	: __builtin_types_compatible_p(typeof(*res), long long)		\
 	? strtoll_h(cp, (void *) res)					\
+	: __builtin_types_compatible_p(typeof(*res), unsigned int)	\
+	? strtouint_h(cp, (void *) res)					\
 	: __builtin_types_compatible_p(typeof(*res), unsigned long)	\
 	? strtoul_h(cp, (void *) res)					\
 	: __builtin_types_compatible_p(typeof(*res), unsigned long long)\

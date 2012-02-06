@@ -648,14 +648,53 @@ struct closure {
 #define	CLOSURE_SLEEPING	(1 << 30)
 	atomic_t		remaining;
 
+#define TYPE_CLOSURE			0U
+#define TYPE_CLOSURE_WITH_WAITLIST	1U
+#define TYPE_CLOSURE_WITH_TIMER		2U
+#define TYPE_CLOSURE_WITH_WAITLIST_AND_TIMER 3U
+#define MAX_CLOSURE_TYPE		3U
+	unsigned		type;
+
 #ifdef CONFIG_BCACHE_CLOSURE_DEBUG
 	struct list_head	all;
 	unsigned long		waiting_on;
 #endif
-#ifdef CONFIG_BCACHE_LATENCY_DEBUG
-	unsigned long		wait_time;
-#endif
 };
+
+struct closure_with_waitlist {
+	struct closure	cl;
+	closure_list_t	wait;
+};
+
+struct closure_with_timer {
+	struct closure	cl;
+	struct timer_list timer;
+};
+
+struct closure_with_waitlist_and_timer {
+	struct closure	cl;
+	closure_list_t	wait;
+	struct timer_list timer;
+};
+
+extern unsigned invalid_closure_type(void);
+
+#define __closure_type(cl)						\
+(									\
+	  __builtin_types_compatible_p(typeof(cl),			\
+				       struct closure)			\
+		? TYPE_CLOSURE						\
+	: __builtin_types_compatible_p(typeof(cl),			\
+				       struct closure_with_waitlist)	\
+		? TYPE_CLOSURE_WITH_WAITLIST				\
+	: __builtin_types_compatible_p(typeof(cl),			\
+				       struct closure_with_timer)	\
+		? TYPE_CLOSURE_WITH_TIMER				\
+	: __builtin_types_compatible_p(typeof(cl),			\
+				       struct closure_with_waitlist_and_timer)\
+		? TYPE_CLOSURE_WITH_WAITLIST_AND_TIMER			\
+	: invalid_closure_type()					\
+)
 
 void closure_put(struct closure *cl);
 void closure_queue(struct closure *cl);
@@ -663,9 +702,13 @@ void __closure_wake_up(closure_list_t *list);
 bool closure_wait(closure_list_t *list, struct closure *cl);
 void closure_sync(struct closure *cl);
 
+bool closure_trylock(struct closure *cl, struct closure *parent);
+void __closure_lock(struct closure *cl, struct closure *parent,
+		    closure_list_t *wait_list);
+
 #ifdef CONFIG_BCACHE_CLOSURE_DEBUG
 extern struct list_head closures;
-extern spinlock_t closure_lock;
+extern spinlock_t closure_list_lock;
 
 static inline void closure_del(struct closure *cl)
 {
@@ -684,13 +727,12 @@ static inline void closure_get(struct closure *cl)
 	atomic_inc_bug(&cl->remaining, 1);
 }
 
-static inline void __closure_init(struct closure *cl, struct closure *parent)
+static inline void do_closure_init(struct closure *cl, struct closure *parent)
 {
 #if defined(CONFIG_LOCKDEP) || defined(CONFIG_DEBUG_OBJECTS_WORK)
 	INIT_WORK(&cl->work, NULL);
 #endif
 	atomic_set(&cl->remaining, 1);
-	set_wait(cl);
 	cl->parent = parent;
 	if (parent)
 		closure_get(parent);
@@ -702,18 +744,39 @@ static inline void __closure_init(struct closure *cl, struct closure *parent)
 #endif
 }
 
-static inline void closure_init(struct closure *cl, struct closure *parent)
-{
-	memset(cl, 0, sizeof(struct closure));
-	__closure_init(cl, parent);
-}
+#define __to_closure(cl)					\
+({								\
+	BUILD_BUG_ON(__closure_type(*cl) > MAX_CLOSURE_TYPE);	\
+	(struct closure *) cl;					\
+})
+
+#define __closure_init(cl, parent)				\
+do {								\
+	struct closure *_cl = __to_closure(cl);			\
+	do_closure_init(_cl, parent);				\
+	_cl->type = __closure_type(*(cl));			\
+} while (0)
+
+#define closure_init(cl, parent)				\
+do {								\
+	memset(cl, 0, sizeof(*(cl)));				\
+	__closure_init(cl, parent);				\
+} while (0)
 
 static inline void closure_init_stack(struct closure *cl)
 {
 	memset(cl, 0, sizeof(struct closure));
 	atomic_set(&cl->remaining, 1|CLOSURE_BLOCKING|CLOSURE_STACK);
-	set_wait(cl);
 }
+
+#define closure_init_unlocked(cl)				\
+do {								\
+	closure_init(cl, NULL);					\
+	atomic_set(&__to_closure(cl)->remaining, -1);		\
+} while (0)
+
+#define closure_lock(cl, parent)				\
+	__closure_lock(__to_closure(cl), parent, &(cl)->wait)
 
 static inline void __closure_end_sleep(struct closure *cl)
 {
@@ -797,6 +860,9 @@ out:									\
 
 #define closure_wait_event_async(list, cl, condition)			\
 	__closure_wait_event(list, cl, condition, false)
+
+#define closure_wait_event_sync(list, cl, condition)			\
+	__closure_wait_event(list, cl, condition, true)
 
 static inline void set_closure_fn(struct closure *cl, closure_fn *fn,
 				  struct workqueue_struct *wq)

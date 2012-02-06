@@ -418,8 +418,8 @@ EXPORT_SYMBOL_GPL(bio_submit_split);
 #ifdef CONFIG_BCACHE_CLOSURE_DEBUG
 
 LIST_HEAD(closures);
-spinlock_t closure_lock;
-EXPORT_SYMBOL(closure_lock);
+spinlock_t closure_list_lock;
+EXPORT_SYMBOL(closure_list_lock);
 
 #define SET_WAITING(s, f)	((s)->waiting_on = f)
 #else
@@ -438,10 +438,25 @@ void closure_queue(struct closure *cl)
 }
 EXPORT_SYMBOL_GPL(closure_queue);
 
+static void closure_wake_up_after_xchg(struct llist_node *);
+
+static closure_list_t *closure_waitlist(struct closure *cl)
+{
+	switch (cl->type) {
+	case TYPE_CLOSURE:
+		return NULL;
+	case TYPE_CLOSURE_WITH_WAITLIST:
+		return &container_of(cl, struct closure_with_waitlist, cl)->wait;
+	case TYPE_CLOSURE_WITH_TIMER:
+		return NULL;
+	case TYPE_CLOSURE_WITH_WAITLIST_AND_TIMER:
+		return &container_of(cl, struct closure_with_waitlist_and_timer, cl)->wait;
+	}
+	return NULL;
+}
+
 static void __closure_put(struct closure *cl, int r)
 {
-	pr_latency(cl->wait_time, "%pf", cl->fn);
-
 	BUG_ON(r & CLOSURE_GUARD_MASK);
 	BUG_ON((r & CLOSURE_REMAINING_MASK) == 0 &&
 	       (r & (CLOSURE_STACK|CLOSURE_WAITING|CLOSURE_SLEEPING)));
@@ -459,13 +474,23 @@ static void __closure_put(struct closure *cl, int r)
 		if (cl->fn) {
 			/* CLOSURE_BLOCKING might be set - clear it */
 			atomic_set(&cl->remaining, 1);
-			set_wait(cl);
 			closure_queue(cl);
 		} else {
+			struct closure *parent = cl->parent;
+
+			closure_list_t *wait = closure_waitlist(cl);
+			struct llist_node *list = wait
+				? llist_del_all(wait)
+				: NULL;
+
 			closure_del(cl);
 
-			if (cl->parent)
-				closure_put(cl->parent);
+			smp_wmb();
+			atomic_set(&cl->remaining, -1);
+			closure_wake_up_after_xchg(list);
+
+			if (parent)
+				closure_put(parent);
 		}
 	}
 }
@@ -477,15 +502,14 @@ void closure_put(struct closure *cl)
 }
 EXPORT_SYMBOL_GPL(closure_put);
 
-void __closure_wake_up(closure_list_t *list)
+static void closure_wake_up_after_xchg(struct llist_node *list)
 {
 	struct closure *cl;
+	struct llist_node *reverse = NULL;
 
-	struct llist_node *reverse = NULL, *l = llist_del_all(list);
-
-	while (l) {
-		struct llist_node *t = l;
-		l = llist_next(l);
+	while (list) {
+		struct llist_node *t = list;
+		list = llist_next(list);
 
 		t->next = reverse;
 		reverse = t;
@@ -499,6 +523,11 @@ void __closure_wake_up(closure_list_t *list)
 		__closure_put(cl, atomic_sub_return(CLOSURE_WAITING + 1,
 						    &cl->remaining));
 	}
+}
+
+void __closure_wake_up(closure_list_t *list)
+{
+	closure_wake_up_after_xchg(llist_del_all(list));
 }
 EXPORT_SYMBOL_GPL(__closure_wake_up);
 
@@ -531,6 +560,39 @@ void closure_sync(struct closure *cl)
 }
 EXPORT_SYMBOL_GPL(closure_sync);
 
+bool closure_trylock(struct closure *cl, struct closure *parent)
+{
+	if (atomic_cmpxchg(&cl->remaining, -1, 1) != -1)
+		return false;
+
+	smp_mb();
+	cl->parent = parent;
+	if (parent)
+		closure_get(parent);
+
+#ifdef CONFIG_BCACHE_CLOSURE_DEBUG
+	spin_lock_irq(&closure_list_lock);
+	list_add(&cl->all, &closures);
+	spin_unlock_irq(&closure_list_lock);
+#endif
+	return true;
+}
+
+void __closure_lock(struct closure *cl, struct closure *parent,
+		    closure_list_t *wait_list)
+{
+	struct closure wait;
+	closure_init_stack(&wait);
+
+	while (1) {
+		if (closure_trylock(cl, parent))
+			return;
+
+		closure_wait_event_sync(wait_list, &wait,
+					atomic_read(&cl->remaining) == -1);
+	}
+}
+
 #ifdef CONFIG_BCACHE_CLOSURE_DEBUG
 
 static struct dentry *debug;
@@ -538,7 +600,7 @@ static struct dentry *debug;
 static int debug_seq_show(struct seq_file *f, void *data)
 {
 	struct closure *cl;
-	spin_lock_irq(&closure_lock);
+	spin_lock_irq(&closure_list_lock);
 
 	list_for_each_entry(cl, &closures, all)
 		seq_printf(f, "%p: fn %pf parent %p remaining %i "
@@ -546,7 +608,7 @@ static int debug_seq_show(struct seq_file *f, void *data)
 			   cl, cl->fn, cl->parent, atomic_read(&cl->remaining),
 			   (void *) cl->waiting_on, latency_ms(cl->wait_time));
 
-	spin_unlock_irq(&closure_lock);
+	spin_unlock_irq(&closure_list_lock);
 	return 0;
 }
 

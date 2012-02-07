@@ -509,7 +509,7 @@ static void journal_write(struct cache_set *c)
 		w->data->prio_bucket[ca->sb.nr_this_dev] = ca->prio_buckets[0];
 
 	w->data->magic		= jset_magic(c);
-	w->data->version	= JSET_VERSION;
+	w->data->version	= BCACHE_JSET_VERSION;
 	w->data->last_seq	= last_seq(&c->journal);
 	w->data->csum		= csum_set(w->data);
 

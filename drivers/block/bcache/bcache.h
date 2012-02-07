@@ -39,8 +39,9 @@ struct bkey {
 
 /* Version 1: Backing device
  * Version 2: Seed pointer into btree node checksum
+ * Version 3: New UUID format
  */
-#define BCACHE_SB_VERSION	2
+#define BCACHE_SB_VERSION	3
 
 #define SB_SECTOR		8
 #define SB_SIZE			4096

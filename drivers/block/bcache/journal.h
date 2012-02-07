@@ -1,7 +1,10 @@
 #ifndef _BCACHE_JOURNAL_H
 #define _BCACHE_JOURNAL_H
 
-#define JSET_VERSION	0
+#define BCACHE_JSET_VERSION_UUIDv1	1
+/* Always latest UUID format */
+#define BCACHE_JSET_VERSION_UUID	1
+#define BCACHE_JSET_VERSION		1
 
 /*
  * On disk format for a journal entry:

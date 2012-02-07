@@ -41,13 +41,31 @@ static const char * const cache_replacement_policies[] = {
 	NULL
 };
 
-struct uuid_entry {
+struct uuid_entry_v0 {
 	uint8_t		uuid[16];
 	uint8_t		label[32];
 	uint32_t	first_reg;
 	uint32_t	last_reg;
 	uint32_t	invalidated;
 	uint32_t	pad;
+};
+
+struct uuid_entry {
+	union {
+		struct {
+			uint8_t		uuid[16];
+			uint8_t		label[32];
+			uint32_t	first_reg;
+			uint32_t	last_reg;
+			uint32_t	invalidated;
+
+			uint32_t	flags;
+			/* Size of flash only volumes */
+			uint64_t	sectors;
+		};
+
+		uint8_t	pad[128];
+	};
 };
 
 /* We keep absolute totals of various statistics, and addionally a set of three
@@ -478,7 +496,47 @@ static void uuid_io(struct cache_set *c, unsigned long rw,
 	return_f(cl, NULL, NULL);
 }
 
-static int uuid_write(struct cache_set *c)
+static char *uuid_read(struct cache_set *c, struct jset *j, struct closure *cl)
+{
+	struct bkey *k = &j->uuid_bucket;
+
+	if (__ptr_invalid(c, 1, k))
+		return "bad uuid pointer";
+
+	bkey_copy(&c->uuid_bucket, k);
+	uuid_io(c, READ_SYNC, k, cl);
+
+	if (j->version < BCACHE_JSET_VERSION_UUIDv1) {
+		struct uuid_entry_v0	*u0 = (void *) c->uuids;
+		struct uuid_entry	*u1 = (void *) c->uuids;
+
+		closure_sync(cl);
+
+		/*
+		 * Since the new uuid entry is bigger than the old, we have to
+		 * convert starting at the highest memory address and work down
+		 * in order to do it in place
+		 */
+
+		for (int i = c->nr_uuids - 1;
+		     i >= 0;
+		     --i) {
+			memcpy(u1[i].uuid,	u0[i].uuid, 16);
+			memcpy(u1[i].label,	u0[i].label, 32);
+
+			u1[i].first_reg		= u0[i].first_reg;
+			u1[i].last_reg		= u0[i].last_reg;
+			u1[i].invalidated	= u0[i].invalidated;
+
+			u1[i].flags	= 0;
+			u1[i].sectors	= 0;
+		}
+	}
+
+	return NULL;
+}
+
+static int __uuid_write(struct cache_set *c)
 {
 	BKEY_PADDED(key) k;
 	struct closure cl;
@@ -495,6 +553,12 @@ static int uuid_write(struct cache_set *c)
 
 	bkey_copy(&c->uuid_bucket, &k.key);
 	__bkey_put(c, &k.key);
+	return 0;
+}
+
+static int uuid_write(struct cache_set *c)
+{
+	__uuid_write(c);
 
 	bcache_journal_meta(c, NULL);
 	return 0;
@@ -1895,14 +1959,9 @@ static void run_cache_set(struct cache_set *c)
 		list_del_init(&c->root->lru);
 		rw_unlock(true, c->root);
 
-		k = &j->uuid_bucket;
-
-		err = "bad uuid pointer";
-		if (__ptr_invalid(c, 1, k))
+		err = uuid_read(c, j, &op.cl);
+		if (err)
 			goto err;
-
-		bkey_copy(&c->uuid_bucket, k);
-		uuid_io(c, READ_SYNC, k, &op.cl);
 
 		err = "error in recovery";
 		if (btree_check(c, &op))
@@ -1918,6 +1977,19 @@ static void run_cache_set(struct cache_set *c)
 		 * gc_gen - this is a hack but oh well.
 		 */
 		bcache_journal_next(&c->journal);
+
+		/*
+		 * First place it's safe to allocate: btree_check() and
+		 * btree_gc_finish() have to run before we have buckets to
+		 * allocate, and pop_bucket() might cause a journal entry to be
+		 * written so bcache_journal_next() has to be called first
+		 *
+		 * If the uuids were in the old format we have to rewrite them
+		 * before the next journal entry is written:
+		 */
+		if (j->version < BCACHE_JSET_VERSION_UUID)
+			__uuid_write(c);
+
 		bcache_journal_replay(c, &journal, &op);
 	} else {
 		printk(KERN_NOTICE "bcache: invalidating existing data\n");

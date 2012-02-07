@@ -825,9 +825,8 @@ static void setup_cache_miss(struct search *s, unsigned reada)
 	    s->op.d->c->gc_stats.in_use >= CUTOFF_CACHE_READA)
 		reada = 0;
 
-	if (bio_end(bio) + reada >
-	    (sector_t) (bio->bi_bdev->bd_inode->i_size >> 9))
-		reada = (bio->bi_bdev->bd_inode->i_size >> 9) - bio_end(bio);
+	if (bio_end(bio) + reada > bdev_sectors(bio->bi_bdev))
+		reada = bdev_sectors(bio->bi_bdev) - bio_end(bio);
 
 	if (reada)
 		atomic_inc(&s->op.d->stats.cache_readaheads);

@@ -621,6 +621,11 @@ static inline unsigned bio_max_sectors(struct bio *bio)
 	return __bio_max_sectors(bio, bio->bi_bdev, bio->bi_sector);
 }
 
+static inline sector_t bdev_sectors(struct block_device *bdev)
+{
+	return bdev->bd_inode->i_size >> 9;
+}
+
 #ifdef CONFIG_BCACHE_LATENCY_DEBUG
 extern unsigned latency_warn_ms;
 

@@ -465,6 +465,14 @@ read_attribute(name ## _last_ ## frequency_units)
 &sysfs_ ## name ## _max_duration_ ## duration_units,			\
 &sysfs_ ## name ## _last_ ## frequency_units,
 
+#define ewma_add(ewma, val, weight, factor)				\
+({									\
+	(ewma) *= (weight) - 1;						\
+	(ewma) += (val) << factor;					\
+	(ewma) /= (weight);						\
+	(ewma) >> factor;						\
+})
+
 #define __DIV_SAFE(n, d, zero)						\
 ({									\
 	typeof(n) _n = (n);						\

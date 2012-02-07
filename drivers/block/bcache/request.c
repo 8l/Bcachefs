@@ -681,14 +681,8 @@ static void check_should_skip(struct search *s)
 {
 	void add_sequential(struct task_struct *t)
 	{
-		uint64_t avg = t->sequential_io_avg;
-
-		avg *= 7;
-		avg += t->sequential_io;
-		avg /= 8;
-
-		if (avg <= UINT_MAX)
-			t->sequential_io_avg = avg;
+		ewma_add(t->sequential_io_avg,
+			 t->sequential_io, 8, 0);
 
 		t->sequential_io = 0;
 	}

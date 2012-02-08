@@ -1695,7 +1695,8 @@ static void cache_set_free(struct kobject *kobj)
 	for_each_cache(ca, c)
 		if (ca)
 			closure_wait_event(&c->bucket_wait, &op.cl,
-					   atomic_read(&ca->prio_written) >= 0);
+				atomic_read(&ca->prio_written) >= 0 &&
+				!atomic_read(&ca->discards_pin));
 
 	closure_sync(&op.cl);
 

@@ -140,6 +140,14 @@ struct discard {
 	struct bio_vec		bv;
 };
 
+static void discard_put(struct cache *c)
+{
+	atomic_dec_bug(&c->discards_pin);
+	smp_mb();
+	if (atomic_read(&c->set->closing))
+		closure_wake_up(&c->set->bucket_wait);
+}
+
 static void discard_finish(struct work_struct *w)
 {
 	struct discard *d = container_of(w, struct discard, work);
@@ -161,6 +169,7 @@ static void discard_finish(struct work_struct *w)
 	fifo_push(&c->free, d->bucket);
 
 	list_add(&d->list, &c->discards);
+	discard_put(c);
 
 	do_discard(c);
 	mutex_unlock(&c->set->bucket_lock);
@@ -188,7 +197,12 @@ static void do_discard(struct cache *c)
 	struct request_queue *q = bdev_get_queue(c->bdev);
 	int s = q->limits.logical_block_size;
 
+	atomic_inc(&c->discards_pin);
+	smp_mb();
+	/* Between getting discards_pin and the c->set->closing check */
+
 	while (c->discard &&
+	       !atomic_read(&c->set->closing) &&
 	       !list_empty(&c->discards) &&
 	       fifo_free(&c->free) >= 8) {
 		struct discard *d = list_first_entry(&c->discards,
@@ -199,6 +213,7 @@ static void do_discard(struct cache *c)
 			break;
 
 		list_del(&d->list);
+		atomic_inc(&c->discards_pin);
 
 		bio_init(&d->bio);
 		memset(&d->bv, 0, sizeof(struct bio_vec));
@@ -223,6 +238,8 @@ static void do_discard(struct cache *c)
 
 		schedule_work(&d->work);
 	}
+
+	discard_put(c);
 }
 
 void free_discards(struct cache *ca)

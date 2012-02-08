@@ -358,6 +358,7 @@ struct cache {
 	DECLARE_FIFO(long, unused);
 
 	bool			discard; /* Get rid of? */
+	atomic_t		discards_pin;
 	struct list_head	discards;
 	struct page		*discard_page;
 

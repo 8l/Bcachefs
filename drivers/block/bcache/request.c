@@ -1051,7 +1051,7 @@ static void __request_read(struct closure *cl)
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 	struct search *s = container_of(op, struct search, op);
 	struct bio *bio = &s->bio.bio;
-	unsigned reada = op->d->readahead;
+	unsigned reada = op->d->readahead >> 9;
 
 	int ret = btree_root(search_recurse, op->d->c, op, &reada);
 

@@ -1712,26 +1712,11 @@ static void cache_set_free(struct closure *cl)
 {
 	struct cache_set *c = container_of(cl, struct cache_set, cl);
 	struct cache *ca;
-	struct btree *b;
-
-	struct btree_op op;
-	btree_op_init_stack(&op);
-
-	if (!IS_ERR_OR_NULL(c->root))
-		list_add(&c->root->list, &c->btree_cache);
-
-	/* Should skip this if we're unregistering because of an error */
-	list_for_each_entry(b, &c->btree_cache, list)
-		if (btree_node_dirty(b))
-			btree_write(b, true, &op);
-
-	closure_sync(&op.cl);
 
 	bcache_open_buckets_free(c);
 	bcache_btree_cache_free(c);
 	bcache_journal_free(c);
 
-	/* Don't free cache until no io could be pending */
 	for_each_cache(ca, c)
 		if (ca)
 			kobject_put(&ca->kobj);
@@ -1759,12 +1744,28 @@ static void cache_set_free(struct closure *cl)
 	kobject_put(&c->kobj);
 }
 
+static void cache_set_flush(struct closure *cl)
+{
+	struct cache_set *c = container_of(cl, struct cache_set, caching);
+	struct btree *b;
+
+	kobject_del(&c->kobj);
+
+	if (!IS_ERR_OR_NULL(c->root))
+		list_add(&c->root->list, &c->btree_cache);
+
+	/* Should skip this if we're unregistering because of an error */
+	list_for_each_entry(b, &c->btree_cache, list)
+		if (btree_node_dirty(b))
+			btree_write(b, true, NULL);
+
+	closure_return(cl);
+}
+
 static void cache_set_unregister(struct closure *cl)
 {
 	struct cache_set *c = container_of(cl, struct cache_set, caching);
 	struct cached_dev *d, *t;
-
-	kobject_del(&c->kobj);
 
 	mutex_lock(&register_lock);
 
@@ -1777,7 +1778,7 @@ static void cache_set_unregister(struct closure *cl)
 
 	mutex_unlock(&register_lock);
 
-	closure_return(cl);
+	continue_at(cl, cache_set_flush, system_wq);
 }
 
 static void cache_set_close(struct cache_set *c)

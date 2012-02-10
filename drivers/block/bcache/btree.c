@@ -979,7 +979,7 @@ err:
 
 void __btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 {
-	if (!k->key)
+	if (!k->key || !KEY_SIZE(k))
 		return;
 
 	for (unsigned i = 0; i < KEY_PTRS(k); i++) {

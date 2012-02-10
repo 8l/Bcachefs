@@ -1,21 +1,7 @@
-
 #include "bcache.h"
 #include "btree.h"
 #include "debug.h"
 
-struct dirty_io {
-	struct closure		cl;
-	struct cached_dev	*d;
-	struct bio		bio;
-};
-
-struct dirty {
-	struct rb_node		node;
-	BKEY_PADDED(key);
-	struct dirty_io		*io;
-};
-
-static struct kmem_cache *dirty_cache;
 static struct workqueue_struct *dirty_wq;
 
 static void read_dirty(struct cached_dev *);
@@ -46,20 +32,17 @@ static int dirty_cmp(struct dirty *r, struct dirty *l)
 	return 0;
 }
 
-#define WRITEBACK_SLURP	100
-
-static int btree_refill_dirty(struct btree *b, struct btree_op *op,
-			      struct cached_dev *dc, int *count)
+static int btree_refill_dirty_leaf(struct btree *b, struct btree_op *op,
+				   struct cached_dev *dc)
 {
 	struct dirty *w;
 	struct btree_iter iter;
 	btree_iter_init(b, &iter, &KEY(op->d->id, dc->last_found, 0));
 
 	/* To protect rb tree access vs. read_dirty() */
-	if (!b->level)
-		spin_lock(&dc->lock);
+	spin_lock(&dc->dirty_lock);
 
-	while (*count < WRITEBACK_SLURP) {
+	while (!array_freelist_empty(&dc->dirty_freelist)) {
 		struct bkey *k = btree_iter_next(&iter);
 		if (!k || KEY_DEV(k) != op->d->id)
 			break;
@@ -67,22 +50,8 @@ static int btree_refill_dirty(struct btree *b, struct btree_op *op,
 		if (ptr_bad(b, k))
 			continue;
 
-		if (b->level) {
-			int ret = btree(refill_dirty, k, b, op, dc, count);
-			if (ret)
-				return ret;
-
-		} else if (KEY_DIRTY(k)) {
-			w = kmem_cache_alloc(dirty_cache, GFP_NOWAIT);
-			if (!w) {
-				spin_unlock(&dc->lock);
-
-				w = kmem_cache_alloc(dirty_cache, GFP_NOIO);
-				if (!w)
-					return -ENOMEM;
-
-				spin_lock(&dc->lock);
-			}
+		if (KEY_DIRTY(k)) {
+			w = array_alloc(&dc->dirty_freelist);
 
 			dc->last_found = k->key;
 			pr_debug("%s", pkey(k));
@@ -91,57 +60,96 @@ static int btree_refill_dirty(struct btree *b, struct btree_op *op,
 			SET_KEY_DIRTY(&w->key, false);
 
 			if (RB_INSERT(&dc->dirty, w, node, dirty_cmp))
-				kmem_cache_free(dirty_cache, w);
-			else
-				(*count)++;
+				array_free(&dc->dirty_freelist, w);
 		}
 	}
 
-	if (!b->level)
-		spin_unlock(&dc->lock);
+	spin_unlock(&dc->dirty_lock);
 
 	return 0;
 }
 
-static bool refill_dirty(struct cached_dev *dc)
+static int btree_refill_dirty(struct btree *b, struct btree_op *op,
+			      struct cached_dev *dc)
 {
-	bool put = false;
-	int r, count = 0;
+	int r;
+	struct btree_iter iter;
+	btree_iter_init(b, &iter, &KEY(op->d->id, dc->last_found, 0));
+
+	if (!b->level)
+		return btree_refill_dirty_leaf(b, op, dc);
+
+	while (!array_freelist_empty(&dc->dirty_freelist)) {
+		struct bkey *k = btree_iter_next(&iter);
+		if (!k)
+			break;
+
+		if (ptr_bad(b, k))
+			continue;
+
+		r = btree(refill_dirty, k, b, op, dc);
+		if (r) {
+			char buf[BDEVNAME_SIZE];
+			bdevname(dc->bdev, buf);
+
+			printk(KERN_WARNING "Error trying to read the btree "
+			       "for background writeback on %s: "
+			       "dirty data may have been lost!\n", buf);
+		}
+
+		if (KEY_DEV(k) != op->d->id)
+			break;
+
+		cond_resched();
+	}
+
+	return 0;
+}
+
+static void refill_dirty(struct work_struct *work)
+{
+	struct cached_dev *dc = container_of(to_delayed_work(work),
+					     struct cached_dev, refill_dirty);
 	uint64_t start;
 
 	struct btree_op op;
 	btree_op_init_stack(&op);
 	op.d = &dc->disk;
 
-	down_write(&dc->writeback_lock);
-again:
-	start = dc->last_found;
-	r = btree_root(refill_dirty, dc->disk.c, &op, dc, &count);
+	if (!atomic_read(&dc->closing) &&
+	    (!dc->writeback_running ||
+	     dc->disk.c->gc_stats.in_use < dc->writeback_percent))
+		return;
 
-	pr_debug("found %i keys on %i from %llu to %llu, %i%% used",
-		 count, dc->disk.id, start, dc->last_found,
+	down_write(&dc->writeback_lock);
+	start = dc->last_found;
+
+	if (!atomic_read(&dc->has_dirty)) {
+		SET_BDEV_STATE(&dc->sb, BDEV_STATE_CLEAN);
+		write_bdev_super(dc, NULL);
+		up_write(&dc->writeback_lock);
+		return;
+	}
+
+	btree_root(refill_dirty, dc->disk.c, &op, dc);
+	closure_sync(&op.cl);
+
+	pr_debug("found %s keys on %i from %llu to %llu, %i%% used",
+		 RB_EMPTY_ROOT(&dc->dirty) ? "no" :
+		 array_freelist_empty(&dc->dirty_freelist) ? "some" : "a few",
+		 dc->disk.id, start, (uint64_t) dc->last_found,
 		 dc->disk.c->gc_stats.in_use);
 
-	if (!r && count < WRITEBACK_SLURP) {
-		/* Got to the end of the btree */
+	/* Got to the end of the btree */
+	if (!array_freelist_empty(&dc->dirty_freelist))
 		dc->last_found = 0;
 
-		if (start)
-			goto again;
+	/* Searched the entire btree - delay for awhile */
+	if (!array_freelist_empty(&dc->dirty_freelist) && !start)
+		queue_delayed_work(dirty_wq, &dc->refill_dirty,
+				   dc->writeback_delay * HZ);
 
-		/* Scanned the whole thing */
-		if (!count && !atomic_read(&dc->in_flight)) {
-			if (BDEV_CACHE_MODE(&dc->sb) != CACHE_MODE_WRITEBACK &&
-			    BDEV_STATE(&dc->sb) == BDEV_STATE_DIRTY) {
-				SET_BDEV_STATE(&dc->sb, BDEV_STATE_CLEAN);
-				write_bdev_super(dc, NULL);
-			}
-
-			atomic_long_set(&dc->last_refilled, 0);
-			put = true;
-		} else
-			atomic_long_set(&dc->last_refilled, jiffies ?: 1);
-	}
+	spin_lock(&dc->dirty_lock);
 
 	if (!RB_EMPTY_ROOT(&dc->dirty)) {
 		struct dirty *w;
@@ -153,69 +161,56 @@ again:
 	} else {
 		dc->writeback_start	= 0;
 		dc->writeback_end	= 0;
+
+		if (!start) {
+			atomic_set(&dc->has_dirty, 0);
+			cached_dev_put(dc);
+		}
 	}
 
 	up_write(&dc->writeback_lock);
-	closure_sync(&op.cl);
-
-	if (put)
-		cached_dev_put(dc);
-
-	return count;
+	read_dirty(dc);
 }
 
 bool bcache_in_writeback(struct cached_dev *dc, sector_t offset, unsigned len)
 {
-	struct dirty *ret, s;
+	struct dirty *w, s;
 	s.key = KEY(dc->disk.id, offset + len, len);
 
-	if (offset >= dc->writeback_end ||
+	if (offset	 >= dc->writeback_end ||
 	    offset + len <= dc->writeback_start)
 		return false;
 
-	spin_lock(&dc->lock);
-	ret = RB_SEARCH(&dc->dirty, s, node, dirty_cmp);
-	if (ret && !ret->io) {
-		rb_erase(&ret->node, &dc->dirty);
-		kmem_cache_free(dirty_cache, ret);
-		ret = NULL;
+	spin_lock(&dc->dirty_lock);
+	w = RB_SEARCH(&dc->dirty, s, node, dirty_cmp);
+	if (w && !w->io) {
+		rb_erase(&w->node, &dc->dirty);
+		array_free(&dc->dirty_freelist, w);
+		w = NULL;
 	}
 
-	spin_unlock(&dc->lock);
-	return ret;
-}
-
-static bool should_refill_dirty(struct cached_dev *dc)
-{
-	long t = atomic_long_read(&dc->last_refilled);
-	unsigned ms = dc->writeback_delay * 1000;
-
-	return t &&
-		((dc->writeback_running &&
-		  ((jiffies_to_msecs(jiffies - t) > ms &&
-		    dc->disk.c->gc_stats.in_use > dc->writeback_percent) ||
-		   BDEV_CACHE_MODE(&dc->sb) != CACHE_MODE_WRITEBACK)) ||
-		 atomic_read(&dc->closing));
+	spin_unlock(&dc->dirty_lock);
+	return w != NULL;
 }
 
 void bcache_writeback_queue(struct cached_dev *d)
 {
-	if (should_refill_dirty(d))
-		queue_delayed_work(dirty_wq, &d->refill, 0);
+	queue_delayed_work(dirty_wq, &d->refill_dirty, 0);
 }
 
 void bcache_writeback_start(struct cached_dev *d)
 {
-	if (!atomic_long_read(&d->last_refilled) &&
-	    !atomic_long_xchg(&d->last_refilled, jiffies ?: 1)) {
-
-		SET_BDEV_STATE(&d->sb, BDEV_STATE_DIRTY);
-		/* XXX: should do this synchronously */
-		write_bdev_super(d, NULL);
+	if (!atomic_read(&d->has_dirty) &&
+	    !atomic_xchg(&d->has_dirty, 1)) {
+		if (BDEV_STATE(&d->sb) != BDEV_STATE_DIRTY) {
+			SET_BDEV_STATE(&d->sb, BDEV_STATE_DIRTY);
+			/* XXX: should do this synchronously */
+			write_bdev_super(d, NULL);
+		}
 
 		atomic_inc(&d->count);
-		queue_delayed_work(dirty_wq, &d->refill,
-				   msecs_to_jiffies(d->writeback_delay * 1000));
+		queue_delayed_work(dirty_wq, &d->refill_dirty,
+				   d->writeback_delay * HZ);
 	}
 }
 
@@ -244,9 +239,9 @@ static void write_dirty_finish(struct closure *cl)
 		closure_sync(&op.cl);
 	}
 
-	spin_lock(&dc->lock);
+	spin_lock(&dc->dirty_lock);
 	rb_erase(&w->node, &dc->dirty);
-	kmem_cache_free(dirty_cache, w);
+	array_free(&dc->dirty_freelist, w);
 	atomic_dec_bug(&dc->in_flight);
 
 	read_dirty(dc);
@@ -291,40 +286,33 @@ static void read_dirty_endio(struct bio *bio, int error)
 
 static void read_dirty(struct cached_dev *dc)
 {
-	while (dc->writeback_running) {
-		struct dirty *w, s;
-		s.key = KEY(dc->disk.id, dc->last_read, 0);
+	struct dirty *w;
+	struct dirty_io *io;
 
-		w = RB_GREATER(&dc->dirty, s, node, dirty_cmp) ?:
-		    RB_FIRST(&dc->dirty, struct dirty, node);
+	/* XXX: if we error, background writeback could stall indefinitely */
 
-		if (!w || w->io) {
-			spin_unlock(&dc->lock);
+	while (1) {
+		w = RB_FIRST(&dc->dirty, struct dirty, node);
 
-			if (should_refill_dirty(dc) &&
-			    refill_dirty(dc)) {
-				spin_lock(&dc->lock);
-				continue;
-			}
+		while (w && w->io)
+			w = RB_NEXT(w, node);
 
-			return;
-		}
+		if (!w)
+			break;
 
-		if (ptr_stale(dc->disk.c, &w->key, 0)) {
-			rb_erase(&w->node, &dc->dirty);
-			kmem_cache_free(dirty_cache, w);
-			continue;
-		}
+		BUG_ON(ptr_stale(dc->disk.c, &w->key, 0));
 
-		w->io = ERR_PTR(-EINTR);
-		spin_unlock(&dc->lock);
+		dc->last_read	= w->key.key;
+		w->io		= ERR_PTR(-EINTR);
+		spin_unlock(&dc->dirty_lock);
 
-		w->io = kzalloc(sizeof(struct dirty_io) + sizeof(struct bio_vec)
-				* DIV_ROUND_UP(KEY_SIZE(&w->key), PAGE_SECTORS),
-				GFP_KERNEL);
-		if (!w->io)
-			return;
+		io = kzalloc(sizeof(struct dirty_io) + sizeof(struct bio_vec)
+			     * DIV_ROUND_UP(KEY_SIZE(&w->key), PAGE_SECTORS),
+			     GFP_KERNEL);
+		if (!io)
+			goto err;
 
+		w->io = io;
 		closure_init(&w->io->cl, NULL);
 		set_closure_fn(&w->io->cl, write_dirty, dirty_wq);
 		w->io->d		= dc;
@@ -336,13 +324,9 @@ static void read_dirty(struct cached_dev *dc)
 		w->io->bio.bi_rw	= READ|REQ_UNPLUG;
 		w->io->bio.bi_end_io	= read_dirty_endio;
 
-		if (bio_alloc_pages(&w->io->bio, GFP_KERNEL)) {
-			kfree(w->io);
-			w->io = NULL;
-			return;
-		}
+		if (bio_alloc_pages(&w->io->bio, GFP_KERNEL))
+			goto err;
 
-		dc->last_read = w->key.key;
 		pr_debug("%s", pkey(&w->key));
 
 		trace_bcache_read_dirty(&w->io->bio);
@@ -350,24 +334,38 @@ static void read_dirty(struct cached_dev *dc)
 		if (atomic_inc_return(&dc->in_flight) >= 8)
 			return;
 
-		spin_lock(&dc->lock);
+		spin_lock(&dc->dirty_lock);
 	}
 
-	spin_unlock(&dc->lock);
+	if (0) {
+err:		spin_lock(&dc->dirty_lock);
+		if (!IS_ERR_OR_NULL(w->io))
+			kfree(w->io);
+		rb_erase(&w->node, &dc->dirty);
+		array_free(&dc->dirty_freelist, w);
+	}
+
+	if (RB_EMPTY_ROOT(&dc->dirty))
+		queue_delayed_work(dirty_wq, &dc->refill_dirty, 0);
+
+	spin_unlock(&dc->dirty_lock);
 }
 
 static void read_dirty_work(struct work_struct *work)
 {
-	struct cached_dev *d = container_of(to_delayed_work(work),
-					    struct cached_dev, refill);
-	spin_lock(&d->lock);
-	read_dirty(d);
+	struct cached_dev *dc = container_of(to_delayed_work(work),
+					     struct cached_dev, read_dirty);
+
+	spin_lock(&dc->dirty_lock);
+	read_dirty(dc);
 }
 
 void bcache_writeback_init_cached_dev(struct cached_dev *d)
 {
-	INIT_DELAYED_WORK(&d->refill, read_dirty_work);
+	INIT_DELAYED_WORK(&d->refill_dirty, refill_dirty);
+	INIT_DELAYED_WORK(&d->read_dirty, read_dirty_work);
 	init_rwsem(&d->writeback_lock);
+	array_allocator_init(&d->dirty_freelist);
 
 	d->dirty			= RB_ROOT;
 	d->writeback_metadata		= true;
@@ -379,16 +377,13 @@ void bcache_writeback_exit(void)
 {
 	if (dirty_wq)
 		destroy_workqueue(dirty_wq);
-	if (dirty_cache)
-		kmem_cache_destroy(dirty_cache);
 }
 
 int __init bcache_writeback_init(void)
 {
-	if (!(dirty_cache = KMEM_CACHE(dirty, 0)) ||
-	    !(dirty_wq = create_singlethread_workqueue("bcache_writeback"))) {
-		bcache_writeback_exit();
+	dirty_wq = create_singlethread_workqueue("bcache_writeback");
+	if (!dirty_wq)
 		return -ENOMEM;
-	} else
-		return 0;
+
+	return 0;
 }

@@ -231,6 +231,18 @@ struct io {
 	sector_t		last;
 };
 
+struct dirty_io {
+	struct closure		cl;
+	struct cached_dev	*d;
+	struct bio		bio;
+};
+
+struct dirty {
+	struct rb_node		node;
+	BKEY_PADDED(key);
+	struct dirty_io		*io;
+};
+
 struct cached_dev {
 	struct list_head	list;
 	struct bcache_device	disk;
@@ -252,39 +264,44 @@ struct cached_dev {
 
 	mempool_t		*bio_passthrough;
 
-	/* Used for the dirty io rb tree, and the recent io hash */
-	spinlock_t		lock;
-
 	/*
-	 * Writes take a read lock from start to finish; scanning for dirty data
-	 * to refill the rb tree requires a write lock
+	 * Writes take a shared lock from start to finish; scanning for dirty
+	 * data to refill the rb tree requires an exclusive lock.
 	 */
 	struct rw_semaphore	writeback_lock;
 
 	/*
 	 * Beginning and end of range in dirty rb tree - so that we can skip
-	 * taking d->lock and checking the rb tree
+	 * taking dirty_lock and checking the rb tree. Protected by
+	 * writeback_lock.
 	 */
-	uint64_t		writeback_start;
-	uint64_t		writeback_end;
+	sector_t		writeback_start;
+	sector_t		writeback_end;
+
 	struct rb_root		dirty;
+	spinlock_t		dirty_lock;
 
 	/*
 	 * Nonzero, and writeback has a refcount (d->count), iff there is dirty
-	 * data in the cache
+	 * data in the cache. Protected by writeback_lock; must have an
+	 * shared lock to set and exclusive lock to clear.
 	 */
-	atomic_long_t		last_refilled;
+	atomic_t		has_dirty;
 
 	/*
 	 * Internal to the writeback code, so refill_dirty() and read_dirty()
 	 * can keep track of where they're at.
 	 */
-	uint64_t		last_found;
-	uint64_t		last_read;
+	sector_t		last_found;
+	sector_t		last_read;
 
 	/* Number of writeback bios in flight */
 	atomic_t		in_flight;
-	struct delayed_work	refill;
+	struct delayed_work	refill_dirty;
+	struct delayed_work	read_dirty;
+
+#define WRITEBACK_SLURP	100
+	DECLARE_ARRAY_ALLOCATOR(struct dirty, dirty_freelist, WRITEBACK_SLURP);
 
 	/* For tracking sequential IO */
 #define RECENT_IO_BITS	7
@@ -292,6 +309,7 @@ struct cached_dev {
 	struct io		io[RECENT_IO];
 	struct hlist_head	io_hash[RECENT_IO + 1];
 	struct list_head	io_lru;
+	spinlock_t		io_lock;
 
 	/* The rest of this all shows up in sysfs */
 	unsigned long		sequential_cutoff;

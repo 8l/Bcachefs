@@ -1262,7 +1262,7 @@ static int cached_dev_attach(struct cached_dev *d, struct cache_set *c)
 	atomic_set(&d->count, 1);
 
 	if (BDEV_STATE(&d->sb) == BDEV_STATE_DIRTY) {
-		atomic_long_set(&d->last_refilled, jiffies ?: 1);
+		atomic_set(&d->has_dirty, 1);
 		atomic_inc(&d->count);
 		bcache_writeback_queue(d);
 	}
@@ -1282,7 +1282,8 @@ static void cached_dev_free(struct kobject *kobj)
 	lockdep_assert_held(&register_lock);
 
 	/* XXX: background writeback could be in progress... */
-	cancel_delayed_work_sync(&d->refill);
+	cancel_delayed_work_sync(&d->refill_dirty);
+	cancel_delayed_work_sync(&d->read_dirty);
 
 	if (!IS_ERR_OR_NULL(d->bdev)) {
 		bdevname(d->bdev, name);
@@ -1356,7 +1357,8 @@ static struct cached_dev *cached_dev_alloc(void)
 	if (bcache_device_init(&d->disk, 512))
 		goto err;
 
-	spin_lock_init(&d->lock);
+	spin_lock_init(&d->dirty_lock);
+	spin_lock_init(&d->io_lock);
 	closure_init_unlocked(&d->sb_write);
 	INIT_WORK(&d->detach, cached_dev_detach_finish);
 

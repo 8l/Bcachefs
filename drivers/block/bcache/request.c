@@ -1003,7 +1003,8 @@ static void request_read(struct cached_dev *d, struct search *s)
 
 static bool should_writeback(struct cached_dev *d, struct bio *bio)
 {
-	return cache_mode(d, bio) == CACHE_MODE_WRITEBACK &&
+	return !atomic_read(&d->closing) &&
+		cache_mode(d, bio) == CACHE_MODE_WRITEBACK &&
 		(d->disk.c->gc_stats.in_use < (bio->bi_rw & REQ_SYNC)
 		 ? CUTOFF_WRITEBACK_SYNC
 		 : CUTOFF_WRITEBACK);
@@ -1243,7 +1244,7 @@ static void check_should_skip(struct cached_dev *d, struct search *s)
 		struct hlist_node *cursor;
 		struct io *i;
 
-		spin_lock(&d->lock);
+		spin_lock(&d->io_lock);
 
 		hlist_for_each_entry(i, cursor, iohash(bio->bi_sector), hash)
 			if (i->last == bio->bi_sector &&
@@ -1266,7 +1267,7 @@ found:
 		hlist_add_head(&i->hash, iohash(i->last));
 		list_move_tail(&i->lru, &d->io_lru);
 
-		spin_unlock(&d->lock);
+		spin_unlock(&d->io_lock);
 	} else {
 		s->task->sequential_io = bio->bi_size;
 

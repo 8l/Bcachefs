@@ -22,7 +22,6 @@ struct search {
 	 *If true, s->bio was a cache hit and is already submitted
 	 */
 	unsigned		cache_hit_done:1;
-	unsigned		lookup_done:1;
 
 	/* IO error returned to s->bio */
 	short			error;

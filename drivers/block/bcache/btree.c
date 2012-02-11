@@ -2141,7 +2141,7 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 
 		n = bio_split_get(bio, sectors, op->d);
 		if (!n)
-			return -ENOMEM;
+			return -EAGAIN;
 
 		if (n == bio)
 			s->cache_hit_done = true;

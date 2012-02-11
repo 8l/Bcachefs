@@ -875,11 +875,6 @@ static void request_read_done_bh(struct closure *cl)
 	struct search *s = container_of(cl, struct search, cl);
 	struct cached_dev *d = container_of(s->op.d, struct cached_dev, disk);
 
-	if (!s->lookup_done) {
-		closure_init(&s->op.cl, &s->cl);
-		continue_at(&s->op.cl, __request_read, bcache_wq);
-	}
-
 	if (s->error)
 		set_closure_fn(cl, request_read_error, bcache_wq);
 	else if (s->cache_bio || verify(d, &s->bio.bio))
@@ -954,15 +949,8 @@ static void __request_read(struct closure *cl)
 
 	int ret = btree_root(search_recurse, op->d->c, op, &reada);
 
-	if (ret == -ENOMEM) {
-		closure_put(&s->cl);
-		closure_return(cl);
-	}
-
 	if (ret == -EAGAIN)
 		continue_at(cl, __request_read, bcache_wq);
-
-	s->lookup_done = true;
 
 	if (!s->cache_hit_done) {
 		if (s->cache_miss)
@@ -1436,15 +1424,8 @@ static void __flash_dev_read(struct closure *cl)
 
 	int ret = btree_root(search_recurse, op->d->c, op, &reada);
 
-	if (ret == -ENOMEM) {
-		closure_put(&s->cl);
-		closure_return(cl);
-	}
-
 	if (ret == -EAGAIN)
 		continue_at(cl, __flash_dev_read, bcache_wq);
-
-	s->lookup_done = true;
 
 	if (!s->cache_hit_done)
 		flash_dev_cache_miss(s, bio, bio_sectors(bio));

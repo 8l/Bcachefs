@@ -536,8 +536,6 @@ struct cache_set {
 	atomic_long_t		cache_read_races;
 	atomic_long_t		writeback_keys_done;
 	atomic_long_t		writeback_keys_failed;
-	atomic_long_t		btree_write_count;
-	atomic_long_t		keys_write_count;
 	unsigned		error_limit;
 	unsigned		error_decay;
 	unsigned		verify:1;
@@ -559,9 +557,6 @@ static inline bool key_merging_disabled(struct cache_set *c)
 }
 
 struct btree_write {
-#ifdef CONFIG_BCACHE_LATENCY_DEBUG
-	unsigned long		wait_time;
-#endif
 	struct closure		*owner;
 	atomic_t		*journal;
 
@@ -659,9 +654,6 @@ struct btree {
 	closure_list_t		wait;
 
 	uint64_t		io_start_time;
-#ifdef CONFIG_BCACHE_LATENCY_DEBUG
-	unsigned long		wait_time;
-#endif
 	struct btree_write	writes[2];
 	struct bio		*bio;
 };

@@ -136,7 +136,6 @@ read_attribute(cache_available_percent);
 read_attribute(written);
 read_attribute(btree_written);
 read_attribute(metadata_written);
-read_attribute(btree_avg_keys_written);
 read_attribute(active_journal_entries);
 
 sysfs_time_stats_attribute(btree_gc,	sec, ms);
@@ -1546,9 +1545,6 @@ lock_root:
 	sysfs_hprint(block_size,		block_bytes(c));
 	sysfs_print(tree_depth,			c->root->level);
 	sysfs_print(root_usage_percent,		root_usage(c));
-	sysfs_print(btree_avg_keys_written,
-		    DIV_SAFE(atomic_long_read(&c->keys_write_count),
-			     atomic_long_read(&c->btree_write_count)));
 
 	sysfs_hprint(btree_cache_size,		cache_size(c));
 	sysfs_print(btree_cache_max_chain,	cache_max_chain(c));
@@ -1637,8 +1633,6 @@ STORE(__cache_set)
 	if (attr == &sysfs_clear_stats) {
 		atomic_long_set(&c->writeback_keys_done,	0);
 		atomic_long_set(&c->writeback_keys_failed,	0);
-		atomic_long_set(&c->btree_write_count,		0);
-		atomic_long_set(&c->keys_write_count,		0);
 
 		memset(&c->gc_stats, 0, sizeof(struct gc_stat));
 		clear_stats(&c->accounting);
@@ -1835,7 +1829,6 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 		sysfs_time_stats_attribute_list(btree_read, ms, us)
 		sysfs_time_stats_attribute_list(try_harder, ms, us)
 
-		&sysfs_btree_avg_keys_written,
 		&sysfs_btree_nodes,
 		&sysfs_btree_used_percent,
 		&sysfs_btree_cache_max_chain,

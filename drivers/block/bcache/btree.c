@@ -210,8 +210,6 @@ void btree_read_work(struct work_struct *w)
 	    bkey_cmp(&b->key, &b->sets[0].end) < 0)
 		goto err;
 
-	pr_latency(b->wait_time, "btree_read");
-
 	smp_wmb(); /* b->nread is our write lock */
 	atomic_set(&b->nread, 1);
 
@@ -313,8 +311,6 @@ static void btree_write_endio(struct bio *bio, int error)
 	if (!atomic_dec_and_test(&b->io))
 		return;
 
-	pr_latency(w->wait_time, "btree write");
-
 	if (!w->nofree)
 		__bio_for_each_segment(bv, b->bio, n, 0)
 			__free_page(bv->bv_page);
@@ -355,8 +351,6 @@ static void __btree_write(struct btree *b)
 	swap(w, b->write);
 	__cancel_delayed_work(&b->work);
 
-	pr_latency(w->wait_time, "btree write");
-	set_wait(w);
 	check_key_order(b, i);
 	BUG_ON(b->written && !i->keys);
 
@@ -390,11 +384,6 @@ static void __btree_write(struct btree *b)
 		closure_wait_event(&b->wait, &wait, atomic_read(&b->io) == -1);
 	}
 
-	if (b->written) {
-		atomic_long_inc(&b->c->btree_write_count);
-		atomic_long_add(i->keys, &b->c->keys_write_count);
-	}
-
 	pr_debug("%s block %i keys %i", pbtree(b), b->written, i->keys);
 
 	BUG_ON(b->sets[b->nsets].data != write_block(b));
@@ -412,7 +401,6 @@ static void btree_write_work(struct work_struct *w)
 	struct btree *b = container_of(to_delayed_work(w), struct btree, work);
 
 	down_write(&b->lock);
-	pr_latency(b->wait_time, "btree_write_work");
 
 	if (b->write)
 		__btree_write(b);
@@ -458,10 +446,6 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 	if (now ||
 	    b->level ||
 	    set_bytes(i) > PAGE_SIZE - 48) {
-#ifdef CONFIG_BCACHE_LATENCY_DEBUG
-		if (!b->write->wait_time)
-			set_wait(b->write);
-#endif
 		if (op && now) {
 			/* Must wait on multiple writes */
 			BUG_ON(b->write->owner);

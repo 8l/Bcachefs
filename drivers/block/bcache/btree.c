@@ -1011,30 +1011,31 @@ void __btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 
 static int btree_gc_mark(struct btree *b, unsigned *keys, struct gc_stat *gc)
 {
-	uint8_t ret = 0;
-	struct bkey *k;
+	uint8_t stale = 0;
+	unsigned last_dev = -1;
+	struct bcache_device *d = NULL;
 
-	for (struct bset_tree *t = b->sets; t <= &b->sets[b->nsets]; t++)
-		btree_bug_on(t->size &&
-			     t->data != write_block(b) &&
-			     bkey_cmp(&b->key, &t->end) < 0,
-			     b, "found short btree key in gc");
+	struct btree_iter iter;
+	btree_iter_init(b, &iter, NULL);
 
 	gc->nodes++;
-	for_each_key_filter(b, k, ptr_bad) {
-		*keys += bkey_u64s(k);
 
-		gc->key_bytes += bkey_u64s(k);
-		gc->nkeys++;
+	while (1) {
+		struct bkey *k = btree_iter_next(&iter);
+		if (!k)
+			break;
 
-		gc->data += KEY_SIZE(k);
-		if (KEY_DIRTY(k))
-			gc->dirty += KEY_SIZE(k);
-	}
+		if (last_dev != KEY_DEV(k)) {
+			last_dev = KEY_DEV(k);
 
-	for_each_key_filter(b, k, ptr_invalid) {
+			d = b->c->devices[last_dev];
+		}
+
+		if (ptr_invalid(b, k))
+			continue;
+
 		for (unsigned i = 0; i < KEY_PTRS(k); i++) {
-			ret = max(ret, ptr_stale(b->c, k, i));
+			stale = max(stale, ptr_stale(b->c, k, i));
 
 			btree_bug_on(gen_after(PTR_BUCKET(b->c, k, i)->last_gc,
 					       PTR_GEN(k, i)),
@@ -1042,9 +1043,30 @@ static int btree_gc_mark(struct btree *b, unsigned *keys, struct gc_stat *gc)
 		}
 
 		btree_mark_key(b, k);
+
+		if (ptr_bad(b, k))
+			continue;
+
+		*keys += bkey_u64s(k);
+
+		gc->key_bytes += bkey_u64s(k);
+		gc->nkeys++;
+
+		gc->data += KEY_SIZE(k);
+		if (KEY_DIRTY(k)) {
+			gc->dirty += KEY_SIZE(k);
+			if (d)
+				d->sectors_dirty_gc += KEY_SIZE(k);
+		}
 	}
 
-	return ret;
+	for (struct bset_tree *t = b->sets; t <= &b->sets[b->nsets]; t++)
+		btree_bug_on(t->size &&
+			     t->data != write_block(b) &&
+			     bkey_cmp(&b->key, &t->end) < 0,
+			     b, "found short btree key in gc");
+
+	return stale;
 }
 
 static struct btree *btree_gc_alloc(struct btree *b, struct bkey *k,
@@ -1379,6 +1401,22 @@ size_t btree_gc_finish(struct cache_set *c)
 		}
 	}
 
+	for (struct bcache_device **d = c->devices;
+	     d < c->devices + c->nr_uuids;
+	     d++)
+		if (*d) {
+			unsigned long last =
+				atomic_long_read(&((*d)->sectors_dirty));
+			long difference = (*d)->sectors_dirty_gc - last;
+
+			pr_debug("sectors dirty off by %li", difference);
+
+			(*d)->sectors_dirty_last += difference;
+
+			atomic_long_set(&((*d)->sectors_dirty),
+					(*d)->sectors_dirty_gc);
+		}
+
 	mutex_unlock(&c->bucket_lock);
 	return available;
 }
@@ -1417,6 +1455,12 @@ static void btree_gc(struct cache_set *c)
 			for_each_bucket(b, ca)
 				if (!atomic_read(&b->pin))
 					b->mark = 0;
+
+		for (struct bcache_device **d = c->devices;
+		     d < c->devices + c->nr_uuids;
+		     d++)
+			if (*d)
+				(*d)->sectors_dirty_gc = 0;
 	}
 	mutex_unlock(&c->bucket_lock);
 
@@ -1555,6 +1599,14 @@ static bool fix_overlapping_extents(struct btree *b,
 				    struct btree_iter *iter,
 				    struct btree_op *op)
 {
+	void subtract_dirty(struct bkey *k, int sectors)
+	{
+		struct bcache_device *d = b->c->devices[KEY_DEV(k)];
+
+		if (KEY_DIRTY(k) && d)
+			atomic_long_sub(sectors, &d->sectors_dirty);
+	}
+
 	while (1) {
 		struct bkey *k = btree_iter_next(iter);
 		if (!k ||
@@ -1597,6 +1649,8 @@ static bool fix_overlapping_extents(struct btree *b,
 			    memcmp(&k->key, &check->key, bkey_bytes(check) - 8))
 				goto wb_failed;
 
+			subtract_dirty(k, KEY_SIZE(k));
+
 			cut_front(check, k);
 			atomic_long_inc(&b->c->writeback_keys_done);
 			return false;
@@ -1612,6 +1666,8 @@ static bool fix_overlapping_extents(struct btree *b,
 			 */
 
 			struct bkey *top;
+
+			subtract_dirty(k, KEY_SIZE(check));
 
 			if (k < write_block(b)->start) {
 				/*
@@ -1641,9 +1697,15 @@ static bool fix_overlapping_extents(struct btree *b,
 			return false;
 		}
 
-		if (bkey_cmp(check, k) < 0)
+		if (bkey_cmp(check, k) < 0) {
+			if (bkey_cmp(check, &START_KEY(k)) > 0)
+				subtract_dirty(k, check->key - KEY_START(k));
+
 			cut_front(check, k);
-		else {
+		} else {
+			if (bkey_cmp(k, &START_KEY(check)) > 0)
+				subtract_dirty(k, k->key - KEY_START(check));
+
 			if (k < write_block(b)->start &&
 			    bkey_cmp(&START_KEY(check), &START_KEY(k)) <= 0)
 				/*

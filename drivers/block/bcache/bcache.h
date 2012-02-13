@@ -212,6 +212,11 @@ struct bcache_device {
 	/* If nonzero, we're closing */
 	atomic_t		closing;
 
+	atomic_long_t		sectors_dirty;
+	unsigned long		sectors_dirty_gc;
+	unsigned long		sectors_dirty_last;
+	int64_t			sectors_dirty_derivative;
+
 	mempool_t		*unaligned_bvec;
 	struct bio_set		*bio_split;
 
@@ -916,7 +921,7 @@ static inline uint8_t gen_after(uint8_t a, uint8_t b)
 
 bool bcache_in_writeback(struct cached_dev *, sector_t, unsigned);
 void bcache_writeback_queue(struct cached_dev *);
-void bcache_writeback_start(struct cached_dev *);
+void bcache_writeback_add(struct cached_dev *, unsigned);
 
 void count_io_errors(struct cache *, int, const char *);
 void bcache_endio(struct cache_set *, struct bio *, int, const char *);

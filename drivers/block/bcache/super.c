@@ -998,6 +998,8 @@ SHOW(__cached_dev)
 	var_printf(writeback_running,	"%i");
 	var_print(writeback_delay);
 	var_print(writeback_percent);
+	sysfs_hprint(dirty_data,
+		     atomic_long_read(&d->disk.sectors_dirty) << 9);
 
 	var_printf(sequential_merge,	"%i");
 	var_hprint(sequential_cutoff);
@@ -1319,6 +1321,7 @@ static struct cached_dev *cached_dev_alloc(void)
 		&sysfs_writeback_running,
 		&sysfs_writeback_delay,
 		&sysfs_writeback_percent,
+		&sysfs_dirty_data,
 		&sysfs_sequential_cutoff,
 		&sysfs_sequential_merge,
 		&sysfs_clear_stats,

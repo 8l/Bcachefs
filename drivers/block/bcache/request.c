@@ -1081,7 +1081,7 @@ skip:		s->cache_bio = s->orig_bio;
 		if (closure_bio_submit(bio, &s->cl, s->op.d->c->bio_split))
 			return_f(&s->op.cl, request_write_resubmit, bcache_wq);
 	} else {
-		bcache_writeback_start(d);
+		bcache_writeback_add(d, bio_sectors(bio));
 		trace_bcache_writeback(s->orig_bio);
 
 		s->cache_bio = bio;

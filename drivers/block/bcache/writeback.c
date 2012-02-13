@@ -198,8 +198,10 @@ void bcache_writeback_queue(struct cached_dev *d)
 	queue_delayed_work(dirty_wq, &d->refill_dirty, 0);
 }
 
-void bcache_writeback_start(struct cached_dev *d)
+void bcache_writeback_add(struct cached_dev *d, unsigned sectors)
 {
+	atomic_long_add(sectors, &d->disk.sectors_dirty);
+
 	if (!atomic_read(&d->has_dirty) &&
 	    !atomic_xchg(&d->has_dirty, 1)) {
 		if (BDEV_STATE(&d->sb) != BDEV_STATE_DIRTY) {

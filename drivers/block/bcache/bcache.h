@@ -293,6 +293,10 @@ struct cached_dev {
 	 */
 	atomic_t		has_dirty;
 
+	uint64_t		next_writeback_io;
+	unsigned		writeback_rate;
+	struct delayed_work	writeback_rate_update;
+
 	/*
 	 * Internal to the writeback code, so refill_dirty() and read_dirty()
 	 * can keep track of where they're at.
@@ -436,6 +440,7 @@ struct cache_set {
 
 	struct bcache_device	**devices;
 	struct list_head	cached_devs;
+	uint64_t		cached_dev_sectors;
 
 	struct closure_with_waitlist sb_write;
 

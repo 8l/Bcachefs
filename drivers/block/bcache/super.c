@@ -207,6 +207,7 @@ rw_attribute(writeback_metadata);
 rw_attribute(writeback_running);
 rw_attribute(writeback_percent);
 rw_attribute(writeback_delay);
+rw_attribute(writeback_rate);
 rw_attribute(synchronous);
 rw_attribute(async_journal);
 rw_attribute(discard);
@@ -998,6 +999,7 @@ SHOW(__cached_dev)
 	var_printf(writeback_running,	"%i");
 	var_print(writeback_delay);
 	var_print(writeback_percent);
+	var_print(writeback_rate);
 	sysfs_hprint(dirty_data,
 		     atomic_long_read(&d->disk.sectors_dirty) << 9);
 
@@ -1036,6 +1038,7 @@ STORE(__cached_dev)
 	d_strtoul(writeback_metadata);
 	d_strtoul(writeback_running);
 	d_strtoul(writeback_delay);
+	sysfs_strtoul_clamp(writeback_rate, d->writeback_rate, 1, 1000000);
 	sysfs_strtoul_clamp(writeback_percent, d->writeback_percent, 0, 40);
 
 	d_strtoul(sequential_merge);
@@ -1096,16 +1099,31 @@ STORE(__cached_dev)
 
 STORE(cached_dev)
 {
+	struct cached_dev *dc = container_of(kobj, struct cached_dev,
+					     disk.kobj);
+
 	mutex_lock(&register_lock);
 	size = __cached_dev_store(kobj, attr, buf, size);
 
-	if (attr == &sysfs_writeback_running ||
-	    attr == &sysfs_writeback_percent)
-		bcache_writeback_queue(container_of(kobj, struct cached_dev,
-						    disk.kobj));
+	if (attr == &sysfs_writeback_running)
+		bcache_writeback_queue(dc);
+
+	if (attr == &sysfs_writeback_percent)
+		schedule_delayed_work(&dc->writeback_rate_update, 30 * HZ);
 
 	mutex_unlock(&register_lock);
 	return size;
+}
+
+static void calc_cached_dev_sectors(struct cache_set *c)
+{
+	uint64_t sectors = 0;
+	struct cached_dev *dc;
+
+	list_for_each_entry(dc, &c->cached_devs, list)
+		sectors += bdev_sectors(dc->bdev);
+
+	c->cached_dev_sectors = sectors;
 }
 
 static void cached_dev_run(struct cached_dev *dc)
@@ -1258,6 +1276,7 @@ static int cached_dev_attach(struct cached_dev *d, struct cache_set *c)
 
 	bcache_device_attach(&d->disk, c, u - c->uuids);
 	list_move(&d->list, &c->cached_devs);
+	calc_cached_dev_sectors(c);
 
 	smp_wmb();
 	/* d->c must be set before d->count != 0 */
@@ -1321,6 +1340,7 @@ static struct cached_dev *cached_dev_alloc(void)
 		&sysfs_writeback_running,
 		&sysfs_writeback_delay,
 		&sysfs_writeback_percent,
+		&sysfs_writeback_rate,
 		&sysfs_dirty_data,
 		&sysfs_sequential_cutoff,
 		&sysfs_sequential_merge,

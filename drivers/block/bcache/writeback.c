@@ -14,7 +14,8 @@ static void dirty_init(struct dirty *w)
 
 	bio_init(bio);
 	bio_get(bio);
-	bio_set_prio(bio, IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0));
+	if (!w->io->d->writeback_percent)
+		bio_set_prio(bio, IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0));
 
 	bio->bi_size		= KEY_SIZE(&w->key) << 9;
 	bio->bi_max_vecs	= DIV_ROUND_UP(KEY_SIZE(&w->key), PAGE_SECTORS);
@@ -117,8 +118,7 @@ static void refill_dirty(struct work_struct *work)
 	op.d = &dc->disk;
 
 	if (!atomic_read(&dc->closing) &&
-	    (!dc->writeback_running ||
-	     dc->disk.c->gc_stats.in_use < dc->writeback_percent))
+	    !dc->writeback_running)
 		return;
 
 	down_write(&dc->writeback_lock);
@@ -169,6 +169,8 @@ static void refill_dirty(struct work_struct *work)
 	}
 
 	up_write(&dc->writeback_lock);
+
+	dc->next_writeback_io = local_clock();
 	read_dirty(dc);
 }
 
@@ -213,8 +215,97 @@ void bcache_writeback_add(struct cached_dev *d, unsigned sectors)
 		atomic_inc(&d->count);
 		queue_delayed_work(dirty_wq, &d->refill_dirty,
 				   d->writeback_delay * HZ);
+
+		if (d->writeback_percent)
+			schedule_delayed_work(&d->writeback_rate_update,
+					      30 * HZ);
 	}
 }
+
+static void __update_writeback_rate(struct cached_dev *dc)
+{
+	struct cache_set *c = dc->disk.c;
+	uint64_t cache_sectors = c->nbuckets * c->sb.bucket_size;
+	uint64_t cache_dirty_target =
+		(cache_sectors * dc->writeback_percent) / 100;
+
+	int64_t target = (cache_dirty_target * bdev_sectors(dc->bdev)) /
+		c->cached_dev_sectors;
+
+	/* PD controller */
+	const unsigned d_term = 4;
+	const unsigned p_term_inverse = 6;
+
+	int64_t error, change;
+	int64_t rate = dc->writeback_rate;
+	int64_t dirty = atomic_long_read(&dc->disk.sectors_dirty);
+	int64_t derivative = dirty - dc->disk.sectors_dirty_last;
+
+	/* Avoid a divide by zero */
+	if (!target)
+		goto out;
+
+	dc->disk.sectors_dirty_last = dirty;
+
+	derivative <<= d_term;
+	derivative = clamp(derivative, -dirty, dirty);
+
+	derivative = ewma_add(dc->disk.sectors_dirty_derivative,
+			      derivative, 8, 0);
+
+	error = dirty + derivative - target;
+
+	change = (error << 8) / target;
+
+	rate += (rate * change) >> (p_term_inverse + 8);
+
+	if (rate > dc->writeback_rate &&
+	    time_after64(local_clock(),
+			 dc->next_writeback_io + 10 * NSEC_PER_MSEC))
+		rate = dc->writeback_rate;
+
+	pr_debug("%u: %lli/%lli d %lli, error %lli, rate was %u now %lli",
+		 dc->disk.id, dirty, target, derivative, error,
+		 dc->writeback_rate, rate);
+
+	dc->writeback_rate = clamp_t(int64_t, rate, 1, NSEC_PER_MSEC);
+out:
+	schedule_delayed_work(&dc->writeback_rate_update, 30 * HZ);
+}
+
+static void update_writeback_rate(struct work_struct *work)
+{
+	struct cached_dev *dc = container_of(to_delayed_work(work),
+					     struct cached_dev,
+					     writeback_rate_update);
+
+	down_read(&dc->writeback_lock);
+
+	if (atomic_read(&dc->has_dirty) &&
+	    dc->writeback_percent)
+		__update_writeback_rate(dc);
+
+	up_read(&dc->writeback_lock);
+}
+
+static unsigned writeback_delay(struct cached_dev *dc, unsigned sectors)
+{
+	uint64_t now = local_clock();
+
+	if (atomic_read(&dc->closing) ||
+	    !dc->writeback_percent)
+		return 0;
+
+	/* writeback_rate = sectors per 10 ms */
+	dc->next_writeback_io += div_u64(sectors * 10000000ULL,
+					 dc->writeback_rate);
+
+	return time_after64(dc->next_writeback_io, now)
+		? (dc->next_writeback_io - now) / (NSEC_PER_SEC / HZ)
+		: 0;
+}
+
+/* Background writeback - IO loop */
 
 static void write_dirty_finish(struct closure *cl)
 {
@@ -288,6 +379,7 @@ static void read_dirty_endio(struct bio *bio, int error)
 
 static void read_dirty(struct cached_dev *dc)
 {
+	unsigned delay = writeback_delay(dc, 0);
 	struct dirty *w;
 	struct dirty_io *io;
 
@@ -303,6 +395,13 @@ static void read_dirty(struct cached_dev *dc)
 			break;
 
 		BUG_ON(ptr_stale(dc->disk.c, &w->key, 0));
+
+		if (delay > 0 &&
+		    (KEY_START(&w->key) != dc->last_read ||
+		     jiffies_to_msecs(delay) > 50)) {
+			queue_delayed_work(dirty_wq, &dc->read_dirty, delay);
+			break;
+		}
 
 		dc->last_read	= w->key.key;
 		w->io		= ERR_PTR(-EINTR);
@@ -333,7 +432,10 @@ static void read_dirty(struct cached_dev *dc)
 
 		trace_bcache_read_dirty(&w->io->bio);
 		closure_bio_submit(&w->io->bio, &w->io->cl, dc->disk.bio_split);
-		if (atomic_inc_return(&dc->in_flight) >= 8)
+
+		delay = writeback_delay(dc, KEY_SIZE(&w->key));
+
+		if (atomic_inc_return(&dc->in_flight) >= 128)
 			return;
 
 		spin_lock(&dc->dirty_lock);
@@ -373,6 +475,10 @@ void bcache_writeback_init_cached_dev(struct cached_dev *d)
 	d->writeback_metadata		= true;
 	d->writeback_running		= true;
 	d->writeback_delay		= 30;
+	d->writeback_rate		= 1024;
+
+	INIT_DELAYED_WORK(&d->writeback_rate_update, update_writeback_rate);
+	schedule_delayed_work(&d->writeback_rate_update, 30 * HZ);
 }
 
 void bcache_writeback_exit(void)

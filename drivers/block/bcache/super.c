@@ -1736,19 +1736,6 @@ static void cache_set_free(struct closure *cl)
 
 	closure_sync(&op.cl);
 
-	/*
-	 * bcache_journal_wait() calls journal_try_write() - should do the wait
-	 * without the write if unregistering because of an error
-	 *
-	 * XXX: doesn't handle an in flight journal write
-	 */
-	if (c->journal.cur)
-		bcache_journal_meta(c, &op.cl);
-
-	closure_sync(&op.cl);
-
-	cancel_work_sync(&c->journal.work);
-
 	bcache_open_buckets_free(c);
 	bcache_btree_cache_free(c);
 	bcache_journal_free(c);

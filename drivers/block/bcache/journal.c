@@ -472,22 +472,33 @@ void bcache_journal_next(struct journal *j)
 static void journal_write_endio(struct bio *bio, int error)
 {
 	struct journal_write *w = bio->bi_private;
-	bio_put(bio);
 
 	cache_set_err_on(error, w->c, "journal io error");
 
-	if (!atomic_dec_and_test(&w->c->journal.io))
-		return;
-
-	__closure_wake_up(&w->wait);
-	/* atomic_set() unlocks this journal_write */
-	smp_mb();
-	atomic_set(&w->c->journal.io, -1);
-	schedule_work(&w->c->journal.work);
+	bio_put(bio);
+	closure_put(&w->c->journal.io);
 }
 
-static void journal_write(struct cache_set *c)
+static void journal_write(struct closure *);
+
+static void journal_write_done(struct closure *cl)
 {
+	struct journal *j = container_of(cl, struct journal, io);
+	struct journal_write *w = (j->cur == j->w)
+		? &j->w[1]
+		: &j->w[0];
+
+	__closure_wake_up(&w->wait);
+
+	if (j->cur->need_write)
+		continue_at(cl, journal_write, system_wq);
+	else
+		closure_return(cl);
+}
+
+static void journal_write_unlocked(struct closure *cl)
+{
+	struct cache_set *c = container_of(cl, struct cache_set, journal.io);
 	struct cache *ca;
 	struct journal_write *w = c->journal.cur;
 	struct bkey *k = &c->journal.key;
@@ -496,6 +507,17 @@ static void journal_write(struct cache_set *c)
 	struct bio *bio;
 	struct bio_list list;
 	bio_list_init(&list);
+
+	if (!w->need_write) {
+		spin_unlock(&c->journal.lock);
+		closure_return(cl);
+	} else if (journal_full(&c->journal)) {
+		journal_reclaim(c);
+		spin_unlock(&c->journal.lock);
+
+		btree_flush_write(c);
+		continue_at(cl, journal_write, system_wq);
+	}
 
 	c->journal.blocks_free -= set_blocks(w->data, c);
 
@@ -528,7 +550,6 @@ static void journal_write(struct cache_set *c)
 		bio->bi_private = w;
 		bio_map(bio, w->data);
 
-		atomic_inc(&c->journal.io);
 		trace_bcache_journal_write(bio);
 		bio_list_add(&list, bio);
 
@@ -544,38 +565,33 @@ static void journal_write(struct cache_set *c)
 	spin_unlock(&c->journal.lock);
 
 	while ((bio = bio_list_pop(&list)))
-		bio_submit_split(bio, &c->journal.io, c->bio_split);
+		closure_bio_submit(bio, cl, c->bio_split);
+
+	continue_at(cl, journal_write_done, NULL);
+}
+
+static void journal_write(struct closure *cl)
+{
+	struct cache_set *c = container_of(cl, struct cache_set, journal.io);
+
+	spin_lock(&c->journal.lock);
+	journal_write_unlocked(cl);
 }
 
 static void __journal_try_write(struct cache_set *c, bool noflush)
 {
-	struct journal_write *w = c->journal.cur;
+	struct closure *cl = &c->journal.io;
 
-	if (!w->need_write)
+	if (!closure_trylock(cl, &c->cl))
 		spin_unlock(&c->journal.lock);
-	else if (journal_full(&c->journal)) {
-		journal_reclaim(c);
+	else if (noflush && journal_full(&c->journal)) {
 		spin_unlock(&c->journal.lock);
-
-		if (!noflush)
-			btree_flush_write(c);
-		schedule_work(&c->journal.work);
-	} else if (atomic_cmpxchg(&c->journal.io, -1, 0) == -1)
-		journal_write(c);
-	else
-		spin_unlock(&c->journal.lock);
+		continue_at(cl, journal_write, system_wq);
+	} else
+		journal_write_unlocked(cl);
 }
 
 #define journal_try_write(c)	__journal_try_write(c, false)
-
-static void journal_work(struct work_struct *work)
-{
-	struct journal *j = container_of(work, struct journal, work);
-	struct cache_set *c = container_of(j, struct cache_set, journal);
-
-	spin_lock(&c->journal.lock);
-	journal_try_write(c);
-}
 
 void bcache_journal_meta(struct cache_set *c, struct closure *cl)
 {
@@ -676,8 +692,7 @@ int bcache_journal_alloc(struct cache_set *c)
 {
 	struct journal *j = &c->journal;
 
-	INIT_WORK(&j->work, journal_work);
-	atomic_set(&j->io, -1);
+	closure_init_unlocked(&j->io);
 	spin_lock_init(&j->lock);
 
 	j->w[0].c = c;

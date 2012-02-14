@@ -62,11 +62,10 @@ struct journal_write {
 };
 
 struct journal {
-	struct work_struct	work;
 	spinlock_t		lock;
 	/* used when waiting because the journal was full */
 	closure_list_t		wait;
-	atomic_t		io;
+	struct closure		io;
 
 	unsigned		blocks_free;
 	uint64_t		seq;

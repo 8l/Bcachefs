@@ -1609,9 +1609,20 @@ SHOW(__cache_set)
 	{
 		unsigned bytes = 0;
 		struct bkey *k;
+		struct btree *b;
+		goto lock_root;
 
-		for_each_key_filter(c->root, k, ptr_bad)
+		do {
+			rw_unlock(false, b);
+lock_root:
+			b = c->root;
+			rw_lock(false, b, b->level);
+		} while (b != c->root);
+
+		for_each_key_filter(b, k, ptr_bad)
 			bytes += bkey_bytes(k);
+
+		rw_unlock(false, b);
 
 		return (bytes * 100) / btree_bytes(c);
 	}

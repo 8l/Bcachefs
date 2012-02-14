@@ -975,7 +975,7 @@ static void request_read(struct cached_dev *d, struct search *s)
 
 static bool should_writeback(struct cached_dev *d, struct bio *bio)
 {
-	return !atomic_read(&d->closing) &&
+	return !atomic_read(&d->detaching) &&
 		cache_mode(d, bio) == CACHE_MODE_WRITEBACK &&
 		(d->disk.c->gc_stats.in_use < (bio->bi_rw & REQ_SYNC)
 		 ? CUTOFF_WRITEBACK_SYNC
@@ -1176,7 +1176,7 @@ static void check_should_skip(struct cached_dev *d, struct search *s)
 	int cutoff = bcache_get_congested(c);
 	unsigned mode = cache_mode(d, bio);
 
-	if (atomic_read(&d->closing) ||
+	if (atomic_read(&d->detaching) ||
 	    c->gc_stats.in_use > CUTOFF_CACHE_ADD ||
 	    (bio->bi_rw & (1 << BIO_RW_DISCARD)))
 		goto skip;

@@ -117,7 +117,7 @@ static void refill_dirty(struct work_struct *work)
 	btree_op_init_stack(&op);
 	op.d = &dc->disk;
 
-	if (!atomic_read(&dc->closing) &&
+	if (!atomic_read(&dc->detaching) &&
 	    !dc->writeback_running)
 		return;
 
@@ -292,7 +292,7 @@ static unsigned writeback_delay(struct cached_dev *dc, unsigned sectors)
 {
 	uint64_t now = local_clock();
 
-	if (atomic_read(&dc->closing) ||
+	if (atomic_read(&dc->detaching) ||
 	    !dc->writeback_percent)
 		return 0;
 

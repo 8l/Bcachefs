@@ -208,11 +208,15 @@ struct cached_dev {
 
 	/* Refcount on the cache set. Always nonzero when we're caching. */
 	atomic_t		count;
-	atomic_t		unregister;
 	struct work_struct	detach;
 
 	/* If nonzero, we're disabling caching */
-	atomic_t		closing;
+	atomic_t		detaching;
+
+	/*
+	 * Device might not be running if it's dirty and the cache set hasn't
+	 * showed up yet.
+	 */
 	atomic_t		running;
 
 	mempool_t		*bio_passthrough;

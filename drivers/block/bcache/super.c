@@ -119,6 +119,7 @@ static void cache_set_close(struct cache_set *);
 write_attribute(attach);
 write_attribute(detach);
 write_attribute(unregister);
+write_attribute(stop);
 write_attribute(clear_stats);
 write_attribute(trigger_gc);
 write_attribute(prune_cache);
@@ -965,7 +966,7 @@ STORE(__cached_dev)
 		cached_dev_detach(d);
 
 	/* XXX: this looks sketchy as hell */
-	if (attr == &sysfs_unregister &&
+	if (attr == &sysfs_stop &&
 	    !atomic_xchg(&d->unregister, 1))
 		kobject_put(&d->disk.kobj);
 
@@ -1037,7 +1038,7 @@ void cached_dev_detach_finish(struct work_struct *w)
 
 	mutex_lock(&register_lock);
 
-	BUG_ON(!atomic_read(&d->closing));
+	BUG_ON(!atomic_read(&d->detaching));
 	BUG_ON(atomic_read(&d->count));
 
 	memset(&d->sb.set_uuid, 0, 16);
@@ -1056,7 +1057,7 @@ void cached_dev_detach_finish(struct work_struct *w)
 	sysfs_remove_link(&d->disk.kobj, "cache");
 
 	list_move(&d->list, &uncached_devices);
-	atomic_set(&d->closing, 0);
+	atomic_set(&d->detaching, 0);
 	bcache_device_detach(&d->disk);
 
 	printk(KERN_DEBUG "bcache: Caching disabled for %s\n",
@@ -1069,7 +1070,7 @@ static void cached_dev_detach(struct cached_dev *d)
 {
 	lockdep_assert_held(&register_lock);
 
-	if (atomic_xchg(&d->closing, 1))
+	if (atomic_xchg(&d->detaching, 1))
 		return;
 
 	bcache_writeback_queue(d);
@@ -1205,9 +1206,7 @@ static struct cached_dev *cached_dev_alloc(unsigned block_size)
 	static struct attribute *cached_dev_files[] = {
 		&sysfs_attach,
 		&sysfs_detach,
-		/* Not ready yet
-		&sysfs_unregister,
-		*/
+		&sysfs_stop,
 #if 0
 		&sysfs_data_csum,
 #endif

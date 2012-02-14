@@ -910,7 +910,7 @@ int pop_bucket_set(struct cache_set *, uint16_t,
 
 bool cache_set_error(struct cache_set *, const char *, ...);
 
-void prio_write(struct cache *, struct closure *);
+void prio_write(struct cache *);
 void write_bdev_super(struct cached_dev *, struct closure *);
 
 extern struct workqueue_struct *bcache_wq;

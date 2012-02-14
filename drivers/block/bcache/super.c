@@ -675,20 +675,17 @@ static void prio_write_bucket(struct closure *cl)
 		    : prio_write_bucket, system_wq);
 }
 
-void prio_write(struct cache *c, struct closure *cl)
+void prio_write(struct cache *c)
 {
 	lockdep_assert_held(&c->set->bucket_lock);
 	BUG_ON(atomic_read(&c->prio_written));
 	BUG_ON(c->prio_alloc != prio_buckets(c));
 
-	if (!cl)
-		cl = &c->set->cl;
+	closure_init(&c->prio, &c->set->cl);
 
 	for (struct bucket *b = c->buckets;
 	     b < c->buckets + c->sb.nbuckets; b++)
 		b->disk_gen = b->gen;
-
-	closure_init(&c->prio, cl);
 
 	c->prio_write = 0;
 	c->disk_buckets->seq++;
@@ -2081,11 +2078,16 @@ static void run_cache_set(struct cache_set *c)
 		mutex_lock(&c->bucket_lock);
 		for_each_cache(ca, c) {
 			free_some_buckets(ca);
-			prio_write(ca, &op.cl);
+			prio_write(ca);
 		}
 		mutex_unlock(&c->bucket_lock);
 
-		closure_sync(&op.cl);
+		/*
+		 * Wait for prio_write() to finish, so the SET_CACHE_SYNC()
+		 * doesn't race
+		 */
+		closure_sync(&c->cl);
+
 		bcache_btree_set_root(c->root);
 		rw_unlock(true, c->root);
 

@@ -487,7 +487,7 @@ void free_some_buckets(struct cache *c)
 
 	if (!fifo_empty(&c->free_inc) ||
 	    c->need_save_prio > 64)
-		prio_write(c, NULL);
+		prio_write(c);
 }
 
 static long pop_bucket(struct cache *c, uint16_t priority, struct closure *cl)

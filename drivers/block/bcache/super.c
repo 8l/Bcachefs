@@ -1742,16 +1742,6 @@ static void cache_set_free(struct closure *cl)
 		if (b->write)
 			btree_write(b, true, &op);
 
-	/*
-	 * The if (ca) is a hack - when we finish multiple cache device support
-	 * we'll need a more general solution.
-	 */
-	for_each_cache(ca, c)
-		if (ca)
-			closure_wait_event(&c->bucket_wait, &op.cl,
-				atomic_read(&ca->prio_written) >= 0 &&
-				!atomic_read(&ca->discards_pin));
-
 	closure_sync(&op.cl);
 
 	/*

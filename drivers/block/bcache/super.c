@@ -112,6 +112,7 @@ struct workqueue_struct *bcache_wq;
 static void cached_dev_run(struct cached_dev *);
 static int cached_dev_attach(struct cached_dev *, struct cache_set *);
 static void cached_dev_detach(struct cached_dev *);
+static void cache_set_close(struct cache_set *);
 
 #define BTREE_MAX_PAGES		(256 * 1024 / PAGE_SIZE)
 
@@ -370,12 +371,12 @@ static void write_super_endio(struct bio *bio, int error)
 	closure_put(&c->set->sb_write.cl);
 }
 
-void bcache_write_super(struct cache_set *c, struct closure *parent)
+static void bcache_write_super(struct cache_set *c)
 {
 	struct closure *cl = &c->sb_write.cl;
 	struct cache *ca;
 
-	closure_lock(&c->sb_write, parent);
+	closure_lock(&c->sb_write, &c->cl);
 
 	c->sb.seq++;
 
@@ -680,6 +681,9 @@ void prio_write(struct cache *c, struct closure *cl)
 	BUG_ON(atomic_read(&c->prio_written));
 	BUG_ON(c->prio_alloc != prio_buckets(c));
 
+	if (!cl)
+		cl = &c->set->cl;
+
 	for (struct bucket *b = c->buckets;
 	     b < c->buckets + c->sb.nbuckets; b++)
 		b->disk_gen = b->gen;
@@ -776,16 +780,33 @@ static const struct block_device_operations bcache_ops = {
 	.owner		= THIS_MODULE,
 };
 
+static void bcache_device_detach(struct bcache_device *d)
+{
+	d->c->devices[d->id] = NULL;
+	closure_put(&d->c->caching);
+	d->c = NULL;
+}
+
+static void bcache_device_attach(struct bcache_device *d, struct cache_set *c,
+				 unsigned id)
+{
+	BUG_ON(atomic_read(&c->closing));
+
+	d->id = id;
+	d->c = c;
+	c->devices[id] = d;
+
+	closure_get(&c->caching);
+}
+
 static void bcache_device_free(struct bcache_device *d)
 {
 	char name[BDEVNAME_SIZE] = "(unknown)";
 
 	lockdep_assert_held(&register_lock);
 
-	if (d->c) {
-		d->c->devices[d->id] = NULL;
-		kobject_put(&d->c->kobj);
-	}
+	if (d->c)
+		bcache_device_detach(d);
 
 	if (d->unaligned_bvec)
 		mempool_destroy(d->unaligned_bvec);
@@ -834,16 +855,6 @@ static int bcache_device_init(struct bcache_device *d, unsigned block_size)
 	set_bit(QUEUE_FLAG_DISCARD,	&d->disk->queue->queue_flags);
 
 	return 0;
-}
-
-static void bcache_device_attach(struct bcache_device *d, struct cache_set *c,
-				 unsigned id)
-{
-	d->id = id;
-	d->c = c;
-	c->devices[id] = d;
-
-	kobject_get(&c->kobj);
 }
 
 /* Cached device */
@@ -1048,8 +1059,7 @@ void cached_dev_detach_finish(struct work_struct *w)
 
 	list_move(&d->list, &uncached_devices);
 	atomic_set(&d->closing, 0);
-	kobject_put(&d->disk.c->kobj);
-	d->disk.c = NULL;
+	bcache_device_detach(&d->disk);
 
 	printk(KERN_DEBUG "bcache: Caching disabled for %s\n",
 	       bdevname(d->bdev, buf));
@@ -1072,12 +1082,13 @@ static int cached_dev_attach(struct cached_dev *d, struct cache_set *c)
 {
 	uint32_t rtime = cpu_to_le32(get_seconds());
 	struct uuid_entry *u;
-	struct closure cl;
 	const char *msg = "looked up";
 	char buf[BDEVNAME_SIZE];
-	bdevname(d->bdev, buf);
+	struct closure cl;
 
+	bdevname(d->bdev, buf);
 	closure_init_stack(&cl);
+
 	if (d->disk.c ||
 	    atomic_read(&c->closing) ||
 	    memcmp(d->sb.set_uuid, c->sb.set_uuid, 16))
@@ -1430,7 +1441,12 @@ static int flash_devs_run(struct cache_set *c)
 
 static int flash_dev_create(struct cache_set *c, uint64_t size)
 {
-	struct uuid_entry *u = uuid_find_empty(c);
+	struct uuid_entry *u;
+
+	if (atomic_read(&c->closing))
+		return -EINTR;
+
+	u = uuid_find_empty(c);
 	if (!u) {
 		err_printk("Can't create volume, no room for UUID\n");
 		return -EINVAL;
@@ -1586,16 +1602,15 @@ STORE(__cache_set)
 	struct closure cl;
 	closure_init_stack(&cl);
 
-	if (attr == &sysfs_unregister &&
-	    !atomic_xchg(&c->closing, 1))
-		schedule_work(&c->unregister);
+	if (attr == &sysfs_unregister)
+		cache_set_close(c);
 
 	if (attr == &sysfs_synchronous) {
 		bool sync = strtoul_or_return(buf);
 
 		if (sync != CACHE_SYNC(&c->sb)) {
 			SET_CACHE_SYNC(&c->sb, sync);
-			bcache_write_super(c, NULL);
+			bcache_write_super(c);
 		}
 	}
 
@@ -1604,7 +1619,7 @@ STORE(__cache_set)
 
 		if (sync != CACHE_ASYNC_JOURNAL(&c->sb)) {
 			SET_CACHE_ASYNC_JOURNAL(&c->sb, sync);
-			bcache_write_super(c, NULL);
+			bcache_write_super(c);
 		}
 	}
 
@@ -1675,7 +1690,7 @@ bool cache_set_error(struct cache_set *c, const char *m, ...)
 {
 	va_list args;
 
-	if (atomic_xchg(&c->closing, 1))
+	if (atomic_read(&c->closing))
 		return false;
 
 	/* XXX: we can be called from atomic context
@@ -1690,20 +1705,25 @@ bool cache_set_error(struct cache_set *c, const char *m, ...)
 
 	printk(", disabling caching\n");
 
-	queue_work(bcache_wq, &c->unregister);
+	cache_set_close(c);
 	return true;
 }
 
-static void cache_set_free(struct kobject *kobj)
+static void __cache_set_free(struct kobject *kobj)
 {
 	struct cache_set *c = container_of(kobj, struct cache_set, kobj);
+	kfree(c);
+	module_put(THIS_MODULE);
+}
+
+static void cache_set_free(struct closure *cl)
+{
+	struct cache_set *c = container_of(cl, struct cache_set, cl);
 	struct cache *ca;
 	struct btree *b;
 
 	struct btree_op op;
 	btree_op_init_stack(&op);
-
-	lockdep_assert_held(&register_lock);
 
 	/* Wait for/cancel any pending gc: we take gc_lock so that gc can't
 	 * requeue itself while we're canceling the work
@@ -1767,17 +1787,20 @@ static void cache_set_free(struct kobject *kobj)
 		mempool_destroy(c->search);
 	kfree(c->devices);
 
+	mutex_lock(&register_lock);
+	list_del(&c->list);
+	mutex_unlock(&register_lock);
+
 	printk(KERN_INFO "bcache: Cache set %pU unregistered\n",
 	       c->sb.set_uuid);
 
-	list_del(&c->list);
-	kfree(c);
-	module_put(THIS_MODULE);
+	closure_debug_destroy(&c->cl);
+	kobject_put(&c->kobj);
 }
 
-static void cache_set_unregister(struct work_struct *w)
+static void cache_set_unregister(struct closure *cl)
 {
-	struct cache_set *c = container_of(w, struct cache_set, unregister);
+	struct cache_set *c = container_of(cl, struct cache_set, caching);
 	struct cached_dev *d, *t;
 
 	kobject_del(&c->kobj);
@@ -1791,9 +1814,15 @@ static void cache_set_unregister(struct work_struct *w)
 	list_for_each_entry_safe(d, t, &c->cached_devs, list)
 		cached_dev_detach(d);
 
-	kobject_put(&c->kobj);
-
 	mutex_unlock(&register_lock);
+
+	closure_return(cl);
+}
+
+static void cache_set_close(struct cache_set *c)
+{
+	if (!atomic_xchg(&c->closing, 1))
+		closure_queue(&c->caching);
 }
 
 #define alloc_bucket_pages(gfp, c)			\
@@ -1825,7 +1854,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 		&sysfs_clear_stats,
 		NULL
 	};
-	KTYPE(cache_set, cache_set_free);
+	KTYPE(cache_set, __cache_set_free);
 
 	static struct attribute *cache_set_internal_files[] = {
 		&sysfs_active_journal_entries,
@@ -1864,6 +1893,16 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 		return NULL;
 
 	__module_get(THIS_MODULE);
+	closure_init(&c->cl, NULL);
+	set_closure_fn(&c->cl, cache_set_free, system_wq);
+
+	closure_init(&c->caching, &c->cl);
+	set_closure_fn(&c->caching, cache_set_unregister, system_wq);
+
+	/* Maybe create continue_at_noreturn() and use it here? */
+	closure_set_stopped(&c->cl);
+	closure_put(&c->cl);
+
 	kobject_init(&c->kobj, &cache_set_obj);
 	kobject_init(&c->internal, &cache_set_internal_obj);
 
@@ -1891,7 +1930,6 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	closure_init_unlocked(&c->sb_write);
 	spin_lock_init(&c->btree_read_time_lock);
 
-	INIT_WORK(&c->unregister, cache_set_unregister);
 	INIT_LIST_HEAD(&c->list);
 	INIT_LIST_HEAD(&c->cached_devs);
 	INIT_LIST_HEAD(&c->btree_cache);
@@ -1927,7 +1965,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 
 	return c;
 err:
-	cache_set_free(&c->kobj);
+	cache_set_close(c);
 	return NULL;
 }
 
@@ -2065,7 +2103,7 @@ static void run_cache_set(struct cache_set *c)
 
 	closure_sync(&op.cl);
 	c->sb.last_mount = get_seconds();
-	bcache_write_super(c, NULL);
+	bcache_write_super(c);
 
 	list_for_each_entry_safe(d, t, &uncached_devices, list)
 		cached_dev_attach(d, c);
@@ -2074,6 +2112,7 @@ static void run_cache_set(struct cache_set *c)
 
 	return;
 err:
+	closure_sync(&op.cl);
 	/* XXX: test this, it's broken */
 	cache_set_error(c, err);
 }
@@ -2141,7 +2180,7 @@ found:
 
 	return NULL;
 err:
-	schedule_work(&c->unregister);
+	cache_set_close(c);
 	return err;
 }
 
@@ -2255,7 +2294,7 @@ STORE(__cache)
 
 		if (v != CACHE_DISCARD(&c->sb)) {
 			SET_CACHE_DISCARD(&c->sb, v);
-			bcache_write_super(c->set, NULL);
+			bcache_write_super(c->set);
 		}
 	}
 
@@ -2270,7 +2309,7 @@ STORE(__cache)
 			SET_CACHE_REPLACEMENT(&c->sb, v);
 			mutex_unlock(&c->set->bucket_lock);
 
-			bcache_write_super(c->set, NULL);
+			bcache_write_super(c->set);
 		}
 	}
 
@@ -2315,8 +2354,6 @@ STORE_LOCKED(cache)
 static void cache_free(struct kobject *kobj)
 {
 	struct cache *c = container_of(kobj, struct cache, kobj);
-
-	lockdep_assert_held(&register_lock);
 
 	if (c->set)
 		c->set->cache[c->sb.nr_this_dev] = NULL;

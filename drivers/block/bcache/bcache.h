@@ -373,22 +373,24 @@ struct gc_stat {
 };
 
 struct cache_set {
+	struct closure		cl;
+
 	struct list_head	list;
+	struct kobject		kobj;
+	struct kobject		internal;
+	struct cache_accounting accounting;
+	atomic_t		closing;
+
 	struct cache_sb		sb;
 
 	struct cache		*cache[MAX_CACHES_PER_SET];
 	struct cache		*cache_by_alloc[MAX_CACHES_PER_SET];
 	int			caches_loaded;
 
-	atomic_t		closing;
-	struct kobject		kobj;
-	struct kobject		internal;
-	struct cache_accounting accounting;
-	struct work_struct	unregister;
-
 	struct bcache_device	**devices;
 	struct list_head	cached_devs;
 	uint64_t		cached_dev_sectors;
+	struct closure		caching;
 
 	struct closure_with_waitlist sb_write;
 
@@ -910,7 +912,6 @@ bool cache_set_error(struct cache_set *, const char *, ...);
 
 void prio_write(struct cache *, struct closure *);
 void write_bdev_super(struct cached_dev *, struct closure *);
-void bcache_write_super(struct cache_set *, struct closure *);
 
 extern struct workqueue_struct *bcache_wq;
 extern const char * const bcache_cache_modes[];

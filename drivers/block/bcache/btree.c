@@ -1340,7 +1340,7 @@ static int btree_gc_root(struct btree *b, struct btree_op *op,
 	int ret = 0, stale = btree_gc_mark(b, &keys, gc);
 
 	if (b->level || stale > 10)
-		n = bcache_btree_alloc(b->c, b->level, &op->cl);
+		n = bcache_btree_alloc(b->c, b->level, NULL);
 
 	if (!IS_ERR_OR_NULL(n)) {
 		swap(b, n);
@@ -1849,6 +1849,9 @@ static int btree_split(struct btree *b, struct btree_op *op)
 	struct btree *n1, *n2 = NULL, *n3 = NULL;
 	uint64_t start_time = local_clock();
 
+	if (b->level)
+		set_closure_blocking(&op->cl);
+
 	n1 = bcache_btree_alloc(b->c, b->level, &op->cl);
 	if (IS_ERR(n1))
 		goto err;
@@ -2023,7 +2026,11 @@ int bcache_btree_insert(struct btree_op *op, struct cache_set *c)
 	struct cache *ca;
 	struct keylist stack_keys;
 
-	set_closure_blocking(&op->cl);
+	/*
+	 * Don't want to block with the btree locked unless we have to,
+	 * otherwise we get deadlocks with try_harder and between split/gc
+	 */
+	clear_closure_blocking(&op->cl);
 
 	BUG_ON(keylist_empty(&op->keys));
 	keylist_copy(&stack_keys, &op->keys);
@@ -2044,7 +2051,7 @@ int bcache_btree_insert(struct btree_op *op, struct cache_set *c)
 			free_some_buckets(ca);
 			mutex_unlock(&c->bucket_lock);
 
-			closure_wait_event(&c->bucket_wait, &op->cl,
+			closure_wait_event_sync(&c->bucket_wait, &op->cl,
 				ca->need_save_prio <= MAX_SAVE_PRIO ||
 				can_save_prios(ca));
 		}

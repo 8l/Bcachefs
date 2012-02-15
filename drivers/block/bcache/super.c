@@ -457,7 +457,6 @@ static void uuid_endio(struct bio *bio, int error)
 	bcache_endio(container_of(bio->bi_private, struct cache_set,
 				  uuid_write),
 		     bio, error, "accessing uuids");
-	closure_put(bio->bi_private);
 }
 
 static void uuid_io(struct cache_set *c, unsigned long rw,
@@ -478,7 +477,6 @@ static void uuid_io(struct cache_set *c, unsigned long rw,
 		bio->bi_private = cl;
 		bio_map(bio, c->uuids);
 
-		closure_get(cl);
 		submit_bbio_split(bio, c, k, i);
 
 		if (!(rw & WRITE))

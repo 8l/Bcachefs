@@ -442,7 +442,6 @@ static void bio_insert_endio(struct bio *bio, int error)
 	}
 
 	bcache_endio(op->d->c, bio, error, "writing data to cache");
-	closure_put(cl);
 }
 
 static void bio_insert_loop(struct closure *cl)
@@ -624,7 +623,6 @@ void cache_read_endio(struct bio *bio, int error)
 	}
 
 	bcache_endio(s->op.d->c, bio, error, "reading from cache");
-	closure_put(cl);
 }
 
 static void __do_bio_hook(struct search *s)

@@ -83,17 +83,22 @@ void submit_bbio(struct bio *bio, struct cache_set *c,
 int submit_bbio_split(struct bio *bio, struct cache_set *c,
 		      struct bkey *k, unsigned ptr)
 {
+	struct closure *cl = bio->bi_private;
 	struct bbio *b;
 	struct bio *n;
 	unsigned sectors_done = 0;
+
+	closure_get(cl);
 
 	bio->bi_sector	= PTR_OFFSET(k, ptr);
 	bio->bi_bdev	= PTR_CACHE(c, k, ptr)->bdev;
 
 	do {
 		n = bio_split_get(bio, bio_max_sectors(bio), c);
-		if (!n)
+		if (!n) {
+			closure_put(cl);
 			return -ENOMEM;
+		}
 
 		b = container_of(n, struct bbio, bio);
 
@@ -163,6 +168,7 @@ void count_io_errors(struct cache *c, int error, const char *m)
 void bcache_endio(struct cache_set *c, struct bio *bio,
 		  int error, const char *m)
 {
+	struct closure *cl = bio->bi_private;
 	struct bbio *b = container_of(bio, struct bbio, bio);
 	struct cache *ca = PTR_CACHE(c, &b->key, 0);
 
@@ -188,4 +194,5 @@ void bcache_endio(struct cache_set *c, struct bio *bio,
 
 	count_io_errors(ca, error, m);
 	bio_put(bio);
+	closure_put(cl);
 }

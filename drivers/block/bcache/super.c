@@ -652,7 +652,15 @@ static void prio_write_done(struct closure *cl)
 
 	mutex_lock(&c->set->bucket_lock);
 
+	/*
+	 * XXX: Terrible hack
+	 *
+	 * We really should be using this closure as the lock for writing
+	 * priorities, but we don't - we use c->prio_written. So we have to
+	 * finish with the closure before we unlock bucket_lock:
+	 */
 	set_closure_fn(&c->prio, NULL, NULL);
+	closure_set_stopped(&c->prio);
 	closure_put(&c->prio);
 
 	atomic_set(&c->prio_written, 1);
@@ -728,7 +736,6 @@ void prio_write(struct cache *c, struct closure *cl)
 		b->disk_gen = b->gen;
 
 	closure_init(&c->prio, cl);
-	set_closure_fn(&c->prio, prio_write_bucket, system_wq);
 
 	c->prio_write = 0;
 	c->disk_buckets->seq++;
@@ -737,11 +744,12 @@ void prio_write(struct cache *c, struct closure *cl)
 			&c->meta_sectors_written);
 
 	atomic_set(&c->prio_written, -1);
-	closure_put(&c->prio);
 
 	pr_debug("free %zu, free_inc %zu, unused %zu", fifo_used(&c->free),
 		 fifo_used(&c->free_inc), fifo_used(&c->unused));
 	blktrace_msg(c, "Starting priorities: " buckets_free(c));
+
+	continue_at(&c->prio, prio_write_bucket, system_wq);
 }
 
 static int prio_read(struct cache *c, uint64_t bucket)

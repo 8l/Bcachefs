@@ -357,7 +357,6 @@ static void write_dirty(struct closure *cl)
 	struct dirty *w = io->bio.bi_private;
 
 	dirty_init(w);
-	set_closure_fn(&io->cl, write_dirty_finish, dirty_wq);
 	io->bio.bi_rw		= WRITE|REQ_UNPLUG;
 	io->bio.bi_sector	= KEY_START(&w->key);
 	io->bio.bi_bdev		= io->d->bdev;
@@ -416,8 +415,6 @@ static void read_dirty(struct cached_dev *dc)
 			goto err;
 
 		w->io = io;
-		closure_init(&w->io->cl, NULL);
-		set_closure_fn(&w->io->cl, write_dirty, dirty_wq);
 		w->io->d		= dc;
 
 		dirty_init(w);
@@ -431,6 +428,10 @@ static void read_dirty(struct cached_dev *dc)
 			goto err;
 
 		pr_debug("%s", pkey(&w->key));
+
+		closure_init(&w->io->cl, NULL);
+		set_closure_fn(&w->io->cl, write_dirty, dirty_wq);
+		closure_set_stopped(&w->io->cl);
 
 		trace_bcache_read_dirty(&w->io->bio);
 		closure_bio_submit_put(&w->io->bio, &w->io->cl,

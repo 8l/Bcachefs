@@ -665,7 +665,7 @@ static void request_resubmit(struct closure *cl)
 	struct search *s = container_of(op, struct search, op);
 	struct bio *bio = s->cache_bio ?: s->cache_miss;
 
-	closure_bio_submit(bio, &s->cl, op->d->c->bio_split);
+	closure_bio_submit_put(bio, &s->cl, op->d->c->bio_split);
 	closure_return(cl);
 }
 
@@ -734,7 +734,6 @@ static void request_read_error(struct closure *cl)
 
 		/* XXX: invalidate cache */
 
-		closure_get(&s->cl);
 		trace_bcache_read_retry(&s->bio.bio);
 		closure_bio_submit(&s->bio.bio, &s->cl, s->op.d->c->bio_split);
 	}
@@ -767,7 +766,6 @@ static void do_verify(struct search *s)
 	check->bi_end_io	= request_endio;
 
 	bio_get(check);
-	closure_get(cl);
 	closure_bio_submit(check, cl, s->op.d->c->bio_split);
 	closure_sync(cl);
 
@@ -972,7 +970,7 @@ static void __request_read(struct closure *cl)
 		trace_bcache_cache_miss(s->orig_bio);
 
 		bio = s->cache_bio ?: s->cache_miss;
-		if (closure_bio_submit(bio, &s->cl, op->d->c->bio_split))
+		if (closure_bio_submit_put(bio, &s->cl, op->d->c->bio_split))
 			continue_at(cl, request_resubmit, bcache_wq);
 	}
 
@@ -1004,7 +1002,7 @@ static void request_invalidate_resubmit(struct closure *cl)
 	struct search *s = container_of(op, struct search, op);
 	struct bio *bio = &s->bio.bio;
 
-	closure_bio_submit(bio, &s->cl, op->d->c->bio_split);
+	closure_bio_submit_put(bio, &s->cl, op->d->c->bio_split);
 	continue_at(cl, bcache_journal, bcache_wq);
 }
 
@@ -1014,7 +1012,7 @@ static void request_write_resubmit(struct closure *cl)
 	struct search *s = container_of(op, struct search, op);
 	struct bio *bio = &s->bio.bio;
 
-	closure_bio_submit(bio, &s->cl, op->d->c->bio_split);
+	closure_bio_submit_put(bio, &s->cl, op->d->c->bio_split);
 	bio_insert(&s->op.cl);
 }
 
@@ -1044,8 +1042,8 @@ skip:		s->cache_bio = s->orig_bio;
 				generic_make_request(bio);
 			else
 				bio_endio(bio, 0);
-		} else if (closure_bio_submit(bio, &s->cl,
-					      s->op.d->c->bio_split))
+		} else if (closure_bio_submit_put(bio, &s->cl,
+						  s->op.d->c->bio_split))
 			continue_at(&s->op.cl,
 				    request_invalidate_resubmit,
 				    bcache_wq);
@@ -1066,7 +1064,7 @@ skip:		s->cache_bio = s->orig_bio;
 
 		__bio_clone(s->cache_bio, bio);
 		trace_bcache_writethrough(s->orig_bio);
-		if (closure_bio_submit(bio, &s->cl, s->op.d->c->bio_split))
+		if (closure_bio_submit_put(bio, &s->cl, s->op.d->c->bio_split))
 			continue_at(&s->op.cl,
 				    request_write_resubmit,
 				    bcache_wq);

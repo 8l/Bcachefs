@@ -365,6 +365,8 @@ static void write_dirty(struct closure *cl)
 
 	trace_bcache_write_dirty(&w->io->bio);
 	closure_bio_submit(&w->io->bio, cl, io->d->disk.bio_split);
+
+	continue_at(&io->cl, write_dirty_finish, dirty_wq);
 }
 
 static void read_dirty_endio(struct bio *bio, int error)
@@ -431,7 +433,8 @@ static void read_dirty(struct cached_dev *dc)
 		pr_debug("%s", pkey(&w->key));
 
 		trace_bcache_read_dirty(&w->io->bio);
-		closure_bio_submit(&w->io->bio, &w->io->cl, dc->disk.bio_split);
+		closure_bio_submit_put(&w->io->bio, &w->io->cl,
+				       dc->disk.bio_split);
 
 		delay = writeback_delay(dc, KEY_SIZE(&w->key));
 

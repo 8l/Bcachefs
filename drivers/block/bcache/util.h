@@ -2,6 +2,7 @@
 #ifndef _BCACHE_UTIL_H
 #define _BCACHE_UTIL_H
 
+#include <linux/closure.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/llist.h>
@@ -697,8 +698,21 @@ do {									\
 #define set_wait(j)	do {} while (0)
 #endif
 
-#define closure_bio_submit(bio, c, bs)					\
-	bio_submit_split(bio, &(c)->remaining, bs)
+#define closure_bio_submit_put(bio, cl, bs)				\
+	bio_submit_split(bio, &(__to_internal_closure(cl))->remaining, bs)
+
+static inline int closure_bio_submit(struct bio *bio, struct closure *cl,
+				     struct bio_set *bs)
+{
+	int ret;
+
+	closure_get(cl);
+	ret = closure_bio_submit_put(bio, cl, bs);
+	if (ret)
+		closure_put(cl);
+
+	return ret;
+}
 
 uint64_t crc64_update(uint64_t, const void *, size_t);
 uint64_t crc64(const void *, size_t);

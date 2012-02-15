@@ -52,7 +52,6 @@ reread:		left = ca->sb.bucket_size - offset;
 		bio->bi_private = &op->cl;
 		bio_map(bio, data);
 
-		closure_get(&op->cl);
 		closure_bio_submit(bio, &op->cl, ca->set->bio_split);
 		closure_sync(&op->cl);
 

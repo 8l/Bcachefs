@@ -695,13 +695,7 @@ static void prio_write_bucket(struct closure *cl)
 	struct prio_set *p = c->disk_buckets;
 	struct bucket_disk *d = p->data, *end = d + prios_per_bucket(c);
 
-	int i = c->prio_write++;
-
-	if (c->prio_write != prio_buckets(c)) {
-		p->next_bucket = c->prio_next[c->prio_write];
-		set_closure_fn(&c->prio, prio_write_bucket, system_wq);
-	} else
-		set_closure_fn(&c->prio, prio_write_journal, system_wq);
+	unsigned i = c->prio_write++;
 
 	for (struct bucket *b = c->buckets + i * prios_per_bucket(c);
 	     b < c->buckets + c->sb.nbuckets && d < end;
@@ -710,10 +704,17 @@ static void prio_write_bucket(struct closure *cl)
 		d->gen = b->disk_gen;
 	}
 
+	if (c->prio_write != prio_buckets(c))
+		p->next_bucket = c->prio_next[c->prio_write];
+
 	p->magic = pset_magic(c);
 	p->csum = crc64(&p->magic, bucket_bytes(c) - 8);
 
 	prio_io(c, c->prio_next[i], REQ_WRITE);
+
+	continue_at(cl, c->prio_write == prio_buckets(c)
+		    ? prio_write_journal
+		    : prio_write_bucket, system_wq);
 }
 
 void prio_write(struct cache *c, struct closure *cl)
@@ -756,7 +757,6 @@ static int prio_read(struct cache *c, uint64_t bucket)
 		if (d == end) {
 			c->prio_buckets[c->prio_write++] = bucket;
 
-			closure_get(&c->prio);
 			prio_io(c, bucket, READ_SYNC);
 			closure_sync(&c->prio);
 

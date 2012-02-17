@@ -412,11 +412,12 @@ static void uuid_endio(struct bio *bio, int error)
 }
 
 static void uuid_io(struct cache_set *c, unsigned long rw,
-		    struct bkey *k, struct closure *cl)
+		    struct bkey *k, struct closure *parent)
 {
-	lockdep_assert_held(&register_lock);
-	closure_init(&c->uuid_write, cl);
-	cl = &c->uuid_write;
+	struct closure *cl = &c->uuid_write.cl;
+
+	BUG_ON(!parent);
+	closure_lock(&c->uuid_write, parent);
 
 	for (unsigned i = 0; i < KEY_PTRS(k); i++) {
 		struct bio *bio = PTR_CACHE(c, k, i)->uuid_bio;
@@ -443,6 +444,7 @@ static void uuid_io(struct cache_set *c, unsigned long rw,
 			pr_debug("Slot %zi: %pU: %s: 1st: %u last: %u inv: %u",
 				 u - c->uuids, u->uuid, u->label,
 				 u->first_reg, u->last_reg, u->invalidated);
+
 	closure_return(cl);
 }
 
@@ -508,10 +510,12 @@ static int __uuid_write(struct cache_set *c)
 
 static int uuid_write(struct cache_set *c)
 {
-	__uuid_write(c);
+	int ret = __uuid_write(c);
 
-	bcache_journal_meta(c, NULL);
-	return 0;
+	if (!ret)
+		bcache_journal_meta(c, NULL);
+
+	return ret;
 }
 
 static struct uuid_entry *uuid_find(struct cache_set *c, const char *uuid)
@@ -1925,6 +1929,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	mutex_init(&c->sort_lock);
 	spin_lock_init(&c->sort_time_lock);
 	closure_init_unlocked(&c->sb_write);
+	closure_init_unlocked(&c->uuid_write);
 	spin_lock_init(&c->btree_read_time_lock);
 
 	INIT_LIST_HEAD(&c->list);

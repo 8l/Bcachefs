@@ -497,7 +497,7 @@ struct cache_set {
 	unsigned		nr_uuids;
 	struct uuid_entry	*uuids;
 	BKEY_PADDED(uuid_bucket);
-	struct closure		uuid_write;
+	struct closure_with_waitlist uuid_write;
 
 	/*
 	 * A btree node on disk could have too many bsets for an iterator to fit

@@ -331,7 +331,7 @@ static void invalidate_buckets_lru(struct cache *c)
 	}
 
 	if (c->heap.used * 2 < c->heap.size)
-		queue_work(bcache_wq, &c->set->gc_work);
+		bcache_queue_gc(c->set);
 
 	for (ssize_t i = c->heap.used / 2 - 1; i >= 0; --i)
 		heap_sift(&c->heap, i, bucket_min_cmp);
@@ -342,7 +342,7 @@ static void invalidate_buckets_lru(struct cache *c)
 			 * multiple times when it can't do anything
 			 */
 			c->invalidate_needs_gc = 1;
-			queue_work(bcache_wq, &c->set->gc_work);
+			bcache_queue_gc(c->set);
 			return;
 		}
 
@@ -367,7 +367,7 @@ static void invalidate_buckets_fifo(struct cache *c)
 
 		if (++checked >= c->sb.nbuckets) {
 			c->invalidate_needs_gc = 1;
-			queue_work(bcache_wq, &c->set->gc_work);
+			bcache_queue_gc(c->set);
 			return;
 		}
 	}
@@ -392,7 +392,7 @@ static void invalidate_buckets_random(struct cache *c)
 
 		if (++checked >= c->sb.nbuckets / 2) {
 			c->invalidate_needs_gc = 1;
-			queue_work(bcache_wq, &c->set->gc_work);
+			bcache_queue_gc(c->set);
 			return;
 		}
 	}

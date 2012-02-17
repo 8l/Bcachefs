@@ -1645,7 +1645,7 @@ STORE(__cache_set)
 	}
 
 	if (attr == &sysfs_trigger_gc)
-		queue_work(bcache_wq, &c->gc_work);
+		bcache_queue_gc(c);
 
 	if (attr == &sysfs_prune_cache) {
 		unsigned long v = strtoul_or_return(buf);
@@ -1725,14 +1725,6 @@ static void cache_set_free(struct closure *cl)
 
 	struct btree_op op;
 	btree_op_init_stack(&op);
-
-	/* Wait for/cancel any pending gc: we take gc_lock so that gc can't
-	 * requeue itself while we're canceling the work
-	 * Only safe (?) because gc_work uses trylock
-	 */
-	mutex_lock(&c->gc_lock);
-	cancel_work_sync(&c->gc_work);
-	mutex_unlock(&c->gc_lock);
 
 	if (!IS_ERR_OR_NULL(c->root))
 		list_add(&c->root->list, &c->btree_cache);
@@ -1914,7 +1906,6 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 				       BTREE_MAX_PAGES);
 
 	mutex_init(&c->bucket_lock);
-	mutex_init(&c->gc_lock);
 	mutex_init(&c->fill_lock);
 	mutex_init(&c->sort_lock);
 	spin_lock_init(&c->sort_time_lock);
@@ -2046,7 +2037,7 @@ static void run_cache_set(struct cache_set *c)
 	} else {
 		printk(KERN_NOTICE "bcache: invalidating existing data\n");
 		/* Don't want invalidate_buckets() to queue a gc yet */
-		mutex_lock(&c->gc_lock);
+		closure_lock(&c->gc, NULL);
 
 		for_each_cache(ca, c) {
 			ca->sb.keys = clamp_t(int, ca->sb.nbuckets >> 7,
@@ -2060,12 +2051,12 @@ static void run_cache_set(struct cache_set *c)
 
 		err = "cannot allocate new UUID bucket";
 		if (uuid_write(c))
-			goto err;
+			goto err_unlock_gc;
 
 		err = "cannot allocate new btree root";
 		c->root = bcache_btree_alloc(c, 0, &op.cl);
 		if (IS_ERR_OR_NULL(c->root))
-			goto err;
+			goto err_unlock_gc;
 
 		bkey_copy_key(&c->root->key, &MAX_KEY);
 		btree_write(c->root, true, &op);
@@ -2095,7 +2086,10 @@ static void run_cache_set(struct cache_set *c)
 
 		bcache_journal_next(&c->journal);
 		bcache_journal_meta(c, &op.cl);
-		mutex_unlock(&c->gc_lock);
+
+		/* Unlock */
+		closure_set_stopped(&c->gc.cl);
+		closure_put(&c->gc.cl);
 	}
 
 	closure_sync(&op.cl);
@@ -2108,6 +2102,9 @@ static void run_cache_set(struct cache_set *c)
 	flash_devs_run(c);
 
 	return;
+err_unlock_gc:
+	closure_set_stopped(&c->gc.cl);
+	closure_put(&c->gc.cl);
 err:
 	closure_sync(&op.cl);
 	/* XXX: test this, it's broken */

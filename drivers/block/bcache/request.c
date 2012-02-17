@@ -436,7 +436,7 @@ static void bio_insert_loop(struct closure *cl)
 
 	if (atomic_sub_return(bio_sectors(bio), &op->d->c->sectors_to_gc) < 0) {
 		set_gc_sectors(op->d->c);
-		queue_work(bcache_wq, &op->d->c->gc_work);
+		bcache_queue_gc(op->d->c);
 	}
 
 	do {

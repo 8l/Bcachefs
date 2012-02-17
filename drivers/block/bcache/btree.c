@@ -99,8 +99,6 @@ const char * const bcache_insert_types[] = {
 
 static struct workqueue_struct *btree_wq;
 
-static void btree_gc_work(struct work_struct *);
-
 void btree_op_init_stack(struct btree_op *op)
 {
 	memset(op, 0, sizeof(struct btree_op));
@@ -714,7 +712,7 @@ int bcache_btree_cache_alloc(struct cache_set *c)
 {
 	/* XXX: doesn't check for errors */
 
-	INIT_WORK(&c->gc_work, btree_gc_work);
+	closure_init_unlocked(&c->gc);
 
 	for (int i = 0; i < mca_reserve(c); i++)
 		mca_bucket_alloc(c, &ZERO_KEY, GFP_KERNEL);
@@ -1448,8 +1446,9 @@ size_t btree_gc_finish(struct cache_set *c)
 	return available;
 }
 
-static void btree_gc(struct cache_set *c)
+static void btree_gc(struct closure *cl)
 {
+	struct cache_set *c = container_of(cl, struct cache_set, gc.cl);
 	int ret;
 	unsigned long available;
 	struct bucket *b;
@@ -1467,7 +1466,6 @@ static void btree_gc(struct cache_set *c)
 	btree_op_init_stack(&op);
 	op.lock = SHRT_MAX;
 
-	lockdep_assert_held(&c->gc_lock);
 	blktrace_msg_all(c, "Starting gc");
 
 	mutex_lock(&c->bucket_lock);
@@ -1498,8 +1496,8 @@ static void btree_gc(struct cache_set *c)
 	if (ret) {
 		blktrace_msg_all(c, "Stopped gc");
 		printk(KERN_WARNING "bcache: gc failed!\n");
-		queue_work(bcache_wq, &c->gc_work);
-		goto out;
+
+		continue_at(cl, btree_gc, bcache_wq);
 	}
 
 	/* Possibly wait for new UUIDs or whatever to hit disk */
@@ -1516,24 +1514,17 @@ static void btree_gc(struct cache_set *c)
 	stats.in_use	= (c->nbuckets - available) * 100 / c->nbuckets;
 	memcpy(&c->gc_stats, &stats, sizeof(struct gc_stat));
 	blktrace_msg_all(c, "Finished gc");
-out:
+
 	trace_bcache_gc_end(c->sb.set_uuid);
 	closure_wake_up(&c->bucket_wait);
+
+	closure_return(cl);
 }
 
-static void btree_gc_work(struct work_struct *w)
+void bcache_queue_gc(struct cache_set *c)
 {
-	struct cache_set *c = container_of(w, struct cache_set, gc_work);
-
-	/*
-	 * The trylock here isn't just for performance - it's necessary so that
-	 * cache_set_unregister can safely make sure there isn't a pending gc
-	 */
-	if (!mutex_trylock(&c->gc_lock))
-		return;
-
-	btree_gc(c);
-	mutex_unlock(&c->gc_lock);
+	if (closure_trylock(&c->gc.cl, &c->cl))
+		continue_at(&c->gc.cl, btree_gc, bcache_wq);
 }
 
 /* Initial partial gc */
@@ -2033,12 +2024,8 @@ int bcache_btree_insert(struct btree_op *op, struct cache_set *c)
 	keylist_init(&op->keys);
 
 	while (c->need_gc > MAX_NEED_GC) {
-		mutex_lock(&c->gc_lock);
-
-		if (c->need_gc > MAX_NEED_GC)
-			btree_gc(c);
-
-		mutex_unlock(&c->gc_lock);
+		closure_lock(&c->gc, &c->cl);
+		btree_gc(&c->gc.cl);
 	}
 
 	for_each_cache(ca, c)

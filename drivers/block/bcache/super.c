@@ -112,7 +112,8 @@ struct workqueue_struct *bcache_wq;
 static void cached_dev_run(struct cached_dev *);
 static int cached_dev_attach(struct cached_dev *, struct cache_set *);
 static void cached_dev_detach(struct cached_dev *);
-static void cache_set_close(struct cache_set *);
+static void cache_set_unregister(struct cache_set *);
+static void cache_set_stop(struct cache_set *);
 
 #define BTREE_MAX_PAGES		(256 * 1024 / PAGE_SIZE)
 
@@ -1596,7 +1597,10 @@ STORE(__cache_set)
 	struct cache_set *c = container_of(kobj, struct cache_set, kobj);
 
 	if (attr == &sysfs_unregister)
-		cache_set_close(c);
+		cache_set_unregister(c);
+
+	if (attr == &sysfs_stop)
+		cache_set_stop(c);
 
 	if (attr == &sysfs_synchronous) {
 		bool sync = strtoul_or_return(buf);
@@ -1696,7 +1700,7 @@ bool cache_set_error(struct cache_set *c, const char *m, ...)
 
 	printk(", disabling caching\n");
 
-	cache_set_close(c);
+	cache_set_unregister(c);
 	return true;
 }
 
@@ -1748,6 +1752,9 @@ static void cache_set_flush(struct closure *cl)
 	struct cache_set *c = container_of(cl, struct cache_set, caching);
 	struct btree *b;
 
+	destroy_cache_accounting(&c->accounting);
+
+	kobject_put(&c->internal);
 	kobject_del(&c->kobj);
 
 	if (!IS_ERR_OR_NULL(c->root))
@@ -1761,16 +1768,12 @@ static void cache_set_flush(struct closure *cl)
 	closure_return(cl);
 }
 
-static void cache_set_unregister(struct closure *cl)
+static void __cache_set_unregister(struct closure *cl)
 {
 	struct cache_set *c = container_of(cl, struct cache_set, caching);
 	struct cached_dev *d, *t;
 
 	mutex_lock(&register_lock);
-
-	destroy_cache_accounting(&c->accounting);
-
-	kobject_put(&c->internal);
 
 	list_for_each_entry_safe(d, t, &c->cached_devs, list)
 		cached_dev_detach(d);
@@ -1780,10 +1783,18 @@ static void cache_set_unregister(struct closure *cl)
 	continue_at(cl, cache_set_flush, system_wq);
 }
 
-static void cache_set_close(struct cache_set *c)
+static void cache_set_unregister(struct cache_set *c)
+{
+	if (!atomic_xchg(&c->closing, 1)) {
+		set_closure_fn(&c->caching, __cache_set_unregister, system_wq);
+		closure_queue(&c->caching);
+	}
+}
+
+static void cache_set_stop(struct cache_set *c)
 {
 	if (!atomic_xchg(&c->closing, 1))
-		closure_queue(&c->caching);
+		closure_return(&c->caching);
 }
 
 #define alloc_bucket_pages(gfp, c)			\
@@ -1793,6 +1804,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 {
 	static struct attribute *cache_set_files[] = {
 		&sysfs_unregister,
+		&sysfs_stop,
 		&sysfs_synchronous,
 		&sysfs_async_journal,
 		&sysfs_flash_vol_create,
@@ -1857,7 +1869,6 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	set_closure_fn(&c->cl, cache_set_free, system_wq);
 
 	closure_init(&c->caching, &c->cl);
-	set_closure_fn(&c->caching, cache_set_unregister, system_wq);
 
 	/* Maybe create continue_at_noreturn() and use it here? */
 	closure_set_stopped(&c->cl);
@@ -1925,7 +1936,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 
 	return c;
 err:
-	cache_set_close(c);
+	cache_set_unregister(c);
 	return NULL;
 }
 
@@ -2151,7 +2162,7 @@ found:
 
 	return NULL;
 err:
-	cache_set_close(c);
+	cache_set_unregister(c);
 	return err;
 }
 

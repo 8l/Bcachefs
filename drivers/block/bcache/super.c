@@ -10,6 +10,7 @@
 #include <linux/genhd.h>
 #include <linux/module.h>
 #include <linux/random.h>
+#include <linux/reboot.h>
 #include <linux/sort.h>
 #include <linux/sysfs.h>
 
@@ -106,6 +107,7 @@ static struct mutex register_lock;
 static LIST_HEAD(uncached_devices);
 static LIST_HEAD(cache_sets);
 static int bcache_major, bcache_minor;
+static wait_queue_head_t unregister_wait;
 
 struct workqueue_struct *bcache_wq;
 
@@ -1216,6 +1218,7 @@ static void cached_dev_free(struct closure *cl)
 	}
 
 	printk(KERN_INFO "bcache: Device %s stopped\n", name);
+	wake_up(&unregister_wait);
 
 	kobject_put(&d->disk.kobj);
 }
@@ -1772,6 +1775,7 @@ static void cache_set_free(struct closure *cl)
 
 	printk(KERN_INFO "bcache: Cache set %pU unregistered\n",
 	       c->sb.set_uuid);
+	wake_up(&unregister_wait);
 
 	closure_debug_destroy(&c->cl);
 	kobject_put(&c->kobj);
@@ -2584,6 +2588,71 @@ err:
 	return ret;
 }
 
+static int bcache_reboot(struct notifier_block *n, unsigned long code, void *x)
+{
+	if (code == SYS_DOWN ||
+	    code == SYS_HALT ||
+	    code == SYS_POWER_OFF) {
+		DEFINE_WAIT(wait);
+		unsigned long start = jiffies;
+		bool stopped = false;
+
+		struct cache_set *c, *tc;
+		struct cached_dev *dc, *tdc;
+
+		mutex_lock(&register_lock);
+
+		if (list_empty(&cache_sets) && list_empty(&uncached_devices))
+			goto out;
+
+		printk(KERN_INFO "bcache: Stopping all devices:\n");
+
+		list_for_each_entry_safe(c, tc, &cache_sets, list) {
+			for (size_t i = 0; i < c->nr_uuids; i++)
+				if (c->devices[i])
+					bcache_device_stop(c->devices[i]);
+
+			cache_set_stop(c);
+		}
+
+		list_for_each_entry_safe(dc, tdc, &uncached_devices, list)
+			bcache_device_stop(&dc->disk);
+
+		/* What's a condition variable? */
+		while (1) {
+			long timeout = start + 2 * HZ - jiffies;
+
+			stopped = list_empty(&cache_sets) &&
+				list_empty(&uncached_devices);
+
+			if (timeout < 0 || stopped)
+				break;
+
+			prepare_to_wait(&unregister_wait, &wait,
+					TASK_UNINTERRUPTIBLE);
+
+			mutex_unlock(&register_lock);
+			schedule_timeout(timeout);
+			mutex_lock(&register_lock);
+		}
+
+		finish_wait(&unregister_wait, &wait);
+
+		printk(KERN_INFO "bcache: %s\n", stopped
+		       ? "All devices stopped"
+		       : "Timeout waiting for devices to be closed");
+out:
+		mutex_unlock(&register_lock);
+	}
+
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block reboot = {
+	.notifier_call	= bcache_reboot,
+	.priority	= INT_MAX, /* before any real devices */
+};
+
 static void bcache_exit(void)
 {
 	bcache_debug_exit();
@@ -2595,6 +2664,7 @@ static void bcache_exit(void)
 	if (bcache_wq)
 		destroy_workqueue(bcache_wq);
 	unregister_blkdev(bcache_major, "bcache");
+	unregister_reboot_notifier(&reboot);
 }
 
 static int __init bcache_init(void)
@@ -2606,6 +2676,8 @@ static int __init bcache_init(void)
 	};
 
 	mutex_init(&register_lock);
+	init_waitqueue_head(&unregister_wait);
+	register_reboot_notifier(&reboot);
 
 	bcache_major = register_blkdev(0, "bcache");
 	if (bcache_major < 0)

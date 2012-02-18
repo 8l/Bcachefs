@@ -904,8 +904,6 @@ STORE(__cached_dev)
 	struct cached_dev *d = container_of(kobj, struct cached_dev, disk.kobj);
 	unsigned v = size;
 	struct cache_set *c;
-	struct closure cl;
-	closure_init_stack(&cl);
 
 #define d_strtoul(var)		sysfs_strtoul(var, d->var)
 #define d_strtoi_h(var)		sysfs_hatoi(var, d->var)
@@ -1084,10 +1082,8 @@ static int cached_dev_attach(struct cached_dev *d, struct cache_set *c)
 	struct uuid_entry *u;
 	const char *msg = "looked up";
 	char buf[BDEVNAME_SIZE];
-	struct closure cl;
 
 	bdevname(d->bdev, buf);
-	closure_init_stack(&cl);
 
 	if (d->disk.c ||
 	    atomic_read(&c->closing) ||
@@ -1134,6 +1130,9 @@ static int cached_dev_attach(struct cached_dev *d, struct cache_set *c)
 	 */
 
 	if (is_zero(u->uuid, 16)) {
+		struct closure cl;
+		closure_init_stack(&cl);
+
 		memcpy(u->uuid, d->sb.uuid, 16);
 		memcpy(u->label, d->sb.label, SB_LABEL_SIZE);
 		u->first_reg = u->last_reg = rtime;
@@ -1596,8 +1595,6 @@ SHOW_LOCKED(cache_set)
 STORE(__cache_set)
 {
 	struct cache_set *c = container_of(kobj, struct cache_set, kobj);
-	struct closure cl;
-	closure_init_stack(&cl);
 
 	if (attr == &sysfs_unregister)
 		cache_set_close(c);
@@ -2257,8 +2254,6 @@ SHOW_LOCKED(cache)
 STORE(__cache)
 {
 	struct cache *c = container_of(kobj, struct cache, kobj);
-	struct closure cl;
-	closure_init_stack(&cl);
 
 	if (attr == &sysfs_discard) {
 		bool v = strtoul_or_return(buf);

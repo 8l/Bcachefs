@@ -1202,7 +1202,7 @@ static void cached_dev_free(struct kobject *kobj)
 	module_put(THIS_MODULE);
 }
 
-static struct cached_dev *cached_dev_alloc(void)
+static struct cached_dev *cached_dev_alloc(unsigned block_size)
 {
 	static struct attribute *cached_dev_files[] = {
 		&sysfs_attach,
@@ -1244,7 +1244,7 @@ static struct cached_dev *cached_dev_alloc(void)
 
 	init_cache_accounting(&d->accounting);
 
-	if (bcache_device_init(&d->disk, 512))
+	if (bcache_device_init(&d->disk, block_size))
 		goto err;
 
 	spin_lock_init(&d->dirty_lock);
@@ -1286,7 +1286,7 @@ static const char *register_bdev(struct cache_sb *sb, struct page *sb_page,
 	struct gendisk *g;
 	struct cache_set *c;
 
-	struct cached_dev *d = cached_dev_alloc();
+	struct cached_dev *d = cached_dev_alloc(sb->block_size << 9);
 
 	if (!d)
 		return err;

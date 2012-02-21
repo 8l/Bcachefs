@@ -381,7 +381,8 @@ static void __btree_write(struct btree *b)
 		trace_bcache_btree_write(b->bio);
 		bio_submit_split(b->bio, &b->io, b->c->bio_split);
 
-		closure_wait_event(&b->wait, &wait, atomic_read(&b->io) == -1);
+		closure_wait_event_sync(&b->wait, &wait,
+					atomic_read(&b->io) == -1);
 	}
 
 	pr_debug("%s block %i keys %i", pbtree(b), b->written, i->keys);
@@ -677,7 +678,8 @@ void bcache_btree_cache_free(struct cache_set *c)
 			btree_complete_write(b, b->write);
 		b->write = NULL;
 
-		closure_wait_event(&b->wait, &cl, atomic_read(&b->io) == -1);
+		closure_wait_event_sync(&b->wait, &cl,
+					atomic_read(&b->io) == -1);
 		mca_data_free(b);
 	}
 

@@ -793,18 +793,20 @@ struct bkey *__bset_search(struct btree *b, struct bset_tree *t,
 			return t->data->start;
 
 		i = bset_search_tree(b, t, search);
+
+#ifdef CONFIG_BCACHE_EDEBUG
+		BUG_ON(i.l != t->data->start &&
+		       t->data != write_block(b) &&
+		       bkey_cmp(tree_to_prev_bkey(t,
+			  inorder_to_tree(bkey_to_cacheline(t, i.l), t)),
+				search) > 0);
+#endif
 	} else
 		i = bset_search_write_set(b, t, search);
 
 #ifdef CONFIG_BCACHE_EDEBUG
 	BUG_ON(i.r != end(t->data) &&
 	       bkey_cmp(i.r, search) <= 0);
-
-	BUG_ON(i.l != t->data->start &&
-	       t->data != write_block(b) &&
-	       bkey_cmp(tree_to_prev_bkey(t,
-			  inorder_to_tree(bkey_to_cacheline(t, i.l), t)),
-			search) > 0);
 #endif
 
 	while (likely(i.l != i.r) &&

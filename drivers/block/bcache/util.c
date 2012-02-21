@@ -174,15 +174,11 @@ void time_stats_update(struct time_stats *stats, uint64_t start_time)
 	stats->max_duration = max(stats->max_duration, duration);
 
 	if (stats->last) {
-		stats->average_duration *= 7;
-		stats->average_duration += duration << 8;
-		stats->average_duration /= 8;
+		ewma_add(stats->average_duration, duration, 8, 8);
 
-		if (stats->average_frequency) {
-			stats->average_frequency *= 7;
-			stats->average_frequency += last << 8;
-			stats->average_frequency /= 8;
-		} else
+		if (stats->average_frequency)
+			ewma_add(stats->average_frequency, last, 8, 8);
+		else
 			stats->average_frequency  = last << 8;
 	} else
 		stats->average_duration  = duration << 8;

@@ -156,7 +156,8 @@ void btree_read_work(struct work_struct *w)
 	mutex_lock(&b->c->fill_lock);
 	iter->used = 0;
 
-	if (!i->seq)
+	if (btree_node_io_error(b) ||
+	    !i->seq)
 		goto err;
 
 	for (;
@@ -210,11 +211,8 @@ void btree_read_work(struct work_struct *w)
 	    bkey_cmp(&b->key, &b->sets[0].end) < 0)
 		goto err;
 
-	smp_wmb(); /* b->nread is our write lock */
-	atomic_set(&b->nread, 1);
-
 	if (0) {
-err:		atomic_set(&b->nread, -1);
+err:		set_btree_node_io_error(b);
 		cache_set_error(b->c, "%s at bucket %lu, block %zu, %u keys",
 				err, PTR_BUCKET_NR(b->c, &b->key, 0),
 				index(i, b), i->keys);
@@ -226,6 +224,8 @@ err:		atomic_set(&b->nread, -1);
 	time_stats_update(&b->c->btree_read_time, b->io_start_time);
 	spin_unlock(&b->c->btree_read_time_lock);
 
+	smp_wmb(); /* read_done is our write lock */
+	set_btree_node_read_done(b);
 	atomic_set(&b->io, -1);
 	closure_wake_up(&b->wait);
 }
@@ -237,7 +237,7 @@ static void btree_read_endio(struct bio *bio, int error)
 
 	if (error) {
 		cache_set_error(b->c, "reading index");
-		atomic_set(&b->nread, -1);
+		set_btree_node_io_error(b);
 	}
 
 	if (!atomic_dec_and_test(&b->io))
@@ -247,12 +247,7 @@ static void btree_read_endio(struct bio *bio, int error)
 	b->bio = NULL;
 
 	PREPARE_DELAYED_WORK(&b->work, btree_read_work);
-
-	if (atomic_read(&b->nread) == -1) {
-		atomic_set(&b->io, -1);
-		closure_wake_up(&b->wait);
-	} else
-		BUG_ON(!schedule_work(&b->work.work));
+	BUG_ON(!schedule_work(&b->work.work));
 }
 
 void btree_read(struct btree *b)
@@ -324,7 +319,7 @@ static void btree_write_endio(struct bio *bio, int error)
 	atomic_set(&b->io, -1);
 	closure_wake_up(&b->wait);
 
-	if (b->write)
+	if (btree_node_dirty(b))
 		queue_delayed_work(btree_wq, &b->work,
 				   msecs_to_jiffies(30000));
 }
@@ -333,7 +328,7 @@ static void __btree_write(struct btree *b)
 {
 	int j;
 	struct bio_vec *bv;
-	struct btree_write *w = NULL;
+	struct btree_write *w = btree_current_write(b);
 	struct bset *i = write_block(b);
 	void *base = (void *) ((unsigned long) i & ~(PAGE_SIZE - 1));
 
@@ -348,7 +343,8 @@ static void __btree_write(struct btree *b)
 	/* Between cmpxchg and first use of bio */
 	smp_mb();
 
-	swap(w, b->write);
+	clear_bit(BTREE_NODE_dirty,	 &b->flags);
+	change_bit(BTREE_NODE_write_idx, &b->flags);
 	__cancel_delayed_work(&b->work);
 
 	check_key_order(b, i);
@@ -403,14 +399,15 @@ static void btree_write_work(struct work_struct *w)
 
 	down_write(&b->lock);
 
-	if (b->write)
+	if (btree_node_dirty(b))
 		__btree_write(b);
 	up_write(&b->lock);
 }
 
 void btree_write(struct btree *b, bool now, struct btree_op *op)
 {
-	struct bset *i = write_block(b);
+	struct bset *i = b->sets[b->nsets].data;
+	struct btree_write *w = btree_current_write(b);
 
 	BUG_ON(!now && !op);
 	BUG_ON(b->written &&
@@ -418,28 +415,26 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 		i->seq != b->sets[0].data->seq ||
 		!i->keys));
 
-	if (!b->write) {
-		b->write = &b->writes[b->next_write];
-		b->next_write ^= 1;
-
+	if (!btree_node_dirty(b)) {
+		set_btree_node_dirty(b);
 		PREPARE_DELAYED_WORK(&b->work, btree_write_work);
 		queue_delayed_work(btree_wq, &b->work,
 				   msecs_to_jiffies(30000));
 	}
 
-	b->write->prio_blocked += b->prio_blocked;
+	w->prio_blocked += b->prio_blocked;
 	b->prio_blocked = 0;
 
 	if (op && op->journal && !b->level) {
-		if (b->write->journal &&
-		    journal_pin_cmp(b->c, b->write, op)) {
-			atomic_dec_bug(b->write->journal);
-			b->write->journal = NULL;
+		if (w->journal &&
+		    journal_pin_cmp(b->c, w, op)) {
+			atomic_dec_bug(w->journal);
+			w->journal = NULL;
 		}
 
-		if (!b->write->journal) {
-			b->write->journal = op->journal;
-			atomic_inc(b->write->journal);
+		if (!w->journal) {
+			w->journal = op->journal;
+			atomic_inc(w->journal);
 		}
 	}
 
@@ -449,8 +444,8 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 	    set_bytes(i) > PAGE_SIZE - 48) {
 		if (op && now) {
 			/* Must wait on multiple writes */
-			BUG_ON(b->write->owner);
-			b->write->owner = &op->cl;
+			BUG_ON(w->owner);
+			w->owner = &op->cl;
 			closure_get(&op->cl);
 		}
 
@@ -496,7 +491,7 @@ static void mca_data_free(struct btree *b)
 
 static void mca_bucket_free(struct btree *b)
 {
-	BUG_ON(b->write);
+	BUG_ON(btree_node_dirty(b));
 
 	b->key.ptr[0] = 0;
 	hlist_del_init_rcu(&b->hash);
@@ -560,16 +555,16 @@ static int mca_reap(struct btree *b, struct closure *cl)
 	if (!down_write_trylock(&b->lock))
 		return -1;
 
-	BUG_ON(b->write && !b->sets[0].data);
+	BUG_ON(btree_node_dirty(b) && !b->sets[0].data);
 
-	if (cl && b->write)
+	if (cl && btree_node_dirty(b))
 		btree_write(b, true, NULL);
 
 	if (cl)
 		closure_wait_event_async(&b->wait, cl,
 					 atomic_read(&b->io) == -1);
 
-	if (b->write ||
+	if (btree_node_dirty(b) ||
 	    atomic_read(&b->io) != -1 ||
 	    work_pending(&b->work.work)) {
 		rw_unlock(true, b);
@@ -674,9 +669,9 @@ void bcache_btree_cache_free(struct cache_set *c)
 	while (!list_empty(&c->btree_cache)) {
 		b = list_first_entry(&c->btree_cache, struct btree, list);
 
-		if (b->write)
-			btree_complete_write(b, b->write);
-		b->write = NULL;
+		if (btree_node_dirty(b))
+			btree_complete_write(b, btree_current_write(b));
+		clear_bit(BTREE_NODE_dirty, &b->flags);
 
 		closure_wait_event_sync(&b->wait, &cl,
 					atomic_read(&b->io) == -1);
@@ -794,7 +789,7 @@ out:
 	hlist_add_head_rcu(&b->hash, hash_bucket(c, k));
 	lock_set_subclass(&b->lock.dep_map, level + 1, _THIS_IP_);
 
-	atomic_set(&b->nread, 0);
+	b->flags	= 0;
 	b->level	= level;
 	b->written	= 0;
 	b->nsets	= 0;
@@ -846,7 +841,7 @@ err:
 struct btree *get_bucket(struct cache_set *c, struct bkey *k,
 			 int level, struct btree_op *op)
 {
-	int i = 0, nread;
+	int i = 0;
 	bool write = level <= op->lock;
 	struct btree *b;
 
@@ -887,10 +882,13 @@ retry:
 	for (; i <= b->nsets; i++)
 		prefetch(b->sets[i].data);
 
-	nread = closure_wait_event(&b->wait, &op->cl, atomic_read(&b->nread));
-	if (nread != 1) {
+	if (!closure_wait_event(&b->wait, &op->cl,
+				btree_node_read_done(b))) {
 		rw_unlock(write, b);
-		b = ERR_PTR(nread ? -EIO : -EAGAIN);
+		b = ERR_PTR(-EAGAIN);
+	} else if (btree_node_io_error(b)) {
+		rw_unlock(write, b);
+		b = ERR_PTR(-EIO);
 	} else
 		BUG_ON(!b->written);
 
@@ -922,9 +920,9 @@ static void btree_free(struct btree *b, struct btree_op *op)
 	BUG_ON(b == b->c->root);
 	pr_debug("bucket %s", pbtree(b));
 
-	if (b->write)
-		btree_complete_write(b, b->write);
-	b->write = NULL;
+	if (btree_node_dirty(b))
+		btree_complete_write(b, btree_current_write(b));
+	clear_bit(BTREE_NODE_dirty, &b->flags);
 
 	if (b->prio_blocked &&
 	    !atomic_sub_return(b->prio_blocked, &b->c->prio_blocked))
@@ -972,7 +970,7 @@ retry:
 		goto retry;
 	}
 
-	atomic_set(&b->nread, 1);
+	set_btree_node_read_done(b);
 	b->accessed = 1;
 	bset_init(b, b->sets[0].data);
 
@@ -1234,9 +1232,9 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 	{
 		if (!r->written)
 			btree_write(r, true, op);
-		else if (r->write) {
-			BUG_ON(r->write->owner);
-			r->write->owner = writes;
+		else if (btree_node_dirty(r)) {
+			BUG_ON(btree_current_write(r)->owner);
+			btree_current_write(r)->owner = writes;
 			closure_get(writes);
 
 			btree_write(r, true, NULL);
@@ -1335,7 +1333,7 @@ static int btree_gc_root(struct btree *b, struct btree_op *op,
 	if (b->level)
 		ret = btree_gc_recurse(b, op, writes, gc);
 
-	if (!b->written || b->write) {
+	if (!b->written || btree_node_dirty(b)) {
 		atomic_inc(&b->c->prio_blocked);
 		b->prio_blocked++;
 		btree_write(b, true, n ? op : NULL);
@@ -1736,7 +1734,7 @@ bool bcache_btree_insert_keys(struct btree *b, struct btree_op *op)
 	 * overwriting good data if it came from a read.
 	 */
 	bool ret = false;
-	struct bset *i = write_block(b);
+	struct bset *i = b->sets[b->nsets].data;
 	struct bkey *k, *m, *prev;
 	unsigned oldsize = count_data(b);
 

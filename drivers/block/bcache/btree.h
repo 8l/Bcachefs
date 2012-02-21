@@ -37,12 +37,11 @@ struct btree {
 	struct rw_semaphore	lock;
 	struct cache_set	*c;
 
-	atomic_t		nread;
-	uint16_t		written;
+	unsigned long		flags;
+	uint16_t		written;	/* would be nice to kill */
 	uint8_t			level;
 	uint8_t			nsets;
-	unsigned		next_write:1;
-	unsigned		page_order:7;
+	uint8_t			page_order;
 
 	/*
 	 * Set of sorted keys - the real btree node - plus a binary search tree
@@ -83,9 +82,6 @@ struct btree {
 		struct bset	*data;
 	}			sets[MAX_BSETS];
 
-	/* Points to one of writes[] iff there is data to write */
-	struct btree_write	*write;
-
 	/* Used to refcount bio splits, -1 when no io in progress: also
 	 * protects b->bio
 	 */
@@ -101,6 +97,40 @@ struct btree {
 	struct btree_write	writes[2];
 	struct bio		*bio;
 };
+
+#define BTREE_FLAG(flag)						\
+static inline bool btree_node_ ## flag(struct btree *b)			\
+{	return test_bit(BTREE_NODE_ ## flag, &b->flags); }		\
+									\
+static inline void set_btree_node_ ## flag(struct btree *b)		\
+{	set_bit(BTREE_NODE_ ## flag, &b->flags); }			\
+
+enum btree_flags {
+	BTREE_NODE_read_done,
+	BTREE_NODE_io_error,
+	BTREE_NODE_dirty,
+	BTREE_NODE_write_idx,
+};
+
+BTREE_FLAG(read_done);
+BTREE_FLAG(io_error);
+BTREE_FLAG(dirty);
+BTREE_FLAG(write_idx);
+
+static inline struct btree_write *btree_current_write(struct btree *b)
+{
+	return b->writes + btree_node_write_idx(b);
+}
+
+static inline struct btree_write *btree_prev_write(struct btree *b)
+{
+	return b->writes + (btree_node_write_idx(b) ^ 1);
+}
+
+static inline unsigned bset_offset(struct btree *b, struct bset *i)
+{
+	return (((size_t) i) - ((size_t) b->sets->data)) >> 9;
+}
 
 static inline struct bset *write_block(struct btree *b)
 {

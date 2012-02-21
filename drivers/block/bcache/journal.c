@@ -354,14 +354,17 @@ static void btree_flush_write(struct cache_set *c)
 		if (!down_write_trylock(&b->lock))
 			continue;
 
-		if (!b->write || !b->write->journal) {
+		if (!btree_node_dirty(b) ||
+		    !btree_current_write(b)->journal) {
 			rw_unlock(true, b);
 			continue;
 		}
 
 		if (!best)
 			best = b;
-		else if (journal_pin_cmp(c, best->write, b->write)) {
+		else if (journal_pin_cmp(c,
+					 btree_current_write(best),
+					 btree_current_write(b))) {
 			rw_unlock(true, best);
 			best = b;
 		} else
@@ -373,7 +376,7 @@ static void btree_flush_write(struct cache_set *c)
 
 	/* We can't find the best btree node, just pick the first */
 	list_for_each_entry(b, &c->btree_cache, list)
-		if (!b->level && b->write) {
+		if (!b->level && btree_node_dirty(b)) {
 			best = b;
 			mutex_unlock(&c->bucket_lock);
 			rw_lock(true, best, best->level);
@@ -386,7 +389,7 @@ out:
 	if (!best)
 		return;
 found:
-	if (best->write)
+	if (btree_node_dirty(best))
 		btree_write(best, true, NULL);
 	rw_unlock(true, best);
 }

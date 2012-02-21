@@ -1722,7 +1722,7 @@ static void cache_set_free(struct closure *cl)
 
 	/* Should skip this if we're unregistering because of an error */
 	list_for_each_entry(b, &c->btree_cache, list)
-		if (b->write)
+		if (btree_node_dirty(b))
 			btree_write(b, true, &op);
 
 	closure_sync(&op.cl);

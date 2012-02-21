@@ -556,108 +556,6 @@ static inline bool key_merging_disabled(struct cache_set *c)
 #endif
 }
 
-struct btree_write {
-	struct closure		*owner;
-	atomic_t		*journal;
-
-	/* If btree_split() frees a btree node, it writes a new pointer to that
-	 * btree node indicating it was freed; it takes a refcount on
-	 * c->prio_blocked because we can't write the gens until the new
-	 * pointer is on disk. This allows btree_write_endio() to release the
-	 * refcount that btree_split() took.
-	 */
-	int			prio_blocked:30;
-
-	/* Btree writes normally use bounce buffers, so we don't have to keep
-	 * the node locked for the duration of the write. If the bounce buffer
-	 * allocation fails, this tells btree_write_endio() not to free pages.
-	 */
-	unsigned		nofree:1;
-
-	/* For container_of() in btree_write_endio() */
-	unsigned		index:1;
-};
-
-struct bkey_float;
-
-struct btree {
-	/* Hottest entries first */
-	struct hlist_node	hash;
-
-	/* Key/pointer for this btree node */
-	BKEY_PADDED(key);
-
-	/* Single bit - set when accessed, cleared by shrinker */
-	unsigned long		accessed;
-	struct rw_semaphore	lock;
-	struct cache_set	*c;
-
-	atomic_t		nread;
-	uint16_t		written;
-	uint8_t			level;
-	uint8_t			nsets;
-	unsigned		next_write:1;
-	unsigned		page_order:7;
-
-	/*
-	 * Set of sorted keys - the real btree node - plus a binary search tree
-	 *
-	 * sets[0] is special; set[0]->tree, set[0]->prev and set[0]->data point
-	 * to the memory we have allocated for this btree node. Additionally,
-	 * set[0]->data points to the entire btree node as it exists on disk.
-	 */
-#define MAX_BSETS	4
-	struct bset_tree {
-		/*
-		 * We construct a binary tree in an array as if the array
-		 * started at 1, so that things line up on the same cachelines
-		 * better: see comments in bset.c at cacheline_to_bkey() for
-		 * details
-		 */
-
-		/* size of the binary tree and prev array */
-		unsigned	size;
-
-		/* function of size - precalculated for to_inorder() */
-		unsigned	extra;
-
-		/* copy of the last key in the set */
-		struct bkey	end;
-		struct bkey_float *tree;
-
-		/*
-		 * The nodes in the bset tree point to specific keys - this
-		 * array holds the sizes of the previous key.
-		 *
-		 * Conceptually it's a member of struct bkey_float, but we want
-		 * to keep bkey_float to 4 bytes and prev isn't used in the fast
-		 * path.
-		 */
-		uint8_t		*prev;
-
-		/* The actual btree node, with pointers to each sorted set */
-		struct bset	*data;
-	}			sets[MAX_BSETS];
-
-	/* Points to one of writes[] iff there is data to write */
-	struct btree_write	*write;
-
-	/* Used to refcount bio splits, -1 when no io in progress: also
-	 * protects b->bio
-	 */
-	atomic_t		io;
-	/* Gets transferred to w->prio_blocked - see the comment there */
-	int			prio_blocked;
-
-	struct list_head	list;
-	struct delayed_work	work;
-	closure_list_t		wait;
-
-	uint64_t		io_start_time;
-	struct btree_write	writes[2];
-	struct bio		*bio;
-};
-
 struct bbio {
 	unsigned		submit_time_us;
 	union {
@@ -671,6 +569,8 @@ static inline unsigned local_clock_us(void)
 {
 	return local_clock() >> 10;
 }
+
+#define MAX_BSETS		4
 
 #define btree_prio		USHRT_MAX
 #define initial_prio		32768

@@ -12,6 +12,8 @@ struct btree_iter {
 	 * btree_gc_recurse() */
 };
 
+struct bset_tree;
+
 static __always_inline int64_t bkey_cmp(const struct bkey *l,
 					const struct bkey *r)
 {

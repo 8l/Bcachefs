@@ -143,7 +143,8 @@ void btree_verify(struct btree *b, struct bset *new)
 	if (!b->c->verify)
 		return;
 
-	closure_wait_event(&b->wait, &cl, atomic_read(&b->io) == -1);
+	closure_wait_event(&b->io.wait, &cl,
+			   atomic_read(&b->io.cl.remaining) == -1);
 
 	mutex_lock(&b->c->verify_lock);
 
@@ -151,9 +152,9 @@ void btree_verify(struct btree *b, struct bset *new)
 	v->written = 0;
 	v->level = b->level;
 
-	closure_wait(&v->wait, &cl);
 	btree_read(v);
-	closure_sync(&cl);
+	closure_wait_event(&v->io.wait, &cl,
+			   atomic_read(&b->io.cl.remaining) == -1);
 
 	if (new->keys != v->sets[0].data->keys ||
 	    memcmp(new->start,
@@ -428,7 +429,7 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 
 		btree_sort(b, 0, NULL);
 		fill->written = 0;
-		btree_read_work(&fill->work.work);
+		btree_read_done(&fill->io.cl);
 
 		if (b->sets[0].data->keys != fill->sets[0].data->keys ||
 		    memcmp(b->sets[0].data->start,

@@ -13,16 +13,7 @@ struct btree_write {
 	 * pointer is on disk. This allows btree_write_endio() to release the
 	 * refcount that btree_split() took.
 	 */
-	int			prio_blocked:30;
-
-	/* Btree writes normally use bounce buffers, so we don't have to keep
-	 * the node locked for the duration of the write. If the bounce buffer
-	 * allocation fails, this tells btree_write_endio() not to free pages.
-	 */
-	unsigned		nofree:1;
-
-	/* For container_of() in btree_write_endio() */
-	unsigned		index:1;
+	int			prio_blocked;
 };
 
 struct btree {
@@ -82,16 +73,14 @@ struct btree {
 		struct bset	*data;
 	}			sets[MAX_BSETS];
 
-	/* Used to refcount bio splits, -1 when no io in progress: also
-	 * protects b->bio
-	 */
-	atomic_t		io;
+	/* Used to refcount bio splits, also protects b->bio */
+	struct closure_with_waitlist	io;
+
 	/* Gets transferred to w->prio_blocked - see the comment there */
 	int			prio_blocked;
 
 	struct list_head	list;
 	struct delayed_work	work;
-	closure_list_t		wait;
 
 	uint64_t		io_start_time;
 	struct btree_write	writes[2];
@@ -272,7 +261,7 @@ static inline const char *insert_type(struct btree_op *op)
 	return bcache_insert_types[op->insert_type];
 }
 
-void btree_read_work(struct work_struct *);
+void btree_read_done(struct closure *);
 void btree_read(struct btree *);
 void btree_write(struct btree *b, bool now, struct btree_op *op);
 

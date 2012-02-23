@@ -757,14 +757,17 @@ static void unregister_fake(struct kobject *k)
 static int open_dev(struct block_device *b, fmode_t mode)
 {
 	struct bcache_device *d = b->bd_disk->private_data;
-	kobject_get(&d->kobj);
+	if (atomic_read(&d->closing))
+		return -ENXIO;
+
+	closure_get(&d->cl);
 	return 0;
 }
 
 static int release_dev(struct gendisk *b, fmode_t mode)
 {
 	struct bcache_device *d = b->private_data;
-	kobject_put(&d->kobj);
+	closure_put(&d->cl);
 	return 0;
 }
 
@@ -781,6 +784,12 @@ static const struct block_device_operations bcache_ops = {
 	.ioctl		= ioctl_dev,
 	.owner		= THIS_MODULE,
 };
+
+static void bcache_device_stop(struct bcache_device *d)
+{
+	if (!atomic_xchg(&d->closing, 1))
+		closure_queue(&d->cl);
+}
 
 static void bcache_device_detach(struct bcache_device *d)
 {
@@ -803,19 +812,22 @@ static void bcache_device_attach(struct bcache_device *d, struct cache_set *c,
 
 static void bcache_device_free(struct bcache_device *d)
 {
-	char name[BDEVNAME_SIZE] = "(unknown)";
-
 	lockdep_assert_held(&register_lock);
 
 	if (d->c)
 		bcache_device_detach(d);
 
+	if (d->disk)
+		del_gendisk(d->disk);
+	if (d->disk && d->disk->queue)
+		blk_cleanup_queue(d->disk->queue);
+	if (d->disk)
+		put_disk(d->disk);
+
 	if (d->unaligned_bvec)
 		mempool_destroy(d->unaligned_bvec);
 	if (d->bio_split)
 		bioset_free(d->bio_split);
-
-	printk(KERN_INFO "bcache: Device %s unregistered\n", name);
 }
 
 static int bcache_device_init(struct bcache_device *d, unsigned block_size)
@@ -966,10 +978,8 @@ STORE(__cached_dev)
 	if (attr == &sysfs_detach && d->disk.c)
 		cached_dev_detach(d);
 
-	/* XXX: this looks sketchy as hell */
-	if (attr == &sysfs_stop &&
-	    !atomic_xchg(&d->unregister, 1))
-		kobject_put(&d->disk.kobj);
+	if (attr == &sysfs_stop)
+		bcache_device_stop(&d->disk);
 
 	return size;
 }
@@ -1173,16 +1183,31 @@ static int cached_dev_attach(struct cached_dev *d, struct cache_set *c)
 	return 0;
 }
 
-static void cached_dev_free(struct kobject *kobj)
+static void __cached_dev_free(struct kobject *kobj)
 {
-	char name[BDEVNAME_SIZE] = "(unknown)";
 	struct cached_dev *d = container_of(kobj, struct cached_dev, disk.kobj);
+	kfree(d);
+	module_put(THIS_MODULE);
+}
 
-	lockdep_assert_held(&register_lock);
+static void cached_dev_free(struct closure *cl)
+{
+	struct cached_dev *d = container_of(cl, struct cached_dev, disk.cl);
+	char name[BDEVNAME_SIZE] = "(unknown)";
 
 	/* XXX: background writeback could be in progress... */
 	cancel_delayed_work_sync(&d->refill_dirty);
 	cancel_delayed_work_sync(&d->read_dirty);
+
+	mutex_lock(&register_lock);
+
+	bcache_device_free(&d->disk);
+	list_del(&d->list);
+
+	mutex_unlock(&register_lock);
+
+	if (d->bio_passthrough)
+		mempool_destroy(d->bio_passthrough);
 
 	if (!IS_ERR_OR_NULL(d->bdev)) {
 		bdevname(d->bdev, name);
@@ -1190,16 +1215,19 @@ static void cached_dev_free(struct kobject *kobj)
 		blkdev_put(d->bdev, FMODE_READ|FMODE_WRITE);
 	}
 
-	if (d->bio_passthrough)
-		mempool_destroy(d->bio_passthrough);
+	printk(KERN_INFO "bcache: Device %s stopped\n", name);
 
-	bcache_device_free(&d->disk);
+	kobject_put(&d->disk.kobj);
+}
 
-	printk(KERN_INFO "bcache: Device %s unregistered\n", name);
+static void cached_dev_flush(struct closure *cl)
+{
+	struct cached_dev *d = container_of(cl, struct cached_dev, disk.cl);
 
-	list_del(&d->list);
-	kfree(d);
-	module_put(THIS_MODULE);
+	destroy_cache_accounting(&d->accounting);
+	kobject_del(&d->disk.kobj);
+
+	continue_at(cl, cached_dev_free, system_wq);
 }
 
 static struct cached_dev *cached_dev_alloc(unsigned block_size)
@@ -1230,7 +1258,7 @@ static struct cached_dev *cached_dev_alloc(unsigned block_size)
 #endif
 		NULL
 	};
-	KTYPE(cached_dev, cached_dev_free);
+	KTYPE(cached_dev, __cached_dev_free);
 
 	struct cached_dev *d = kzalloc(sizeof(struct cached_dev), GFP_KERNEL);
 	if (!d)
@@ -1239,8 +1267,10 @@ static struct cached_dev *cached_dev_alloc(unsigned block_size)
 	__module_get(THIS_MODULE);
 	kobject_init(&d->disk.kobj, &cached_dev_obj);
 	INIT_LIST_HEAD(&d->list);
-
 	init_cache_accounting(&d->accounting);
+
+	closure_init(&d->disk.cl, NULL);
+	set_closure_fn(&d->disk.cl, cached_dev_flush, system_wq);
 
 	if (bcache_device_init(&d->disk, block_size))
 		goto err;
@@ -1270,7 +1300,7 @@ static struct cached_dev *cached_dev_alloc(unsigned block_size)
 
 	return d;
 err:
-	cached_dev_free(&d->disk.kobj);
+	bcache_device_stop(&d->disk);
 	return NULL;
 }
 

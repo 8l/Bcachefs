@@ -151,6 +151,8 @@ struct prio_set {
 struct search;
 
 struct bcache_device {
+	struct closure		cl;
+
 	struct kobject		kobj;
 
 	struct cache_set	*c;

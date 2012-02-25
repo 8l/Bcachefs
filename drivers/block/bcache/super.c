@@ -769,6 +769,8 @@ static void bcache_device_free(struct bcache_device *d)
 		mempool_destroy(d->unaligned_bvec);
 	if (d->bio_split)
 		bioset_free(d->bio_split);
+
+	closure_debug_destroy(&d->cl);
 }
 
 static int bcache_device_init(struct bcache_device *d, unsigned block_size)
@@ -852,7 +854,7 @@ static void cached_dev_run(struct cached_dev *dc)
 		pr_debug("error creating sysfs link");
 }
 
-void cached_dev_detach_finish(struct work_struct *w)
+static void cached_dev_detach_finish(struct work_struct *w)
 {
 	struct cached_dev *d = container_of(w, struct cached_dev, detach);
 	char buf[BDEVNAME_SIZE];
@@ -1010,6 +1012,7 @@ static void cached_dev_free(struct closure *cl)
 	/* XXX: background writeback could be in progress... */
 	cancel_delayed_work_sync(&d->refill_dirty);
 	cancel_delayed_work_sync(&d->read_dirty);
+	cancel_delayed_work_sync(&d->writeback_rate_update);
 
 	mutex_lock(&register_lock);
 
@@ -1339,7 +1342,7 @@ static void cache_set_unregister(struct cache_set *c)
 static void cache_set_stop(struct cache_set *c)
 {
 	if (!atomic_xchg(&c->closing, 1))
-		closure_return(&c->caching);
+		continue_at(&c->caching, cache_set_flush, system_wq);
 }
 
 #define alloc_bucket_pages(gfp, c)			\

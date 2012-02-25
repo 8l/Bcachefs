@@ -157,6 +157,9 @@ struct bcache_device {
 
 	struct cache_set	*c;
 	unsigned		id;
+#define BCACHEDEVNAME_SIZE	12
+	char			name[BCACHEDEVNAME_SIZE];
+
 	struct gendisk		*disk;
 
 	/* If nonzero, we're closing */

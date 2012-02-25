@@ -734,6 +734,9 @@ static void bcache_device_stop(struct bcache_device *d)
 
 static void bcache_device_detach(struct bcache_device *d)
 {
+	sysfs_remove_link(&d->c->kobj, d->name);
+	sysfs_remove_link(&d->kobj, "cache");
+
 	d->c->devices[d->id] = NULL;
 	closure_put(&d->c->caching);
 	d->c = NULL;
@@ -751,9 +754,22 @@ static void bcache_device_attach(struct bcache_device *d, struct cache_set *c,
 	closure_get(&c->caching);
 }
 
+static void bcache_device_link(struct bcache_device *d, struct cache_set *c,
+			       const char *name)
+{
+	snprintf(d->name, BCACHEDEVNAME_SIZE,
+		 "%s%u", name, d->id);
+
+	WARN(sysfs_create_link(&d->kobj, &c->kobj, "cache") ||
+	     sysfs_create_link(&c->kobj, &d->kobj, d->name),
+	     "Couldn't create device <-> cache set symlinks");
+}
+
 static void bcache_device_free(struct bcache_device *d)
 {
 	lockdep_assert_held(&register_lock);
+
+	printk(KERN_INFO "bcache: %s stopped\n", d->disk->disk_name);
 
 	if (d->c)
 		bcache_device_detach(d);
@@ -876,11 +892,6 @@ static void cached_dev_detach_finish(struct work_struct *w)
 	d->disk.c->uuids[d->disk.id].invalidated = cpu_to_le32(get_seconds());
 	uuid_write(d->disk.c);
 
-	sprintf(buf, "bdev%i", d->disk.id);
-
-	sysfs_remove_link(&d->disk.c->kobj, buf);
-	sysfs_remove_link(&d->disk.kobj, "cache");
-
 	list_move(&d->list, &uncached_devices);
 	atomic_set(&d->detaching, 0);
 	bcache_device_detach(&d->disk);
@@ -906,7 +917,6 @@ static int cached_dev_attach(struct cached_dev *d, struct cache_set *c)
 {
 	uint32_t rtime = cpu_to_le32(get_seconds());
 	struct uuid_entry *u;
-	const char *msg = "looked up";
 	char buf[BDEVNAME_SIZE];
 
 	bdevname(d->bdev, buf);
@@ -946,11 +956,6 @@ static int cached_dev_attach(struct cached_dev *d, struct cache_set *c)
 		}
 	}
 
-	sprintf(buf, "bdev%zi", u - c->uuids);
-	if (sysfs_create_link(&d->disk.kobj, &c->kobj, "cache") ||
-	    sysfs_create_link(&c->kobj, &d->disk.kobj, buf))
-		return -ENOMEM;
-
 	/* Deadlocks since we're called via sysfs...
 	sysfs_remove_file(&d->kobj, &sysfs_attach);
 	 */
@@ -969,14 +974,13 @@ static int cached_dev_attach(struct cached_dev *d, struct cache_set *c)
 
 		write_bdev_super(d, &cl);
 		closure_sync(&cl);
-
-		msg = "inserted new";
 	} else {
 		u->last_reg = rtime;
 		uuid_write(c);
 	}
 
 	bcache_device_attach(&d->disk, c, u - c->uuids);
+	bcache_device_link(&d->disk, c, "bdev");
 	list_move(&d->list, &c->cached_devs);
 	calc_cached_dev_sectors(c);
 
@@ -992,8 +996,9 @@ static int cached_dev_attach(struct cached_dev *d, struct cache_set *c)
 
 	cached_dev_run(d);
 
-	printk(KERN_INFO "bcache: Caching %s, %s UUID %pU\n",
-	       bdevname(d->bdev, buf), msg, d->sb.uuid);
+	printk(KERN_INFO "bcache: Caching %s as %s on set %pU\n",
+	       bdevname(d->bdev, buf), d->disk.disk->disk_name,
+	       d->disk.c->sb.set_uuid);
 	return 0;
 }
 
@@ -1007,7 +1012,6 @@ static void __cached_dev_free(struct kobject *kobj)
 static void cached_dev_free(struct closure *cl)
 {
 	struct cached_dev *d = container_of(cl, struct cached_dev, disk.cl);
-	char name[BDEVNAME_SIZE] = "(unknown)";
 
 	/* XXX: background writeback could be in progress... */
 	cancel_delayed_work_sync(&d->refill_dirty);
@@ -1025,12 +1029,10 @@ static void cached_dev_free(struct closure *cl)
 		mempool_destroy(d->bio_passthrough);
 
 	if (!IS_ERR_OR_NULL(d->bdev)) {
-		bdevname(d->bdev, name);
 		blk_sync_queue(bdev_get_queue(d->bdev));
 		blkdev_put(d->bdev, FMODE_READ|FMODE_WRITE);
 	}
 
-	printk(KERN_INFO "bcache: Device %s stopped\n", name);
 	wake_up(&unregister_wait);
 
 	kobject_put(&d->disk.kobj);
@@ -1157,7 +1159,6 @@ static void flash_dev_free(struct kobject *kobj)
 
 static int flash_dev_run(struct cache_set *c, struct uuid_entry *u)
 {
-	char buf[BDEVNAME_SIZE];
 	struct bcache_device *d = kzalloc(sizeof(struct bcache_device),
 					  GFP_KERNEL);
 	if (!d)
@@ -1169,7 +1170,6 @@ static int flash_dev_run(struct cache_set *c, struct uuid_entry *u)
 		goto err;
 
 	bcache_device_attach(d, c, u - c->uuids);
-
 	set_capacity(d->disk, u->sectors);
 	flash_dev_request_init(d);
 	add_disk(d->disk);
@@ -1177,10 +1177,7 @@ static int flash_dev_run(struct cache_set *c, struct uuid_entry *u)
 	if (kobject_add(&d->kobj, &disk_to_dev(d->disk)->kobj, "bcache"))
 		goto err;
 
-	sprintf(buf, "volume%u", d->id);
-	if (sysfs_create_link(&d->kobj, &c->kobj, "cache") ||
-	    sysfs_create_link(&c->kobj, &d->kobj, buf))
-		goto err;
+	bcache_device_link(d, c, "volume");
 
 	return 0;
 err:

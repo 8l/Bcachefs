@@ -95,16 +95,17 @@ static struct kobj_type accounting_obj = {
 
 static void scale_accounting(unsigned long data);
 
-void init_cache_accounting(struct cache_accounting *acc)
+void init_cache_accounting(struct cache_accounting *acc, struct closure *parent)
 {
-	kobject_init(&acc->total.kobj, &accounting_obj);
-	kobject_init(&acc->five_minute.kobj, &accounting_obj);
-	kobject_init(&acc->hour.kobj, &accounting_obj);
-	kobject_init(&acc->day.kobj, &accounting_obj);
+	kobject_init(&acc->total.kobj,		&accounting_obj);
+	kobject_init(&acc->five_minute.kobj,	&accounting_obj);
+	kobject_init(&acc->hour.kobj,		&accounting_obj);
+	kobject_init(&acc->day.kobj,		&accounting_obj);
 
+	closure_init(&acc->cl, parent);
 	init_timer(&acc->timer);
 	acc->timer.expires	= jiffies + accounting_delay;
-	acc->timer.data	= (unsigned long) acc;
+	acc->timer.data		= (unsigned long) acc;
 	acc->timer.function	= scale_accounting;
 	add_timer(&acc->timer);
 }
@@ -132,12 +133,14 @@ void clear_stats(struct cache_accounting *acc)
 
 void destroy_cache_accounting(struct cache_accounting *acc)
 {
-	del_timer_sync(&acc->timer);
-
 	kobject_put(&acc->total.kobj);
 	kobject_put(&acc->five_minute.kobj);
 	kobject_put(&acc->hour.kobj);
 	kobject_put(&acc->day.kobj);
+
+	atomic_set(&acc->closing, 1);
+	if (del_timer_sync(&acc->timer))
+		closure_return(&acc->cl);
 }
 
 /* EWMA scaling */
@@ -188,7 +191,11 @@ void scale_accounting(unsigned long data)
 	scale_stats(&acc->five_minute, FIVE_MINUTE_RESCALE);
 
 	acc->timer.expires += accounting_delay;
-	add_timer(&acc->timer);
+
+	if (!atomic_read(&acc->closing))
+		add_timer(&acc->timer);
+	else
+		closure_return(&acc->cl);
 }
 
 static void mark_cache_stats(struct cache_stat_collector *stats,

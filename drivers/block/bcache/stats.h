@@ -26,17 +26,20 @@ struct cache_stats {
 };
 
 struct cache_accounting {
+	struct closure		cl;
+	struct timer_list	timer;
+	atomic_t		closing;
+
 	struct cache_stat_collector collector;
 
 	struct cache_stats total;
 	struct cache_stats five_minute;
 	struct cache_stats hour;
 	struct cache_stats day;
-
-	struct timer_list	timer;
 };
 
-void init_cache_accounting(struct cache_accounting *acc);
+void init_cache_accounting(struct cache_accounting *acc,
+			   struct closure *parent);
 
 int add_cache_accounting_kobjs(struct cache_accounting *acc,
 			       struct kobject *parent);

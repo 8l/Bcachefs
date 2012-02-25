@@ -1049,13 +1049,13 @@ static struct cached_dev *cached_dev_alloc(unsigned block_size)
 	if (!d)
 		return NULL;
 
+	closure_init(&d->disk.cl, NULL);
+	set_closure_fn(&d->disk.cl, cached_dev_flush, system_wq);
+
 	__module_get(THIS_MODULE);
 	INIT_LIST_HEAD(&d->list);
 	cached_dev_kobject_init(d);
-	init_cache_accounting(&d->accounting);
-
-	closure_init(&d->disk.cl, NULL);
-	set_closure_fn(&d->disk.cl, cached_dev_flush, system_wq);
+	init_cache_accounting(&d->accounting, &d->disk.cl);
 
 	if (bcache_device_init(&d->disk, block_size))
 		goto err;
@@ -1363,7 +1363,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	closure_put(&c->cl);
 
 	cache_set_kobject_init(c);
-	init_cache_accounting(&c->accounting);
+	init_cache_accounting(&c->accounting, &c->cl);
 
 	memcpy(c->sb.set_uuid, sb->set_uuid, 16);
 	c->sb.block_size	= sb->block_size;

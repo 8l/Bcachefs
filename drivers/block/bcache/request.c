@@ -616,7 +616,7 @@ static void __do_bio_hook(struct search *s)
 	bio->bi_end_io		= request_endio;
 	bio->bi_private		= &s->cl;
 	bio->bi_destructor	= NULL;
-	atomic_set(&bio->bi_cnt, 2);
+	atomic_set(&bio->bi_cnt, 3);
 }
 
 static struct search *do_bio_hook(struct bio *bio, struct bcache_device *d)
@@ -678,6 +678,9 @@ static void cached_dev_bio_complete(struct closure *cl)
 				__free_page(bv->bv_page);
 		bio_put(s->cache_bio);
 	}
+
+	if (s->cache_miss)
+		bio_put(s->cache_miss);
 
 	if (s->unaligned_bvec)
 		mempool_free(s->bio.bio.bi_io_vec, d->unaligned_bvec);
@@ -941,6 +944,7 @@ static void __request_read(struct closure *cl)
 	if (!s->cache_hit_done) {
 		if (s->cache_miss)
 			generic_make_request(s->cache_miss);
+
 		s->cache_miss = bio;
 	} else
 		reada = 0;
@@ -957,6 +961,9 @@ static void __request_read(struct closure *cl)
 		trace_bcache_cache_miss(s->orig_bio);
 
 		bio = s->cache_bio ?: s->cache_miss;
+		if (bio == s->cache_miss)
+			bio_get(bio);
+
 		if (closure_bio_submit_put(bio, &s->cl, op->d->c->bio_split))
 			continue_at(cl, request_read_resubmit, bcache_wq);
 	}

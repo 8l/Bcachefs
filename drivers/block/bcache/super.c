@@ -1546,7 +1546,9 @@ static void run_cache_set(struct cache_set *c)
 		 * Wait for prio_write() to finish, so the SET_CACHE_SYNC()
 		 * doesn't race
 		 */
-		closure_sync(&c->cl);
+		for_each_cache(ca, c)
+			closure_wait_event(&c->bucket_wait, &op.cl,
+				   atomic_read(&ca->prio_written) == -1);
 
 		bcache_btree_set_root(c->root);
 		rw_unlock(true, c->root);

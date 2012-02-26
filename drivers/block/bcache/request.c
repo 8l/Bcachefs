@@ -30,9 +30,9 @@ struct kmem_cache *search_cache;
 
 /* Cgroup interface */
 
+#ifdef CONFIG_CGROUP_BCACHE
 static struct bcache_cgroup bcache_default_cgroup = { .cache_mode = -1 };
 
-#ifdef CONFIG_CGROUP_BCACHE
 struct bcache_cgroup *cgroup_to_bcache(struct cgroup *cgroup)
 {
 	struct cgroup_subsys_state *css;

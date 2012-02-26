@@ -123,7 +123,17 @@ static inline unsigned bset_offset(struct btree *b, struct bset *i)
 
 static inline struct bset *write_block(struct btree *b)
 {
-	 return ((void *) b->sets[0].data) + b->written * block_bytes(b->c);
+	return ((void *) b->sets[0].data) + b->written * block_bytes(b->c);
+}
+
+static inline bool bset_written(struct btree *b, struct bset_tree *t)
+{
+	return t->data < write_block(b);
+}
+
+static inline bool bkey_written(struct btree *b, struct bkey *k)
+{
+	return k < write_block(b)->start;
 }
 
 static inline void set_gc_sectors(struct cache_set *c)

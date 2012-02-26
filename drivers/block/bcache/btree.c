@@ -1070,7 +1070,7 @@ static int btree_gc_mark(struct btree *b, unsigned *keys, struct gc_stat *gc)
 
 	for (struct bset_tree *t = b->sets; t <= &b->sets[b->nsets]; t++)
 		btree_bug_on(t->size &&
-			     t->data != write_block(b) &&
+			     bset_written(b, t) &&
 			     bkey_cmp(&b->key, &t->end) < 0,
 			     b, "found short btree key in gc");
 
@@ -1663,7 +1663,7 @@ static bool fix_overlapping_extents(struct btree *b,
 
 			subtract_dirty(k, KEY_SIZE(check));
 
-			if (k < write_block(b)->start) {
+			if (bkey_written(b, k)) {
 				/*
 				 * We insert a new key to cover the top of the
 				 * old key, and the old key is modified in place
@@ -1700,7 +1700,7 @@ static bool fix_overlapping_extents(struct btree *b,
 			if (bkey_cmp(k, &START_KEY(check)) > 0)
 				subtract_dirty(k, k->key - KEY_START(check));
 
-			if (k < write_block(b)->start &&
+			if (bkey_written(b, k) &&
 			    bkey_cmp(&START_KEY(check), &START_KEY(k)) <= 0)
 				/*
 				 * Completely overwrote, so we don't have to
@@ -1972,7 +1972,7 @@ static int btree_insert_recurse(struct btree *b, struct btree_op *op,
 			return btree_split(b, op);
 		}
 
-		if (write_block(b) != b->sets[b->nsets].data) {
+		if (bset_written(b, &b->sets[b->nsets])) {
 			bset_init(b, write_block(b));
 			bset_build_tree(b, &b->sets[b->nsets]);
 		}

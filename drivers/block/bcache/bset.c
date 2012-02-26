@@ -526,7 +526,7 @@ void bset_build_tree(struct btree *b, struct bset_tree *t)
 		t->prev = t[-1].prev + j;
 	}
 
-	if (t->data == write_block(b)) {
+	if (!bset_written(b, t)) {
 		BUG_ON(t->data->keys);
 
 		if (t->tree != b->sets->tree + bset_tree_space(b)) {
@@ -583,7 +583,7 @@ void bset_fix_invalidated_key(struct btree *b, struct bkey *k)
 
 	BUG();
 found_set:
-	if (t->data == write_block(b) || !t->size)
+	if (!t->size || !bset_written(b, t))
 		return;
 
 	inorder = bkey_to_cacheline(t, k);
@@ -778,7 +778,7 @@ struct bkey *__bset_search(struct btree *b, struct bset_tree *t,
 	if (unlikely(!t->size)) {
 		i.l = t->data->start;
 		i.r = end(t->data);
-	} else if (t->data != write_block(b)) {
+	} else if (bset_written(b, t)) {
 		/*
 		 * Each node in the auxiliary search tree covers a certain range
 		 * of bits, and keys above and below the set it covers might
@@ -793,18 +793,16 @@ struct bkey *__bset_search(struct btree *b, struct bset_tree *t,
 			return t->data->start;
 
 		i = bset_search_tree(b, t, search);
-
-#ifdef CONFIG_BCACHE_EDEBUG
-		BUG_ON(i.l != t->data->start &&
-		       t->data != write_block(b) &&
-		       bkey_cmp(tree_to_prev_bkey(t,
-			  inorder_to_tree(bkey_to_cacheline(t, i.l), t)),
-				search) > 0);
-#endif
 	} else
 		i = bset_search_write_set(b, t, search);
 
 #ifdef CONFIG_BCACHE_EDEBUG
+	BUG_ON(bset_written(b, t) &&
+	       i.l != t->data->start &&
+	       bkey_cmp(tree_to_prev_bkey(t,
+		  inorder_to_tree(bkey_to_cacheline(t, i.l), t)),
+			search) > 0);
+
 	BUG_ON(i.r != end(t->data) &&
 	       bkey_cmp(i.r, search) <= 0);
 #endif
@@ -1069,7 +1067,7 @@ static int btree_bset_stats(struct btree *b, struct btree_op *op,
 {
 	struct bkey *k;
 
-	if (write_block(b) == b->sets[b->nsets].data)
+	if (btree_node_dirty(b))
 		stats->writes++;
 	stats->sets		+= b->nsets + 1;
 	stats->tree_space	+= bset_tree_space(b);

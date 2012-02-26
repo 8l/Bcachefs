@@ -1344,26 +1344,29 @@ static void __cache_set_unregister(struct closure *cl)
 
 	mutex_lock(&register_lock);
 
-	list_for_each_entry_safe(d, t, &c->cached_devs, list)
-		cached_dev_detach(d);
+	if (atomic_read(&c->unregistering))
+		list_for_each_entry_safe(d, t, &c->cached_devs, list)
+			cached_dev_detach(d);
+
+	for (size_t i = 0; i < c->nr_uuids; i++)
+		if (c->devices[i])
+			bcache_device_stop(c->devices[i]);
 
 	mutex_unlock(&register_lock);
 
 	continue_at(cl, cache_set_flush, system_wq);
 }
 
-static void cache_set_unregister(struct cache_set *c)
-{
-	if (!atomic_xchg(&c->closing, 1)) {
-		set_closure_fn(&c->caching, __cache_set_unregister, system_wq);
-		closure_queue(&c->caching);
-	}
-}
-
 static void cache_set_stop(struct cache_set *c)
 {
 	if (!atomic_xchg(&c->closing, 1))
-		continue_at(&c->caching, cache_set_flush, system_wq);
+		closure_queue(&c->caching);
+}
+
+static void cache_set_unregister(struct cache_set *c)
+{
+	atomic_set(&c->unregistering, 1);
+	cache_set_stop(c);
 }
 
 #define alloc_bucket_pages(gfp, c)			\
@@ -1381,6 +1384,7 @@ struct cache_set *cache_set_alloc(struct cache_sb *sb)
 	set_closure_fn(&c->cl, cache_set_free, system_wq);
 
 	closure_init(&c->caching, &c->cl);
+	set_closure_fn(&c->caching, __cache_set_unregister, system_wq);
 
 	/* Maybe create continue_at_noreturn() and use it here? */
 	closure_set_stopped(&c->cl);
@@ -1905,13 +1909,8 @@ static int bcache_reboot(struct notifier_block *n, unsigned long code, void *x)
 
 		printk(KERN_INFO "bcache: Stopping all devices:\n");
 
-		list_for_each_entry_safe(c, tc, &cache_sets, list) {
-			for (size_t i = 0; i < c->nr_uuids; i++)
-				if (c->devices[i])
-					bcache_device_stop(c->devices[i]);
-
+		list_for_each_entry_safe(c, tc, &cache_sets, list)
 			cache_set_stop(c);
-		}
 
 		list_for_each_entry_safe(dc, tdc, &uncached_devices, list)
 			bcache_device_stop(&dc->disk);

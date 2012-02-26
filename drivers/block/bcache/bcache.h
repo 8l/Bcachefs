@@ -387,6 +387,12 @@ struct cache_set {
 	struct kobject		kobj;
 	struct kobject		internal;
 	struct cache_accounting accounting;
+
+	/*
+	 * If nonzero, we're trying to detach from all the devices we're
+	 * caching; otherwise we're merely closing
+	 */
+	atomic_t		unregistering;
 	atomic_t		closing;
 
 	struct cache_sb		sb;

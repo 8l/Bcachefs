@@ -1269,7 +1269,8 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 
 		bkey_copy_key(&b->c->gc_done, r->k);
 
-		btree_gc_coalesce(b, op, gc, r);
+		if (!b->written)
+			btree_gc_coalesce(b, op, gc, r);
 
 		if (r[GC_MERGE_NODES - 1].b)
 			write(r[GC_MERGE_NODES - 1].b);
@@ -1294,7 +1295,8 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 		write(r[i].b);
 
 	/* Might have freed some children, must remove their keys */
-	btree_sort(b, 0, NULL);
+	if (!b->written)
+		btree_sort(b, 0, NULL);
 
 	return ret;
 }

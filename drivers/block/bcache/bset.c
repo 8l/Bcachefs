@@ -516,7 +516,7 @@ void bset_build_tree(struct btree *b, struct bset_tree *t)
 	struct bkey *k = t->data->start;
 	unsigned j, cacheline = 1;
 
-	for (struct bset_tree *i = t; i < &b->sets[5]; i++)
+	for (struct bset_tree *i = t; i < &b->sets[MAX_BSETS]; i++)
 		i->size = 0;
 
 	if (t != b->sets) {

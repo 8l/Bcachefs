@@ -190,9 +190,10 @@ struct bkey *__bset_search(struct btree *, struct bset_tree *,
 
 bool bkey_try_merge(struct btree *, struct bkey *, struct bkey *);
 void btree_sort_lazy(struct btree *);
-void btree_sort(struct btree *, int, struct bset *);
-void __btree_sort(struct btree *, int, struct bset *,
-		  struct btree_iter *, bool);
+void btree_sort_into(struct btree *, struct btree *);
+void btree_sort_and_fix_extents(struct btree *, struct btree_iter *);
+void btree_sort_partial(struct btree *, unsigned);
+#define btree_sort(b)	btree_sort_partial(b, 0)
 
 int bset_print_stats(struct cache_set *, char *);
 

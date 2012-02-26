@@ -209,7 +209,7 @@ void btree_read_done(struct closure *cl)
 		if (i->seq == b->sets[0].data->seq)
 			goto err;
 
-	__btree_sort(b, 0, NULL, iter, true);
+	btree_sort_and_fix_extents(b, iter);
 
 	i = b->sets[0].data;
 	err = "short btree key";
@@ -978,12 +978,8 @@ static struct btree *btree_alloc_replacement(struct btree *b,
 					     struct closure *cl)
 {
 	struct btree *n = bcache_btree_alloc(b->c, b->level, cl);
-
-	if (!IS_ERR_OR_NULL(n)) {
-		btree_sort(b, 0, n->sets[0].data);
-		bkey_copy_key(&n->key, &b->key);
-		n->sets->size = 0;
-	}
+	if (!IS_ERR_OR_NULL(n))
+		btree_sort_into(b, n);
 
 	return n;
 }
@@ -1173,7 +1169,7 @@ static void btree_gc_coalesce(struct btree *b, struct btree_op *op,
 				 * make btree_sort() remove stale ptrs
 				 */
 				r->b->written = 0;
-				btree_sort(r->b, 0, NULL);
+				btree_sort(r->b);
 				n2 = r->b->sets->data;
 			}
 
@@ -1313,7 +1309,7 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 
 	/* Might have freed some children, must remove their keys */
 	if (!b->written)
-		btree_sort(b, 0, NULL);
+		btree_sort(b);
 
 	return ret;
 }

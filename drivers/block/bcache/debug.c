@@ -427,7 +427,7 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 		       fill->sets[0].data,
 		       btree_bytes(c));
 
-		btree_sort(b, 0, NULL);
+		btree_sort(b);
 		fill->written = 0;
 		btree_read_done(&fill->io.cl);
 

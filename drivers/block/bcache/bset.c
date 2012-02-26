@@ -931,43 +931,14 @@ static void btree_sort_fixup(struct btree_iter *iter)
 	}
 }
 
-void __btree_sort(struct btree *b, int start, struct bset *new,
-		  struct btree_iter *iter, bool fixup)
+static void btree_mergesort(struct btree *b, struct bset *out,
+			    struct btree_iter *iter,
+			    bool fixup, bool remove_stale)
 {
-	size_t oldsize = 0, order = b->page_order, keys = 0;
-	struct bset *out = new;
 	struct bkey *k, *last = NULL;
-	bool remove_stale = new || !b->written;
-	uint64_t start_time;
-
 	bool (*bad)(struct btree *, const struct bkey *) = remove_stale
 		? ptr_bad
 		: ptr_invalid;
-
-	BUG_ON(remove_stale && fixup);
-
-	if (!fixup && !remove_stale)
-		oldsize = count_data(b);
-
-	if (start) {
-		struct bset *i;
-		for_each_sorted_set_start(b, i, start)
-			keys += i->keys;
-
-		order = roundup_pow_of_two(__set_bytes(i, keys)) / PAGE_SIZE;
-		if (order)
-			order = ilog2(order);
-	}
-
-	if (!out)
-		out = (void *) __get_free_pages(__GFP_NOWARN|GFP_NOIO, order);
-	if (!out) {
-		mutex_lock(&b->c->sort_lock);
-		out = b->c->sort;
-		order = ilog2(bucket_pages(b->c));
-	}
-
-	start_time = local_clock();
 
 	while (!btree_iter_end(iter)) {
 		if (fixup && !b->level)
@@ -989,17 +960,30 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 
 	out->keys = last ? (uint64_t *) next(last) - out->d : 0;
 
-	if (!fixup && !start && !remove_stale)
-		btree_verify(b, out);
+	pr_debug("sorted %i keys", out->keys);
+	check_key_order(b, out);
+}
 
-	if (new) {
-		spin_lock(&b->c->sort_time_lock);
-		time_stats_update(&b->c->sort_time, start_time);
-		spin_unlock(&b->c->sort_time_lock);
-		return;
+static void __btree_sort(struct btree *b, struct btree_iter *iter,
+			 unsigned start, unsigned order, bool fixup)
+{
+	uint64_t start_time;
+	bool remove_stale = !b->written;
+	struct bset *out = (void *) __get_free_pages(__GFP_NOWARN|GFP_NOIO,
+						     order);
+	if (!out) {
+		mutex_lock(&b->c->sort_lock);
+		out = b->c->sort;
+		order = ilog2(bucket_pages(b->c));
 	}
 
+	start_time = local_clock();
+
+	btree_mergesort(b, out, iter, fixup, remove_stale);
 	b->nsets = start;
+
+	if (!fixup && !start && b->written)
+		btree_verify(b, out);
 
 	if (!start && order == b->page_order) {
 		out->magic	= bset_magic(b->c);
@@ -1020,7 +1004,7 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 	else
 		free_pages((unsigned long) out, order);
 
-	if (!new && b->written)
+	if (b->written)
 		bset_build_written_tree(b);
 
 	if (!start) {
@@ -1028,18 +1012,56 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 		time_stats_update(&b->c->sort_time, start_time);
 		spin_unlock(&b->c->sort_time_lock);
 	}
-
-	pr_debug("sorted %i keys", b->sets[start].data->keys);
-	check_key_order(b, b->sets[start].data);
-	EBUG_ON(!fixup && !remove_stale && count_data(b) != oldsize);
 }
 
-void btree_sort(struct btree *b, int start, struct bset *new)
+void btree_sort_partial(struct btree *b, unsigned start)
 {
+	size_t oldsize = 0, order = b->page_order, keys = 0;
 	struct btree_iter iter;
 	__btree_iter_init(b, &iter, NULL, &b->sets[start]);
 
-	__btree_sort(b, start, new, &iter, false);
+	BUG_ON(b->sets[b->nsets].data == write_block(b) &&
+	       (b->sets[b->nsets].size || b->nsets));
+
+	if (b->written)
+		oldsize = count_data(b);
+
+	if (start) {
+		struct bset *i;
+		for_each_sorted_set_start(b, i, start)
+			keys += i->keys;
+
+		order = roundup_pow_of_two(__set_bytes(i, keys)) / PAGE_SIZE;
+		if (order)
+			order = ilog2(order);
+	}
+
+	__btree_sort(b, &iter, start, order, false);
+
+	EBUG_ON(b->written && count_data(b) != oldsize);
+}
+
+void btree_sort_and_fix_extents(struct btree *b, struct btree_iter *iter)
+{
+	BUG_ON(!b->written);
+	__btree_sort(b, iter, 0, b->page_order, true);
+}
+
+void btree_sort_into(struct btree *b, struct btree *new)
+{
+	uint64_t start_time = local_clock();
+
+	struct btree_iter iter;
+	btree_iter_init(b, &iter, NULL);
+
+	btree_mergesort(b, new->sets->data, &iter, false, true);
+
+	spin_lock(&b->c->sort_time_lock);
+	time_stats_update(&b->c->sort_time, start_time);
+	spin_unlock(&b->c->sort_time_lock);
+
+	bkey_copy_key(&new->key, &b->key);
+	new->sets->size = 0;
 }
 
 void btree_sort_lazy(struct btree *b)
@@ -1055,7 +1077,7 @@ void btree_sort_lazy(struct btree *b)
 		for (unsigned j = 0; j < b->nsets; j++) {
 			if (keys * 2 < total ||
 			    keys < 1000) {
-				btree_sort(b, j, NULL);
+				btree_sort_partial(b, j);
 				return;
 			}
 
@@ -1064,7 +1086,7 @@ void btree_sort_lazy(struct btree *b)
 
 		/* Must sort if b->nsets == 3 or we'll overflow */
 		if (b->nsets >= (MAX_BSETS - 1) - b->level) {
-			btree_sort(b, 0, NULL);
+			btree_sort(b);
 			return;
 		}
 	}

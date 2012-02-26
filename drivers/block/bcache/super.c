@@ -119,7 +119,7 @@ static void cached_dev_run(struct cached_dev *);
 static int cached_dev_attach(struct cached_dev *, struct cache_set *);
 static void cached_dev_detach(struct cached_dev *);
 
-static void flash_dev_free(struct kobject *);
+static void __flash_dev_free(struct kobject *);
 static int flash_dev_create(struct cache_set *c, uint64_t size);
 
 static void __cache_set_free(struct kobject *);
@@ -734,6 +734,19 @@ static void bcache_device_stop(struct bcache_device *d)
 
 static void bcache_device_detach(struct bcache_device *d)
 {
+	lockdep_assert_held(&register_lock);
+
+	if (atomic_read(&d->detaching)) {
+		struct uuid_entry *u = d->c->uuids + d->id;
+
+		SET_UUID_FLASH_ONLY(u, 0);
+		memcpy(u->uuid, invalid_uuid, 16);
+		u->invalidated = cpu_to_le32(get_seconds());
+		uuid_write(d->c);
+
+		atomic_set(&d->detaching, 0);
+	}
+
 	sysfs_remove_link(&d->c->kobj, d->name);
 	sysfs_remove_link(&d->kobj, "cache");
 
@@ -879,7 +892,7 @@ static void cached_dev_detach_finish(struct work_struct *w)
 
 	mutex_lock(&register_lock);
 
-	BUG_ON(!atomic_read(&d->detaching));
+	BUG_ON(!atomic_read(&d->disk.detaching));
 	BUG_ON(atomic_read(&d->count));
 
 	memset(&d->sb.set_uuid, 0, 16);
@@ -888,25 +901,20 @@ static void cached_dev_detach_finish(struct work_struct *w)
 	write_bdev_super(d, &cl);
 	closure_sync(&cl);
 
-	memcpy(d->disk.c->uuids[d->disk.id].uuid, invalid_uuid, 16);
-	d->disk.c->uuids[d->disk.id].invalidated = cpu_to_le32(get_seconds());
-	uuid_write(d->disk.c);
-
-	list_move(&d->list, &uncached_devices);
-	atomic_set(&d->detaching, 0);
 	bcache_device_detach(&d->disk);
+	list_move(&d->list, &uncached_devices);
+
+	mutex_unlock(&register_lock);
 
 	printk(KERN_DEBUG "bcache: Caching disabled for %s\n",
 	       bdevname(d->bdev, buf));
-
-	mutex_unlock(&register_lock);
 }
 
 static void cached_dev_detach(struct cached_dev *d)
 {
 	lockdep_assert_held(&register_lock);
 
-	if (atomic_xchg(&d->detaching, 1))
+	if (atomic_xchg(&d->disk.detaching, 1))
 		return;
 
 	bcache_writeback_queue(d);
@@ -1149,12 +1157,25 @@ err:
 
 /* Flash only volumes */
 
-static void flash_dev_free(struct kobject *kobj)
+static void __flash_dev_free(struct kobject *kobj)
 {
 	struct bcache_device *d = container_of(kobj, struct bcache_device,
 					       kobj);
-	bcache_device_free(d);
 	kfree(d);
+}
+
+static void flash_dev_free(struct closure *cl)
+{
+	struct bcache_device *d = container_of(cl, struct bcache_device, cl);
+	bcache_device_free(d);
+	kobject_put(&d->kobj);
+}
+
+static void flash_dev_flush(struct closure *cl)
+{
+	struct bcache_device *d = container_of(cl, struct bcache_device, cl);
+	kobject_del(&d->kobj);
+	continue_at(cl, flash_dev_free, system_wq);
 }
 
 static int flash_dev_run(struct cache_set *c, struct uuid_entry *u)
@@ -1163,6 +1184,9 @@ static int flash_dev_run(struct cache_set *c, struct uuid_entry *u)
 					  GFP_KERNEL);
 	if (!d)
 		return -ENOMEM;
+
+	closure_init(&d->cl, NULL);
+	set_closure_fn(&d->cl, flash_dev_flush, system_wq);
 
 	flash_dev_kobject_init(d);
 

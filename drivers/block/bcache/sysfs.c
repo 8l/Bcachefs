@@ -252,7 +252,7 @@ SHOW(flash_dev)
 	return 0;
 }
 
-STORE(flash_dev)
+STORE(__flash_dev)
 {
 	struct bcache_device *d = container_of(kobj, struct bcache_device,
 					       kobj);
@@ -274,8 +274,14 @@ STORE(flash_dev)
 		uuid_write(d->c);
 	}
 
+	if (attr == &sysfs_unregister) {
+		atomic_set(&d->detaching, 1);
+		bcache_device_stop(d);
+	}
+
 	return size;
 }
+STORE_LOCKED(flash_dev)
 
 static void flash_dev_kobject_init(struct bcache_device *d)
 {
@@ -288,7 +294,7 @@ static void flash_dev_kobject_init(struct bcache_device *d)
 		&sysfs_size,
 		NULL
 	};
-	KTYPE(flash_dev, flash_dev_free);
+	KTYPE(flash_dev, __flash_dev_free);
 
 	kobject_init(&d->kobj, &flash_dev_obj);
 }

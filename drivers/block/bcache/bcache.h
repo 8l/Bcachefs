@@ -165,6 +165,9 @@ struct bcache_device {
 	/* If nonzero, we're closing */
 	atomic_t		closing;
 
+	/* If nonzero, we're detaching/unregistering from cache set */
+	atomic_t		detaching;
+
 	atomic_long_t		sectors_dirty;
 	unsigned long		sectors_dirty_gc;
 	unsigned long		sectors_dirty_last;
@@ -214,9 +217,6 @@ struct cached_dev {
 	/* Refcount on the cache set. Always nonzero when we're caching. */
 	atomic_t		count;
 	struct work_struct	detach;
-
-	/* If nonzero, we're disabling caching */
-	atomic_t		detaching;
 
 	/*
 	 * Device might not be running if it's dirty and the cache set hasn't

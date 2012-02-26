@@ -217,6 +217,9 @@ void btree_read_done(struct closure *cl)
 	    bkey_cmp(&b->key, &b->sets[0].end) < 0)
 		goto err;
 
+	if (b->written < btree_blocks(b))
+		bset_init_next(b);
+
 	if (0) {
 err:		set_btree_node_io_error(b);
 		cache_set_error(b->c, "%s at bucket %lu, block %zu, %u keys",
@@ -379,8 +382,10 @@ static void __btree_write(struct btree *b)
 	atomic_long_add(set_blocks(i, b->c) * b->c->sb.block_size,
 			&PTR_CACHE(b->c, &b->key, 0)->btree_sectors_written);
 
-	if (!btree_sort_lazy(b))
-		bset_build_tree(b, &b->sets[b->nsets]);
+	btree_sort_lazy(b);
+
+	if (b->written < btree_blocks(b))
+		bset_init_next(b);
 }
 
 static void btree_write_work(struct work_struct *w)
@@ -957,7 +962,7 @@ retry:
 
 	set_btree_node_read_done(b);
 	b->accessed = 1;
-	bset_init(b, b->sets[0].data);
+	bset_init_next(b);
 
 	mutex_unlock(&c->bucket_lock);
 	return b;
@@ -1972,10 +1977,7 @@ static int btree_insert_recurse(struct btree *b, struct btree_op *op,
 			return btree_split(b, op);
 		}
 
-		if (bset_written(b, &b->sets[b->nsets])) {
-			bset_init(b, write_block(b));
-			bset_build_tree(b, &b->sets[b->nsets]);
-		}
+		BUG_ON(write_block(b) != b->sets[b->nsets].data);
 
 		if (bcache_btree_insert_keys(b, op))
 			btree_write(b, false, op);

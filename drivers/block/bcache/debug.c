@@ -382,7 +382,7 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 		for (int i = 0; i < 3; i++)
 			all[i]->written = all[i]->nsets = 0;
 
-		bset_init(b, b->sets[0].data);
+		bset_init_next(b);
 
 		while (1) {
 			struct bset *i = write_block(b);
@@ -419,7 +419,7 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 					break;
 
 				btree_sort_lazy(b);
-				bset_init(b, write_block(b));
+				bset_init_next(b);
 			}
 		}
 

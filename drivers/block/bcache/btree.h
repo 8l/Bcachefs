@@ -41,37 +41,7 @@ struct btree {
 	 * to the memory we have allocated for this btree node. Additionally,
 	 * set[0]->data points to the entire btree node as it exists on disk.
 	 */
-	struct bset_tree {
-		/*
-		 * We construct a binary tree in an array as if the array
-		 * started at 1, so that things line up on the same cachelines
-		 * better: see comments in bset.c at cacheline_to_bkey() for
-		 * details
-		 */
-
-		/* size of the binary tree and prev array */
-		unsigned	size;
-
-		/* function of size - precalculated for to_inorder() */
-		unsigned	extra;
-
-		/* copy of the last key in the set */
-		struct bkey	end;
-		struct bkey_float *tree;
-
-		/*
-		 * The nodes in the bset tree point to specific keys - this
-		 * array holds the sizes of the previous key.
-		 *
-		 * Conceptually it's a member of struct bkey_float, but we want
-		 * to keep bkey_float to 4 bytes and prev isn't used in the fast
-		 * path.
-		 */
-		uint8_t		*prev;
-
-		/* The actual btree node, with pointers to each sorted set */
-		struct bset	*data;
-	}			sets[MAX_BSETS];
+	struct bset_tree	sets[MAX_BSETS];
 
 	/* Used to refcount bio splits, also protects b->bio */
 	struct closure_with_waitlist	io;

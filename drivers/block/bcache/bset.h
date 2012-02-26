@@ -8,11 +8,39 @@ struct btree_iter {
 	struct btree_iter_set {
 		struct bkey *k, *end;
 	} data[MAX_BSETS];
-	/* Has to be 1 greater than the normal max for coalescing in
-	 * btree_gc_recurse() */
 };
 
-struct bset_tree;
+struct bset_tree {
+	/*
+	 * We construct a binary tree in an array as if the array
+	 * started at 1, so that things line up on the same cachelines
+	 * better: see comments in bset.c at cacheline_to_bkey() for
+	 * details
+	 */
+
+	/* size of the binary tree and prev array */
+	unsigned	size;
+
+	/* function of size - precalculated for to_inorder() */
+	unsigned	extra;
+
+	/* copy of the last key in the set */
+	struct bkey	end;
+	struct bkey_float *tree;
+
+	/*
+	 * The nodes in the bset tree point to specific keys - this
+	 * array holds the sizes of the previous key.
+	 *
+	 * Conceptually it's a member of struct bkey_float, but we want
+	 * to keep bkey_float to 4 bytes and prev isn't used in the fast
+	 * path.
+	 */
+	uint8_t		*prev;
+
+	/* The actual btree node, with pointers to each sorted set */
+	struct bset	*data;
+};
 
 static __always_inline int64_t bkey_cmp(const struct bkey *l,
 					const struct bkey *r)
@@ -150,8 +178,8 @@ struct bkey_float {
 #define bset_tree_bytes(b)	(bset_tree_space(b) * sizeof(struct bkey_float))
 #define bset_prev_bytes(b)	(bset_tree_bytes(b) >> 2)
 
-void bset_init(struct btree *, struct bset *);
-void bset_build_tree(struct btree *, struct bset_tree *);
+void bset_init_next(struct btree *);
+
 void bset_fix_invalidated_key(struct btree *, struct bkey *);
 void bset_fix_lookup_table(struct btree *, struct bkey *);
 
@@ -161,7 +189,7 @@ struct bkey *__bset_search(struct btree *, struct bset_tree *,
 	((search) ? __bset_search(b, t, search) : (t)->data->start)
 
 bool bkey_try_merge(struct btree *, struct bkey *, struct bkey *);
-bool btree_sort_lazy(struct btree *);
+void btree_sort_lazy(struct btree *);
 void btree_sort(struct btree *, int, struct bset *);
 void __btree_sort(struct btree *, int, struct bset *,
 		  struct btree_iter *, bool);

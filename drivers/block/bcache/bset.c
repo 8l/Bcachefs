@@ -273,19 +273,6 @@ bool bkey_try_merge(struct btree *b, struct bkey *l, struct bkey *r)
 	return true;
 }
 
-void bset_init(struct btree *b, struct bset *i)
-{
-	if (i != b->sets[0].data) {
-		b->sets[++b->nsets].data = i;
-		i->seq = b->sets[0].data->seq;
-	} else
-		get_random_bytes(&i->seq, sizeof(uint64_t));
-
-	i->magic	= bset_magic(b->c);
-	i->version	= 0;
-	i->keys		= 0;
-}
-
 /* Binary tree stuff for auxiliary search trees */
 
 static unsigned inorder_next(unsigned j, unsigned size)
@@ -511,30 +498,39 @@ static void make_bfloat(struct bset_tree *t, unsigned j)
 		f->exponent = 127;
 }
 
-void bset_build_tree(struct btree *b, struct bset_tree *t)
+static void bset_alloc_tree(struct btree *b, struct bset_tree *t)
 {
-	struct bkey *k = t->data->start;
-	unsigned j, cacheline = 1;
-
-	for (struct bset_tree *i = t; i < &b->sets[MAX_BSETS]; i++)
-		i->size = 0;
-
 	if (t != b->sets) {
-		j = roundup(t[-1].size, 64 / sizeof(struct bkey_float));
+		unsigned j = roundup(t[-1].size,
+				     64 / sizeof(struct bkey_float));
 
 		t->tree = t[-1].tree + j;
 		t->prev = t[-1].prev + j;
 	}
 
-	if (!bset_written(b, t)) {
-		BUG_ON(t->data->keys);
+	while (t < b->sets + MAX_BSETS)
+		t++->size = 0;
+}
 
-		if (t->tree != b->sets->tree + bset_tree_space(b)) {
-			t->prev[0] = bkey_to_cacheline_offset(t->data->start);
-			t->size = 1;
-		}
-		return;
+static void bset_build_unwritten_tree(struct btree *b)
+{
+	struct bset_tree *t = b->sets + b->nsets;
+
+	bset_alloc_tree(b, t);
+
+	if (t->tree != b->sets->tree + bset_tree_space(b)) {
+		t->prev[0] = bkey_to_cacheline_offset(t->data->start);
+		t->size = 1;
 	}
+}
+
+static void bset_build_written_tree(struct btree *b)
+{
+	struct bset_tree *t = b->sets + b->nsets;
+	struct bkey *k = t->data->start;
+	unsigned j, cacheline = 1;
+
+	bset_alloc_tree(b, t);
 
 	t->size = min_t(unsigned,
 			bkey_to_cacheline(t, end(t->data)),
@@ -665,6 +661,23 @@ void bset_fix_lookup_table(struct btree *b, struct bkey *k)
 		}
 }
 
+void bset_init_next(struct btree *b)
+{
+	struct bset *i = write_block(b);
+
+	if (i != b->sets[0].data) {
+		b->sets[++b->nsets].data = i;
+		i->seq = b->sets[0].data->seq;
+	} else
+		get_random_bytes(&i->seq, sizeof(uint64_t));
+
+	i->magic	= bset_magic(b->c);
+	i->version	= 0;
+	i->keys		= 0;
+
+	bset_build_unwritten_tree(b);
+}
+
 struct bset_search_iter {
 	struct bkey *l, *r;
 };
@@ -675,6 +688,9 @@ static struct bset_search_iter bset_search_write_set(struct btree *b,
 						     const struct bkey *search)
 {
 	unsigned li = 0, ri = t->size;
+
+	BUG_ON(!b->nsets &&
+	       t->size < bkey_to_cacheline(t, end(t->data)));
 
 	while (li + 1 != ri) {
 		unsigned m = (li + ri) >> 1;
@@ -1005,7 +1021,7 @@ void __btree_sort(struct btree *b, int start, struct bset *new,
 		free_pages((unsigned long) out, order);
 
 	if (!new && b->written)
-		bset_build_tree(b, &b->sets[start]);
+		bset_build_written_tree(b);
 
 	if (!start) {
 		spin_lock(&b->c->sort_time_lock);
@@ -1026,7 +1042,7 @@ void btree_sort(struct btree *b, int start, struct bset *new)
 	__btree_sort(b, start, new, &iter, false);
 }
 
-bool btree_sort_lazy(struct btree *b)
+void btree_sort_lazy(struct btree *b)
 {
 	if (b->nsets) {
 		struct bset *i;
@@ -1040,7 +1056,7 @@ bool btree_sort_lazy(struct btree *b)
 			if (keys * 2 < total ||
 			    keys < 1000) {
 				btree_sort(b, j, NULL);
-				return true;
+				return;
 			}
 
 			keys -= b->sets[j].data->keys;
@@ -1049,11 +1065,11 @@ bool btree_sort_lazy(struct btree *b)
 		/* Must sort if b->nsets == 3 or we'll overflow */
 		if (b->nsets >= (MAX_BSETS - 1) - b->level) {
 			btree_sort(b, 0, NULL);
-			return true;
+			return;
 		}
 	}
 
-	return false;
+	bset_build_written_tree(b);
 }
 
 /* Sysfs stuff */

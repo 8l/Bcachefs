@@ -71,42 +71,35 @@ struct bkey *keylist_pop(struct keylist *l)
 bool __ptr_invalid(struct cache_set *c, int level, const struct bkey *k)
 {
 	if (level && (!KEY_PTRS(k) || !KEY_SIZE(k) || KEY_DIRTY(k)))
-		return true;
+		goto bad;
 
 	if (!level && KEY_SIZE(k) > k->key)
-		return true;
+		goto bad;
 
 	if (!KEY_SIZE(k))
 		return true;
 
-	for (unsigned i = 0; i < KEY_PTRS(k); i++) {
-		struct cache *ca = PTR_CACHE(c, k, i);
-		size_t bucket = PTR_BUCKET_NR(c, k, i);
-		size_t r = bucket_remainder(c, PTR_OFFSET(k, i));
+	for (unsigned i = 0; i < KEY_PTRS(k); i++)
+		if (ptr_available(c, k, i)) {
+			struct cache *ca = PTR_CACHE(c, k, i);
+			size_t bucket = PTR_BUCKET_NR(c, k, i);
+			size_t r = bucket_remainder(c, PTR_OFFSET(k, i));
 
-		if (KEY_SIZE(k) + r > c->sb.bucket_size ||
-		    PTR_DEV(k, i) > MAX_CACHES_PER_SET)
-			return true;
-
-		if (ca &&
-		    (bucket <  ca->sb.first_bucket ||
-		     bucket >= ca->sb.nbuckets))
-			return true;
-	}
+			if (KEY_SIZE(k) + r > c->sb.bucket_size ||
+			    bucket <  ca->sb.first_bucket ||
+			    bucket >= ca->sb.nbuckets)
+				goto bad;
+		}
 
 	return false;
+bad:
+	cache_bug(c, "spotted bad key %s: %s", pkey(k), ptr_status(c, k));
+	return true;
 }
 
 bool ptr_invalid(struct btree *b, const struct bkey *k)
 {
-	if (!KEY_SIZE(k))
-		return true;
-
-	if (!__ptr_invalid(b->c, b->level, k))
-		return false;
-
-	btree_bug(b, "spotted bad key %s: %s", pkey(k), ptr_status(b->c, k));
-	return true;
+	return __ptr_invalid(b->c, b->level, k);
 }
 
 bool ptr_bad(struct btree *b, const struct bkey *k)
@@ -119,45 +112,47 @@ bool ptr_bad(struct btree *b, const struct bkey *k)
 	    ptr_invalid(b, k))
 		return true;
 
-	for (i = 0; i < KEY_PTRS(k); i++) {
-		if (!PTR_CACHE(b->c, k, i))
-			return true;
+	if (KEY_PTRS(k) && PTR_DEV(k, 0) == PTR_CHECK_DEV)
+		return true;
 
-		g = PTR_BUCKET(b->c, k, i);
-		stale = ptr_stale(b->c, k, i);
+	for (i = 0; i < KEY_PTRS(k); i++)
+		if (ptr_available(b->c, k, i)) {
+			g = PTR_BUCKET(b->c, k, i);
+			stale = ptr_stale(b->c, k, i);
 
-		btree_bug_on(stale > 96, b, "key too stale: %i, need_gc %u",
-			     stale, b->c->need_gc);
+			btree_bug_on(stale > 96, b,
+				     "key too stale: %i, need_gc %u",
+				     stale, b->c->need_gc);
 
-		btree_bug_on(stale && KEY_DIRTY(k) && KEY_SIZE(k),
-			     b, "stale dirty pointer");
+			btree_bug_on(stale && KEY_DIRTY(k) && KEY_SIZE(k),
+				     b, "stale dirty pointer");
 
-		if (stale)
-			return true;
+			if (stale)
+				return true;
 
 #ifdef CONFIG_BCACHE_EDEBUG
-		if (!mutex_trylock(&b->c->bucket_lock))
-			continue;
+			if (!mutex_trylock(&b->c->bucket_lock))
+				continue;
 
-		if (b->level) {
-			if (KEY_DIRTY(k) ||
-			    g->prio != btree_prio ||
-			    (b->c->gc_mark_valid &&
-			     g->mark != GC_MARK_BTREE))
-				goto bug;
+			if (b->level) {
+				if (KEY_DIRTY(k) ||
+				    g->prio != btree_prio ||
+				    (b->c->gc_mark_valid &&
+				     g->mark != GC_MARK_BTREE))
+					goto bug;
 
-		} else {
-			if (g->prio == btree_prio)
-				goto bug;
+			} else {
+				if (g->prio == btree_prio)
+					goto bug;
 
-			if (KEY_DIRTY(k) &&
-			    b->c->gc_mark_valid &&
-			    g->mark != GC_MARK_DIRTY)
-				goto bug;
-		}
-		mutex_unlock(&b->c->bucket_lock);
+				if (KEY_DIRTY(k) &&
+				    b->c->gc_mark_valid &&
+				    g->mark != GC_MARK_DIRTY)
+					goto bug;
+			}
+			mutex_unlock(&b->c->bucket_lock);
 #endif
-	}
+		}
 
 	return false;
 #ifdef CONFIG_BCACHE_EDEBUG
@@ -246,7 +241,7 @@ bool bkey_try_merge(struct btree *b, struct bkey *l, struct bkey *r)
 
 	for (unsigned j = 0; j < KEY_PTRS(l); j++)
 		if (l->ptr[j] + PTR(0, KEY_SIZE(l), 0) != r->ptr[j] ||
-		    PTR_BUCKET(b->c, l, j) != PTR_BUCKET(b->c, r, j))
+		    PTR_BUCKET_NR(b->c, l, j) != PTR_BUCKET_NR(b->c, r, j))
 			return false;
 
 	/* Keys with no pointers aren't restricted to one bucket and could

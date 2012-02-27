@@ -988,11 +988,16 @@ static struct btree *btree_alloc_replacement(struct btree *b,
 
 void __btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 {
+	struct bucket *g;
+
 	if (!k->key || !KEY_SIZE(k))
 		return;
 
 	for (unsigned i = 0; i < KEY_PTRS(k); i++) {
-		struct bucket *g = PTR_BUCKET(c, k, i);
+		if (!ptr_available(c, k, i))
+			continue;
+
+		g = PTR_BUCKET(c, k, i);
 
 		if (gen_after(g->gc_gen, PTR_GEN(k, i)))
 			g->gc_gen = PTR_GEN(k, i);
@@ -1044,6 +1049,9 @@ static int btree_gc_mark(struct btree *b, unsigned *keys, struct gc_stat *gc)
 			continue;
 
 		for (unsigned i = 0; i < KEY_PTRS(k); i++) {
+			if (!ptr_available(b->c, k, i))
+				continue;
+
 			stale = max(stale, ptr_stale(b->c, k, i));
 
 			btree_bug_on(gen_after(PTR_BUCKET(b->c, k, i)->last_gc,

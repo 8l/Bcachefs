@@ -670,6 +670,8 @@ PTR_FIELD(PTR_DEV,		51, 12)
 PTR_FIELD(PTR_OFFSET,		8,  43)
 PTR_FIELD(PTR_GEN,		0,  8)
 
+#define PTR_CHECK_DEV		((1 << 12) - 1)
+
 #define PTR(gen, offset, dev)						\
 	((((uint64_t) dev) << 51) | ((uint64_t) offset) << 8 | gen)
 
@@ -763,15 +765,6 @@ static inline bool cached_dev_get(struct cached_dev *d)
 	smp_mb__after_atomic_inc();
 	return true;
 }
-
-static inline uint8_t gen_after(uint8_t a, uint8_t b)
-{
-	uint8_t r = a - b;
-	return r > 128U ? 0 : r;
-}
-
-#define ptr_stale(c, k, n)					\
-	gen_after(PTR_BUCKET(c, k, n)->gen, PTR_GEN(k, n))
 
 #define bucket_gc_gen(b)	((uint8_t) ((b)->gen - (b)->last_gc))
 #define bucket_disk_gen(b)	((uint8_t) ((b)->gen - (b)->disk_gen))

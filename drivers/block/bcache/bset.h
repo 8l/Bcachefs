@@ -147,6 +147,24 @@ bool __ptr_invalid(struct cache_set *, int level, const struct bkey *);
 bool ptr_invalid(struct btree *, const struct bkey *);
 bool ptr_bad(struct btree *, const struct bkey *);
 
+static inline uint8_t gen_after(uint8_t a, uint8_t b)
+{
+	uint8_t r = a - b;
+	return r > 128U ? 0 : r;
+}
+
+static inline uint8_t ptr_stale(struct cache_set *c, const struct bkey *k,
+				unsigned i)
+{
+	return gen_after(PTR_BUCKET(c, k, i)->gen, PTR_GEN(k, i));
+}
+
+static inline bool ptr_available(struct cache_set *c, const struct bkey *k,
+				 unsigned i)
+{
+	return (PTR_DEV(k, i) < MAX_CACHES_PER_SET) && PTR_CACHE(c, k, i);
+}
+
 struct bkey *next_recurse_key(struct btree *, struct bkey *);
 struct bkey *btree_iter_next(struct btree_iter *);
 void btree_iter_push(struct btree_iter *, struct bkey *, struct bkey *);

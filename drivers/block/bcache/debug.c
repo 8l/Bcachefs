@@ -16,22 +16,21 @@ static struct dentry *debug;
 
 const char *ptr_status(struct cache_set *c, const struct bkey *k)
 {
-	for (unsigned i = 0; i < KEY_PTRS(k); i++) {
-		struct cache *ca = PTR_CACHE(c, k, i);
-		size_t bucket = PTR_BUCKET_NR(c, k, i);
-		size_t r = bucket_remainder(c, PTR_OFFSET(k, i));
+	for (unsigned i = 0; i < KEY_PTRS(k); i++)
+		if (ptr_available(c, k, i)) {
+			struct cache *ca = PTR_CACHE(c, k, i);
+			size_t bucket = PTR_BUCKET_NR(c, k, i);
+			size_t r = bucket_remainder(c, PTR_OFFSET(k, i));
 
-		if (PTR_DEV(k, i) > MAX_CACHES_PER_SET)
-			return "bad cache device";
-		if (KEY_SIZE(k) + r > c->sb.bucket_size)
-			return "bad, length too big";
-		if (ca && bucket <  ca->sb.first_bucket)
-			return "bad, short offset";
-		if (ca && bucket >= ca->sb.nbuckets)
-			return "bad, offset past end of device";
-		if (ca && ptr_stale(c, k, i))
-			return "stale";
-	}
+			if (KEY_SIZE(k) + r > c->sb.bucket_size)
+				return "bad, length too big";
+			if (bucket <  ca->sb.first_bucket)
+				return "bad, short offset";
+			if (bucket >= ca->sb.nbuckets)
+				return "bad, offset past end of device";
+			if (ptr_stale(c, k, i))
+				return "stale";
+		}
 
 	if (!bkey_cmp(k, &ZERO_KEY))
 		return "bad, null key";

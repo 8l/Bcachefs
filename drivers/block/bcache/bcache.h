@@ -251,7 +251,6 @@ struct cached_dev {
 	atomic_t		has_dirty;
 
 	uint64_t		next_writeback_io;
-	unsigned		writeback_rate;
 	struct delayed_work	writeback_rate_update;
 
 	/*
@@ -280,7 +279,7 @@ struct cached_dev {
 	struct cache_accounting	accounting;
 
 	/* The rest of this all shows up in sysfs */
-	unsigned long		sequential_cutoff;
+	unsigned		sequential_cutoff;
 	unsigned		readahead;
 
 	unsigned		sequential_merge:1;
@@ -290,6 +289,16 @@ struct cached_dev {
 	unsigned		writeback_running:1;
 	unsigned char		writeback_percent;
 	unsigned		writeback_delay;
+
+	unsigned		writeback_rate;
+	int			writeback_rate_change;
+	int64_t			writeback_rate_derivative;
+	uint64_t		writeback_rate_target;
+
+	unsigned		writeback_rate_update_seconds;
+	unsigned		writeback_rate_d_term;
+	unsigned		writeback_rate_p_term_inverse;
+	unsigned		writeback_rate_d_smooth;
 };
 
 struct cache {

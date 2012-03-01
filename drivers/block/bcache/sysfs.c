@@ -51,6 +51,13 @@ rw_attribute(writeback_running);
 rw_attribute(writeback_percent);
 rw_attribute(writeback_delay);
 rw_attribute(writeback_rate);
+
+rw_attribute(writeback_rate_update_seconds);
+rw_attribute(writeback_rate_d_term);
+rw_attribute(writeback_rate_p_term_inverse);
+rw_attribute(writeback_rate_d_smooth);
+read_attribute(writeback_rate_debug);
+
 rw_attribute(synchronous);
 rw_attribute(async_journal);
 rw_attribute(discard);
@@ -89,6 +96,32 @@ SHOW(__cached_dev)
 	var_print(writeback_delay);
 	var_print(writeback_percent);
 	var_print(writeback_rate);
+
+	var_print(writeback_rate_update_seconds);
+	var_print(writeback_rate_d_term);
+	var_print(writeback_rate_p_term_inverse);
+	var_print(writeback_rate_d_smooth);
+
+	if (attr == &sysfs_writeback_rate_debug) {
+		char dirty[20];
+		char derivative[20];
+		char target[20];
+		hprint(dirty,
+		       atomic_long_read(&d->disk.sectors_dirty) << 9);
+		hprint(derivative,	d->writeback_rate_derivative << 9);
+		hprint(target,		d->writeback_rate_target << 9);
+
+		return sprintf(buf,
+			       "rate:\t\t%u\n"
+			       "change:\t\t%i\n"
+			       "dirty:\t\t%s\n"
+			       "derivative:\t%s\n"
+			       "target:\t\t%s\n",
+			       d->writeback_rate,
+			       d->writeback_rate_change,
+			       dirty, derivative, target);
+	}
+
 	sysfs_hprint(dirty_data,
 		     atomic_long_read(&d->disk.sectors_dirty) << 9);
 
@@ -127,6 +160,13 @@ STORE(__cached_dev)
 	d_strtoul(writeback_delay);
 	sysfs_strtoul_clamp(writeback_rate, d->writeback_rate, 1, 1000000);
 	sysfs_strtoul_clamp(writeback_percent, d->writeback_percent, 0, 40);
+
+	d_strtoul(writeback_rate_update_seconds);
+	d_strtoul(writeback_rate_d_term);
+	d_strtoul(writeback_rate_p_term_inverse);
+	sysfs_strtoul_clamp(writeback_rate_p_term_inverse,
+			    d->writeback_rate_p_term_inverse, 1, INT_MAX);
+	d_strtoul(writeback_rate_d_smooth);
 
 	d_strtoul(sequential_merge);
 	d_strtoi_h(sequential_cutoff);
@@ -194,7 +234,8 @@ STORE(cached_dev)
 		bcache_writeback_queue(dc);
 
 	if (attr == &sysfs_writeback_percent)
-		schedule_delayed_work(&dc->writeback_rate_update, 30 * HZ);
+		schedule_delayed_work(&dc->writeback_rate_update,
+				      dc->writeback_rate_update_seconds * HZ);
 
 	mutex_unlock(&register_lock);
 	return size;
@@ -215,6 +256,11 @@ static void cached_dev_kobject_init(struct cached_dev *dc)
 		&sysfs_writeback_delay,
 		&sysfs_writeback_percent,
 		&sysfs_writeback_rate,
+		&sysfs_writeback_rate_update_seconds,
+		&sysfs_writeback_rate_d_term,
+		&sysfs_writeback_rate_p_term_inverse,
+		&sysfs_writeback_rate_d_smooth,
+		&sysfs_writeback_rate_debug,
 		&sysfs_dirty_data,
 		&sysfs_sequential_cutoff,
 		&sysfs_sequential_merge,

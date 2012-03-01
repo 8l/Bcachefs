@@ -1124,7 +1124,7 @@ struct gc_merge_info {
 static void btree_gc_coalesce(struct btree *b, struct btree_op *op,
 			      struct gc_stat *gc, struct gc_merge_info *r)
 {
-	unsigned nodes = 0, keys = 0, blocks, i;
+	unsigned nodes = 0, keys = 0, blocks;
 
 	while (nodes < GC_MERGE_NODES && r[nodes].b)
 		keys += r[nodes++].keys;
@@ -1135,7 +1135,7 @@ static void btree_gc_coalesce(struct btree *b, struct btree_op *op,
 	    __set_blocks(b->sets[0].data, keys, b->c) > blocks * (nodes - 1))
 		return;
 
-	for (i = nodes - 1; i; --i) {
+	for (int i = nodes - 1; i >= 0; --i) {
 		if (r[i].b->written)
 			r[i].b = btree_gc_alloc(r[i].b, r[i].k, op);
 
@@ -1143,7 +1143,7 @@ static void btree_gc_coalesce(struct btree *b, struct btree_op *op,
 			return;
 	}
 
-	for (i = nodes - 1; i; --i) {
+	for (int i = nodes - 1; i > 0; --i) {
 		struct bset *n1 = r[i].b->sets->data;
 		struct bset *n2 = r[i - 1].b->sets->data;
 		struct bkey *last = NULL;
@@ -1162,16 +1162,6 @@ static void btree_gc_coalesce(struct btree *b, struct btree_op *op,
 			if (__set_blocks(n1, n1->keys + r->keys,
 					 b->c) > btree_blocks(r[i].b))
 				return;
-
-			if (r->b->written) {
-				/*
-				 * We're about to free this node, and we have to
-				 * make btree_sort() remove stale ptrs
-				 */
-				r->b->written = 0;
-				btree_sort(r->b);
-				n2 = r->b->sets->data;
-			}
 
 			keys = n2->keys;
 			last = &r->b->key;

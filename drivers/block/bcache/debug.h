@@ -35,10 +35,12 @@ void check_keys(struct btree *, const char *, ...);
 #ifdef CONFIG_BCACHE_DEBUG
 
 void btree_verify(struct btree *, struct bset *);
+void data_verify(struct search *);
 
 #else /* DEBUG */
 
 static inline void btree_verify(struct btree *b, struct bset *i) {}
+static inline void data_verify(struct search *s) {};
 
 #endif
 

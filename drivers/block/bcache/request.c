@@ -732,56 +732,6 @@ static void request_read_error(struct closure *cl)
 	continue_at(cl, cached_dev_bio_complete, NULL);
 }
 
-static void do_verify(struct search *s)
-{
-	char name[BDEVNAME_SIZE];
-	struct cached_dev *dc = container_of(s->op.d, struct cached_dev, disk);
-	struct closure *cl = &s->cl;
-	struct bio *check;
-	struct bio_vec *bv;
-	int i;
-
-	if (!s->unaligned_bvec)
-		bio_for_each_segment(bv, s->orig_bio, i)
-			bv->bv_offset = 0, bv->bv_len = PAGE_SIZE;
-
-	check = bio_clone(s->orig_bio, GFP_NOIO);
-	if (!check)
-		return;
-
-	if (bio_alloc_pages(check, GFP_NOIO))
-		goto out_put;
-
-	check->bi_rw		= READ_SYNC;
-	check->bi_private	= cl;
-	check->bi_end_io	= request_endio;
-
-	bio_get(check);
-	closure_bio_submit(check, cl, s->op.d->c->bio_split);
-	closure_sync(cl);
-
-	bio_for_each_segment(bv, s->orig_bio, i) {
-		void *p1 = kmap(bv->bv_page);
-		void *p2 = kmap(check->bi_io_vec[i].bv_page);
-
-		if (memcmp(p1 + bv->bv_offset,
-			   p2 + bv->bv_offset,
-			   bv->bv_len))
-			printk(KERN_ERR "bcache (%s): verify failed"
-			       " at sector %llu\n",
-			       bdevname(dc->bdev, name),
-			       (uint64_t) s->orig_bio->bi_sector);
-
-		kunmap(bv->bv_page);
-		kunmap(check->bi_io_vec[i].bv_page);
-	}
-
-	__bio_for_each_segment(bv, check, i, 0)
-		__free_page(bv->bv_page);
-out_put:
-	bio_put(check);
-}
-
 static void request_read_done(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
@@ -847,7 +797,7 @@ static void request_read_done(struct closure *cl)
 	}
 
 	if (verify(d, &s->bio.bio) && s->recoverable)
-		do_verify(s);
+		data_verify(s);
 
 	__bio_complete(s);
 

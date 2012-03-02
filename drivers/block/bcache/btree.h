@@ -2,6 +2,7 @@
 #define _BCACHE_BTREE_H
 
 #include "bset.h"
+#include "debug.h"
 
 struct btree_write {
 	struct closure		*owner;
@@ -175,6 +176,14 @@ static inline void rw_lock(bool w, struct btree *b, int level)
 
 static inline void rw_unlock(bool w, struct btree *b)
 {
+#ifdef CONFIG_BCACHE_EDEBUG
+	if (w &&
+	    b->key.ptr[0] &&
+	    btree_node_read_done(b))
+		for (unsigned i = 0; i <= b->nsets; i++)
+			check_key_order(b, b->sets[i].data);
+#endif
+
 	(w ? up_write : up_read)(&b->lock);
 }
 

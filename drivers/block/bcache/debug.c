@@ -42,6 +42,11 @@ const char *ptr_status(struct cache_set *c, const struct bkey *k)
 	return "";
 }
 
+static bool skipped_backwards(struct btree *b, struct bkey *k)
+{
+	return bkey_cmp(k, (!b->level) ? &START_KEY(next(k)) : next(k)) > 0;
+}
+
 static void dump_bset(struct btree *b, struct bset *i)
 {
 	for (struct bkey *k = i->start; k < end(i); k = next(k)) {
@@ -59,10 +64,8 @@ static void dump_bset(struct btree *b, struct bset *i)
 
 		printk(" %s\n", ptr_status(b->c, k));
 
-		if (next(k) != end(i) &&
-		    bkey_cmp(k, !b->level
-			     ? &START_KEY(next(k))
-			     : next(k)) > 0)
+		if (next(k) < end(i) &&
+		    skipped_backwards(b, k))
 			printk(KERN_ERR "Key skipped backwards\n");
 	}
 }
@@ -106,21 +109,32 @@ dump_key_and_panic(struct btree *b, struct bset *i, int j)
 
 struct keyprint_hack bcache_pkey(const struct bkey *k)
 {
+	unsigned i = 0;
 	struct keyprint_hack r;
-	int i = scnprintf(r.s, KEYHACK_SIZE, "%llu:%llu len %llu -> ",
-			 KEY_DEV(k), k->key, KEY_SIZE(k));
+	char *out = r.s, *end = r.s + KEYHACK_SIZE;
+
+#define p(...)	(out += scnprintf(out, end - out, __VA_ARGS__))
+
+	p("%llu:%llu len %llu -> [", KEY_DEV(k), k->key, KEY_SIZE(k));
 
 	if (KEY_PTRS(k))
-		i += scnprintf(r.s + i, KEYHACK_SIZE - i, "%llu gen %llu",
-			      PTR_OFFSET(k, 0), PTR_GEN(k, 0));
-	else
-		i += scnprintf(r.s + i, KEYHACK_SIZE - i, "[]");
+		while (1) {
+			p("%llu:%llu gen %llu",
+			  PTR_DEV(k, i), PTR_OFFSET(k, i), PTR_GEN(k, i));
+
+			if (++i == KEY_PTRS(k))
+				break;
+
+			p(", ");
+		}
+
+	p("]");
 
 	if (KEY_DIRTY(k))
-		i += scnprintf(r.s + i, KEYHACK_SIZE - i, " dirty");
+		p(" dirty");
 	if (KEY_CSUM(k))
-		i += scnprintf(r.s + i, KEYHACK_SIZE - i,
-			       " cs%llu %llx", KEY_CSUM(k), k->ptr[1]);
+		p(" cs%llu %llx", KEY_CSUM(k), k->ptr[1]);
+#undef p
 	return r;
 }
 
@@ -259,15 +273,17 @@ unsigned count_data(struct btree *b)
 
 void check_key_order_msg(struct btree *b, struct bset *i, const char *m, ...)
 {
-	if (!b->level && i->keys)
-		for (struct bkey *k = i->start; next(k) < end(i); k = next(k))
-			if (bkey_cmp(k, &START_KEY(next(k))) > 0) {
-				va_list args;
-				va_start(args, m);
+	if (!i->keys)
+		return;
 
-				vdump_bucket_and_panic(b, m, args);
-				va_end(args);
-			}
+	for (struct bkey *k = i->start; next(k) < end(i); k = next(k))
+		if (skipped_backwards(b, k)) {
+			va_list args;
+			va_start(args, m);
+
+			vdump_bucket_and_panic(b, m, args);
+			va_end(args);
+		}
 }
 
 void check_keys(struct btree *b, const char *m, ...)

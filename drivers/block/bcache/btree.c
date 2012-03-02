@@ -969,6 +969,20 @@ err:
 	return b;
 }
 
+static struct btree *btree_alloc_replacement(struct btree *b,
+					     struct closure *cl)
+{
+	struct btree *n = bcache_btree_alloc(b->c, b->level, cl);
+
+	if (!IS_ERR_OR_NULL(n)) {
+		btree_sort(b, 0, n->sets[0].data);
+		bkey_copy_key(&n->key, &b->key);
+		n->sets->size = 0;
+	}
+
+	return n;
+}
+
 /* Garbage collection */
 
 void __btree_mark_key(struct cache_set *c, int level, struct bkey *k)
@@ -1071,11 +1085,9 @@ static struct btree *btree_gc_alloc(struct btree *b, struct bkey *k,
 	 * collection, so we can't sleep in btree_alloc() -> pop_bucket(), or
 	 * we'd risk deadlock - so we don't pass it our closure.
 	 */
-	struct btree *n = bcache_btree_alloc(b->c, b->level, NULL);
+	struct btree *n = btree_alloc_replacement(b, NULL);
 
 	if (!IS_ERR_OR_NULL(n)) {
-		btree_sort(b, 0, n->sets[0].data);
-		bkey_copy_key(&n->key, &b->key);
 		swap(b, n);
 
 		memcpy(k->ptr, b->key.ptr,
@@ -1309,13 +1321,10 @@ static int btree_gc_root(struct btree *b, struct btree_op *op,
 	int ret = 0, stale = btree_gc_mark(b, &keys, gc);
 
 	if (b->level || stale > 10)
-		n = bcache_btree_alloc(b->c, b->level, NULL);
+		n = btree_alloc_replacement(b, NULL);
 
-	if (!IS_ERR_OR_NULL(n)) {
+	if (!IS_ERR_OR_NULL(n))
 		swap(b, n);
-		btree_sort(n, 0, b->sets[0].data);
-		bkey_copy_key(&b->key, &n->key);
-	}
 
 	if (b->level)
 		ret = btree_gc_recurse(b, op, writes, gc);
@@ -1810,12 +1819,9 @@ static int btree_split(struct btree *b, struct btree_op *op)
 	if (b->level)
 		set_closure_blocking(&op->cl);
 
-	n1 = bcache_btree_alloc(b->c, b->level, &op->cl);
+	n1 = btree_alloc_replacement(b, &op->cl);
 	if (IS_ERR(n1))
 		goto err;
-
-	btree_sort(b, 0, n1->sets[0].data);
-	bkey_copy_key(&n1->key, &b->key);
 
 	split = set_blocks(n1->sets[0].data, n1->c) > (btree_blocks(b) * 4) / 5;
 

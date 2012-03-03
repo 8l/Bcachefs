@@ -155,7 +155,6 @@ struct btree_op {
 	/* Btree insertion type */
 	enum {
 		INSERT_WRITE,
-		INSERT_READ,
 		INSERT_REPLACE,
 	} insert_type:8;
 

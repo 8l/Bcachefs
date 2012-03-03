@@ -87,7 +87,7 @@
  */
 
 const char * const bcache_insert_types[] = {
-	"write", "read", "replace"
+	"write", "replace"
 };
 
 #define MAX_NEED_GC		64
@@ -1618,30 +1618,6 @@ static bool fix_overlapping_extents(struct btree *b,
 
 		if (bkey_cmp(k, &START_KEY(insert)) <= 0)
 			continue;
-
-		if (op->insert_type == INSERT_READ &&
-		    KEY_SIZE(k) &&
-		    (!KEY_PTRS(k) ||
-		     !ptr_bad(b, k))) {
-			/*
-			 * Could split this key in two if necessary: since we
-			 * don't, we have to check if we can use the start of
-			 * the key we're inserting first. Otherwise, we could
-			 * adjust a stale key that hasn't been written to disk
-			 * and not insert anything in its place.
-			 */
-			if (bkey_cmp(&START_KEY(k), &START_KEY(insert)) > 0)
-				cut_back(&START_KEY(k), insert);
-			else if (bkey_cmp(k, insert) < 0)
-				cut_front(k, insert);
-			else {
-				mark_cache_miss_collision(op);
-				return true;
-			}
-
-			BUG_ON(!KEY_SIZE(insert));
-			continue;
-		}
 
 		/*
 		 * We might overlap with 0 size extents; we can't skip these

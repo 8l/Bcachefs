@@ -1726,6 +1726,78 @@ wb_failed:	atomic_long_inc(&b->c->writeback_keys_failed);
 	return false;
 }
 
+static bool btree_insert_key(struct btree *b, struct btree_op *op,
+			     struct bkey *k)
+{
+	struct bset *i = b->sets[b->nsets].data;
+	struct bkey *m, *prev;
+	const char *status = "insert";
+
+	BUG_ON(bkey_cmp(k, &b->key) > 0);
+	BUG_ON(b->level && !KEY_PTRS(k));
+	BUG_ON(!b->level && !k->key);
+
+	if (!b->level) {
+		struct btree_iter iter;
+		struct bkey search = KEY(KEY_DEV(k), KEY_START(k), 0);
+
+		/*
+		 * bset_search() returns the first key that is strictly greater
+		 * than the search key - but for back merging, we want to find
+		 * the first key that is greater than or equal to KEY_START(k) -
+		 * unless KEY_START(k) is 0.
+		 */
+		if (search.key)
+			search.key--;
+
+		prev = NULL;
+		m = btree_iter_init(b, &iter, &search);
+
+		if (fix_overlapping_extents(b, k, &iter, op))
+			return false;
+
+		while (m != end(i) &&
+		       bkey_cmp(k, &START_KEY(m)) > 0)
+			prev = m, m = next(m);
+
+		if (key_merging_disabled(b->c))
+			goto insert;
+
+		/* prev is in the tree, if we merge we're done */
+		status = "back merging";
+		if (prev &&
+		    bkey_try_merge(b, prev, k))
+			goto merged;
+
+		status = "overwrote front";
+		if (m != end(i) &&
+		    KEY_PTRS(m) == KEY_PTRS(k) && !KEY_SIZE(m))
+			goto copy;
+
+		status = "front merge";
+		if (m != end(i) &&
+		    bkey_try_merge(b, k, m))
+			goto copy;
+	} else
+		m = bset_search(b, &b->sets[b->nsets], k);
+
+insert:	shift_keys(b, m, k);
+copy:	bkey_copy(m, k);
+merged:
+	check_keys(b, "%s for %s at %s: %s", status,
+		   insert_type(op), pbtree(b), pkey(k));
+	check_key_order_msg(b, i, "%s for %s at %s: %s", status,
+			    insert_type(op), pbtree(b), pkey(k));
+
+	if (b->level && !k->key)
+		b->prio_blocked++;
+
+	pr_debug("%s for %s at %s: %s", status,
+		 insert_type(op), pbtree(b), pkey(k));
+
+	return true;
+}
+
 bool bcache_btree_insert_keys(struct btree *b, struct btree_op *op)
 {
 	/* If a read generates a cache miss, and a write to the same location
@@ -1734,77 +1806,12 @@ bool bcache_btree_insert_keys(struct btree *b, struct btree_op *op)
 	 * overwriting good data if it came from a read.
 	 */
 	bool ret = false;
-	struct bset *i = b->sets[b->nsets].data;
-	struct bkey *k, *m, *prev;
+	struct bkey *k;
 	unsigned oldsize = count_data(b);
 
 	while ((k = keylist_pop(&op->keys))) {
-		const char *status = "insert";
-
-		BUG_ON(b->level && !KEY_PTRS(k));
-		BUG_ON(!b->level && !k->key);
-
 		bkey_put(b->c, k, op->insert_type, b->level);
-
-		if (!b->level) {
-			struct btree_iter iter;
-
-			struct bkey search = KEY(KEY_DEV(k), KEY_START(k), 0);
-
-			/*
-			 * bset_search() returns the first key that is strictly
-			 * greater than the search key - but for back merging,
-			 * we want to find the first key that is greater than or
-			 * equal to KEY_START(k) - unless KEY_START(k) is 0.
-			 */
-			if (search.key)
-				search.key--;
-
-			prev = NULL;
-			m = btree_iter_init(b, &iter, &search);
-
-			if (fix_overlapping_extents(b, k, &iter, op))
-				continue;
-
-			while (m != end(i) &&
-			       bkey_cmp(k, &START_KEY(m)) > 0)
-				prev = m, m = next(m);
-
-			if (key_merging_disabled(b->c))
-				goto insert;
-
-			/* prev is in the tree, if we merge we're done */
-			status = "back merging";
-			if (prev &&
-			    bkey_try_merge(b, prev, k))
-				goto merged;
-
-			status = "overwrote front";
-			if (m != end(i) &&
-			    KEY_PTRS(m) == KEY_PTRS(k) && !KEY_SIZE(m))
-				goto copy;
-
-			status = "front merge";
-			if (m != end(i) &&
-			    bkey_try_merge(b, k, m))
-				goto copy;
-		} else
-			m = bset_search(b, &b->sets[b->nsets], k);
-
-insert:		shift_keys(b, m, k);
-copy:		bkey_copy(m, k);
-merged:		ret = true;
-
-		check_keys(b, "%s for %s at %s: %s", status,
-			   insert_type(op), pbtree(b), pkey(k));
-		check_key_order_msg(b, i, "%s for %s at %s: %s", status,
-				    insert_type(op), pbtree(b), pkey(k));
-
-		if (b->level && !k->key)
-			b->prio_blocked++;
-
-		pr_debug("%s for %s at %s: %s", status,
-			 insert_type(op), pbtree(b), pkey(k));
+		ret |= btree_insert_key(b, op, k);
 	}
 
 	BUG_ON(count_data(b) < oldsize);

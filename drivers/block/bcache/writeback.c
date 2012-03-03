@@ -320,16 +320,27 @@ static void write_dirty_finish(struct closure *cl)
 	closure_debug_destroy(cl);
 	kfree(io);
 
+	/* This is kind of a dumb way of signalling errors. */
 	if (!KEY_DIRTY(&w->key)) {
 		struct btree_op op;
 		btree_op_init_stack(&op);
 
-		op.insert_type = INSERT_UNDIRTY;
+		op.insert_type = INSERT_REPLACE;
+		bkey_copy(&op.replace, &w->key);
+		SET_KEY_DIRTY(&op.replace, true);
+
 		keylist_add(&op.keys, &w->key);
+
+		for (unsigned i = 0; i < KEY_PTRS(&w->key); i++)
+			atomic_inc(&PTR_BUCKET(dc->disk.c, &w->key, i)->pin);
 
 		pr_debug("clearing %s", pkey(&w->key));
 		bcache_btree_insert(&op, dc->disk.c);
 		closure_sync(&op.cl);
+
+		atomic_long_inc(op.insert_collision
+				? &dc->disk.c->writeback_keys_failed
+				: &dc->disk.c->writeback_keys_done);
 	}
 
 	spin_lock(&dc->dirty_lock);

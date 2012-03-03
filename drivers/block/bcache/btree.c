@@ -87,7 +87,7 @@
  */
 
 const char * const bcache_insert_types[] = {
-	"write", "read", "replace", "undirty"
+	"write", "read", "replace"
 };
 
 #define MAX_NEED_GC		64
@@ -112,8 +112,7 @@ void btree_op_init_stack(struct btree_op *op)
 
 static void bkey_put(struct cache_set *c, struct bkey *k, int write, int level)
 {
-	if ((level && k->key) ||
-	    (!level && write != INSERT_UNDIRTY))
+	if ((level && k->key) || !level)
 		__bkey_put(c, k);
 }
 
@@ -1644,20 +1643,6 @@ static bool fix_overlapping_extents(struct btree *b,
 			continue;
 		}
 
-		if (op->insert_type == INSERT_UNDIRTY) {
-			if (k->header != (insert->header | PTR_DIRTY_BIT) ||
-			    memcmp(&k->key,
-				   &insert->key,
-				   bkey_bytes(insert) - 8))
-				goto wb_failed;
-
-			subtract_dirty(k, KEY_SIZE(k));
-
-			cut_front(insert, k);
-			atomic_long_inc(&b->c->writeback_keys_done);
-			return false;
-		}
-
 		/*
 		 * We might overlap with 0 size extents; we can't skip these
 		 * because if they're in the set we're inserting to we have to
@@ -1762,11 +1747,6 @@ static bool fix_overlapping_extents(struct btree *b,
 				bset_fix_invalidated_key(b, k);
 			}
 		}
-	}
-
-	if (op->insert_type == INSERT_UNDIRTY) {
-wb_failed:	atomic_long_inc(&b->c->writeback_keys_failed);
-		return true;
 	}
 
 check_failed:
@@ -2042,11 +2022,6 @@ static int btree_insert_recurse(struct btree *b, struct btree_op *op,
 				__bkey_put(b->c, insert);
 				op->keys.top = op->keys.bottom;
 				op->insert_collision = true;
-				return 0;
-			}
-
-			if (op->insert_type == INSERT_UNDIRTY) {
-				op->keys.top = op->keys.bottom;
 				return 0;
 			}
 

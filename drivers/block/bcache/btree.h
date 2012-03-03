@@ -157,7 +157,6 @@ struct btree_op {
 		INSERT_WRITE,
 		INSERT_READ,
 		INSERT_REPLACE,
-		INSERT_UNDIRTY,
 	} insert_type:8;
 
 	unsigned		lookup_done:1;

@@ -805,7 +805,6 @@ struct cgroup;
 struct bcache_cgroup *cgroup_to_bcache(struct cgroup *cgroup);
 struct bcache_cgroup *bio_to_cgroup(struct bio *bio);
 
-void bcache_queue_gc(struct cache_set *);
 uint8_t inc_gen(struct cache *, struct bucket *);
 void rescale_priorities(struct cache_set *, int);
 bool bucket_add_unused(struct cache *, struct bucket *);

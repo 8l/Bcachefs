@@ -270,6 +270,7 @@ bool btree_insert_check_key(struct btree *, struct btree_op *, struct bio *);
 int bcache_btree_insert(struct btree_op *, struct cache_set *);
 int btree_search_recurse(struct btree *, struct btree_op *);
 
+void bcache_queue_gc(struct cache_set *);
 size_t btree_gc_finish(struct cache_set *);
 int btree_check(struct cache_set *, struct btree_op *);
 void __btree_mark_key(struct cache_set *, int, struct bkey *);

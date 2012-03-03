@@ -87,7 +87,7 @@
  */
 
 const char * const bcache_insert_types[] = {
-	"write", "read", "replace", "undirty", "replay"
+	"write", "read", "replace", "undirty"
 };
 
 #define MAX_NEED_GC		64

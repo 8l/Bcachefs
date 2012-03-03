@@ -277,7 +277,7 @@ int bcache_journal_replay(struct cache_set *s, struct list_head *list,
 
 	uint64_t start = i->j.last_seq, end = i->j.seq, n = start;
 
-	op->insert_type = INSERT_REPLAY;
+	op->insert_type = INSERT_WRITE;
 
 	list_for_each_entry(i, list, list) {
 		BUG_ON(i->pin && atomic_read(i->pin) != 1);

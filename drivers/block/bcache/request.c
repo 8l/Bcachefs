@@ -659,42 +659,42 @@ static void request_read_resubmit(struct closure *cl)
 
 /* Cached devices */
 
-static void cached_dev_bio_complete(struct closure *cl)
+static void cached_dev_bio_complete(struct search *s)
 {
-	struct search *s = container_of(cl, struct search, cl);
-	struct bcache_device *d = s->op.d;
-	struct cached_dev *dc = container_of(d, struct cached_dev, disk);
+	struct cached_dev *dc = container_of(s->op.d, struct cached_dev, disk);
 
-	if (s->op.insert_type == INSERT_WRITE ||
-	    s->op.insert_type == INSERT_WRITEBACK)
-		up_read_non_owner(&dc->writeback_lock);
-
-	if (s->cache_bio) {
-		int i;
-		struct bio_vec *bv;
-
-		if (s->op.insert_type == INSERT_READ)
-			__bio_for_each_segment(bv, s->cache_bio, i, 0)
-				__free_page(bv->bv_page);
+	if (s->cache_bio)
 		bio_put(s->cache_bio);
-	}
-
-	if (s->cache_miss)
-		bio_put(s->cache_miss);
 
 	if (s->unaligned_bvec)
-		mempool_free(s->bio.bio.bi_io_vec, d->unaligned_bvec);
+		mempool_free(s->bio.bio.bi_io_vec, dc->disk.unaligned_bvec);
 
 	__bio_complete(s);
 
 	closure_debug_destroy(&s->cl);
-	mempool_free(s, d->c->search);
+	mempool_free(s, dc->disk.c->search);
 	cached_dev_put(dc);
 }
 
 /* Process reads */
 
-static void __request_read(struct closure *);
+static void cached_dev_read_complete(struct closure *cl)
+{
+	struct search *s = container_of(cl, struct search, cl);
+
+	if (s->cache_miss)
+		bio_put(s->cache_miss);
+
+	if (s->cache_bio) {
+		int i;
+		struct bio_vec *bv;
+
+		__bio_for_each_segment(bv, s->cache_bio, i, 0)
+			__free_page(bv->bv_page);
+	}
+
+	cached_dev_bio_complete(s);
+}
 
 static void request_read_error(struct closure *cl)
 {
@@ -729,7 +729,7 @@ static void request_read_error(struct closure *cl)
 		closure_bio_submit(&s->bio.bio, &s->cl, s->op.d->c->bio_split);
 	}
 
-	continue_at(cl, cached_dev_bio_complete, NULL);
+	continue_at(cl, cached_dev_read_complete, NULL);
 }
 
 static void request_read_done(struct closure *cl)
@@ -806,7 +806,7 @@ static void request_read_done(struct closure *cl)
 		bio_insert(&s->op.cl);
 	}
 
-	continue_at(cl, cached_dev_bio_complete, NULL);
+	continue_at(cl, cached_dev_read_complete, NULL);
 }
 
 static void request_read_done_bh(struct closure *cl)
@@ -819,7 +819,7 @@ static void request_read_done_bh(struct closure *cl)
 	else if (s->cache_bio || verify(d, &s->bio.bio))
 		set_closure_fn(cl, request_read_done, bcache_wq);
 	else
-		set_closure_fn(cl, cached_dev_bio_complete, NULL);
+		set_closure_fn(cl, cached_dev_read_complete, NULL);
 
 	closure_queue(cl);
 }
@@ -930,6 +930,15 @@ static void request_read(struct cached_dev *d, struct search *s)
 
 /* Process writes */
 
+static void cached_dev_write_complete(struct closure *cl)
+{
+	struct search *s = container_of(cl, struct search, cl);
+	struct cached_dev *dc = container_of(s->op.d, struct cached_dev, disk);
+
+	up_read_non_owner(&dc->writeback_lock);
+	cached_dev_bio_complete(s);
+}
+
 static bool should_writeback(struct cached_dev *d, struct bio *bio)
 {
 	return !atomic_read(&d->disk.detaching) &&
@@ -948,7 +957,7 @@ static void request_write_resubmit(struct closure *cl)
 	closure_bio_submit(bio, &s->cl, op->d->c->bio_split);
 
 	bio_insert(&s->op.cl);
-	continue_at(&s->cl, cached_dev_bio_complete, NULL);
+	continue_at(&s->cl, cached_dev_write_complete, NULL);
 }
 
 static void request_write(struct cached_dev *d, struct search *s)
@@ -1006,7 +1015,7 @@ submit:
 	}
 out:
 	bio_insert(&s->op.cl);
-	continue_at(cl, cached_dev_bio_complete, NULL);
+	continue_at(cl, cached_dev_write_complete, NULL);
 }
 
 /* Split bios in passthrough mode */

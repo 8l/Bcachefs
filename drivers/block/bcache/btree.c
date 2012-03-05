@@ -1594,7 +1594,7 @@ static void shift_keys(struct btree *b, struct bkey *where, struct bkey *insert)
 }
 
 static bool fix_overlapping_extents(struct btree *b,
-				    struct bkey *check,
+				    struct bkey *insert,
 				    struct btree_iter *iter,
 				    struct btree_op *op)
 {
@@ -1609,10 +1609,10 @@ static bool fix_overlapping_extents(struct btree *b,
 	while (1) {
 		struct bkey *k = btree_iter_next(iter);
 		if (!k ||
-		    bkey_cmp(check, &START_KEY(k)) <= 0)
+		    bkey_cmp(insert, &START_KEY(k)) <= 0)
 			break;
 
-		if (bkey_cmp(k, &START_KEY(check)) <= 0)
+		if (bkey_cmp(k, &START_KEY(insert)) <= 0)
 			continue;
 
 		if (op->insert_type == INSERT_READ &&
@@ -1626,33 +1626,35 @@ static bool fix_overlapping_extents(struct btree *b,
 			 * adjust a stale key that hasn't been written to disk
 			 * and not insert anything in its place.
 			 */
-			if (bkey_cmp(&START_KEY(k), &START_KEY(check)) > 0)
-				cut_back(&START_KEY(k), check);
-			else if (bkey_cmp(k, check) < 0)
-				cut_front(k, check);
+			if (bkey_cmp(&START_KEY(k), &START_KEY(insert)) > 0)
+				cut_back(&START_KEY(k), insert);
+			else if (bkey_cmp(k, insert) < 0)
+				cut_front(k, insert);
 			else {
 				mark_cache_miss_collision(op);
 				return true;
 			}
 
-			BUG_ON(!KEY_SIZE(check));
+			BUG_ON(!KEY_SIZE(insert));
 			continue;
 		}
 
 		if (op->insert_type == INSERT_UNDIRTY) {
-			if (k->header != (check->header | PTR_DIRTY_BIT) ||
-			    memcmp(&k->key, &check->key, bkey_bytes(check) - 8))
+			if (k->header != (insert->header | PTR_DIRTY_BIT) ||
+			    memcmp(&k->key,
+				   &insert->key,
+				   bkey_bytes(insert) - 8))
 				goto wb_failed;
 
 			subtract_dirty(k, KEY_SIZE(k));
 
-			cut_front(check, k);
+			cut_front(insert, k);
 			atomic_long_inc(&b->c->writeback_keys_done);
 			return false;
 		}
 
-		if (bkey_cmp(check, k) < 0 &&
-		    bkey_cmp(&START_KEY(check), &START_KEY(k)) > 0) {
+		if (bkey_cmp(insert, k) < 0 &&
+		    bkey_cmp(&START_KEY(insert), &START_KEY(k)) > 0) {
 			/*
 			 * We overlapped in the middle of an existing key: that
 			 * means we have to split the old key. But we have to do
@@ -1662,7 +1664,7 @@ static bool fix_overlapping_extents(struct btree *b,
 
 			struct bkey *top;
 
-			subtract_dirty(k, KEY_SIZE(check));
+			subtract_dirty(k, KEY_SIZE(insert));
 
 			if (bkey_written(b, k)) {
 				/*
@@ -1677,7 +1679,8 @@ static bool fix_overlapping_extents(struct btree *b,
 				 * depends on us inserting a new key for the top
 				 * here.
 				 */
-				top = bset_search(b, &b->sets[b->nsets], check);
+				top = bset_search(b, &b->sets[b->nsets],
+						  insert);
 				shift_keys(b, top, k);
 			} else {
 				BKEY_PADDED(key) temp;
@@ -1686,30 +1689,30 @@ static bool fix_overlapping_extents(struct btree *b,
 				top = next(k);
 			}
 
-			cut_front(check, top);
-			cut_back(&START_KEY(check), k);
+			cut_front(insert, top);
+			cut_back(&START_KEY(insert), k);
 			bset_fix_invalidated_key(b, k);
 			return false;
 		}
 
-		if (bkey_cmp(check, k) < 0) {
-			if (bkey_cmp(check, &START_KEY(k)) > 0)
-				subtract_dirty(k, check->key - KEY_START(k));
+		if (bkey_cmp(insert, k) < 0) {
+			if (bkey_cmp(insert, &START_KEY(k)) > 0)
+				subtract_dirty(k, insert->key - KEY_START(k));
 
-			cut_front(check, k);
+			cut_front(insert, k);
 		} else {
-			if (bkey_cmp(k, &START_KEY(check)) > 0)
-				subtract_dirty(k, k->key - KEY_START(check));
+			if (bkey_cmp(k, &START_KEY(insert)) > 0)
+				subtract_dirty(k, k->key - KEY_START(insert));
 
 			if (bkey_written(b, k) &&
-			    bkey_cmp(&START_KEY(check), &START_KEY(k)) <= 0)
+			    bkey_cmp(&START_KEY(insert), &START_KEY(k)) <= 0)
 				/*
 				 * Completely overwrote, so we don't have to
 				 * invalidate the binary search tree
 				 */
 				cut_front(k, k);
 			else {
-				__cut_back(&START_KEY(check), k);
+				__cut_back(&START_KEY(insert), k);
 				bset_fix_invalidated_key(b, k);
 			}
 		}

@@ -155,7 +155,6 @@ struct btree_op {
 	enum {
 		INSERT_READ,
 		INSERT_WRITE,
-		INSERT_WRITEBACK,
 		INSERT_UNDIRTY,
 		INSERT_REPLAY,
 	} insert_type:8;

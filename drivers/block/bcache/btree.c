@@ -86,7 +86,7 @@
  */
 
 const char * const bcache_insert_types[] = {
-	"read", "write", "writeback", "undirty", "replay"
+	"read", "write", "undirty", "replay"
 };
 
 #define MAX_NEED_GC		64
@@ -1740,9 +1740,6 @@ bool bcache_btree_insert_keys(struct btree *b, struct btree_op *op)
 
 		BUG_ON(b->level && !KEY_PTRS(k));
 		BUG_ON(!b->level && !k->key);
-		BUG_ON(!b->level && op->insert_type != INSERT_REPLAY &&
-		       (!KEY_DIRTY(k) ==
-			(op->insert_type == INSERT_WRITEBACK)));
 
 		bkey_put(b->c, k, op->insert_type, b->level);
 

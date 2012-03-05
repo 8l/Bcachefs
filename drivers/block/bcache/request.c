@@ -323,7 +323,7 @@ static struct open_bucket *get_data_bucket(struct bkey *search,
 	BKEY_PADDED(key) alloc;
 	struct bkey *k = NULL;
 
-	if (s->op.insert_type == INSERT_WRITEBACK) {
+	if (s->writeback) {
 		closure_init_stack(&cl);
 		w = &cl;
 	}
@@ -412,10 +412,9 @@ static void bio_insert_endio(struct bio *bio, int error)
 
 	if (error) {
 		/* TODO: We could try to recover from this. */
-		if (op->insert_type == INSERT_WRITEBACK)
+		if (s->writeback)
 			s->error = error;
-
-		if (op->insert_type == INSERT_WRITE)
+		else if (s->write)
 			set_closure_fn(cl, bio_insert_error, bcache_wq);
 		else
 			set_closure_fn(cl, NULL, NULL);
@@ -463,7 +462,7 @@ static void bio_insert_loop(struct closure *cl)
 			continue_at(cl, bio_insert_loop, bcache_wq);
 		}
 
-		if (op->insert_type == INSERT_WRITEBACK)
+		if (s->writeback)
 			SET_KEY_DIRTY(k, true);
 
 		SET_KEY_CSUM(k, op->d->data_csum);
@@ -494,8 +493,7 @@ err:
 		 insert_type(op), sectors - bio_sectors(bio), sectors,
 		 (uint64_t) bio->bi_sector);
 
-	switch (op->insert_type) {
-	case INSERT_WRITEBACK:
+	if (s->writeback) {
 		/* This is dead code now, since we handle all memory allocation
 		 * failures and block if we don't have free buckets
 		 */
@@ -506,13 +504,11 @@ err:
 		 */
 		s->bio_insert_done	= true;
 		s->error		= -ENOMEM;
-		break;
-	case INSERT_WRITE:
+	} else if (s->write) {
 		s->skip			= true;
 		return bio_invalidate(cl);
-	case INSERT_READ:
+	} else
 		s->bio_insert_done	= true;
-	}
 
 	if (!keylist_empty(&op->keys))
 		continue_at(cl, bcache_journal, bcache_wq);
@@ -632,6 +628,7 @@ static struct search *do_bio_hook(struct bio *bio, struct bcache_device *d)
 	s->op.lock		= -1;
 	s->task			= get_current();
 	s->orig_bio		= bio;
+	s->write		= bio->bi_rw & REQ_WRITE;
 	s->recoverable		= 1;
 	__do_bio_hook(s);
 
@@ -969,8 +966,8 @@ static void request_write(struct cached_dev *d, struct search *s)
 	down_read_non_owner(&d->writeback_lock);
 
 	if (bcache_in_writeback(d, bio->bi_sector, bio_sectors(bio))) {
-		s->skip = false;
-		s->op.insert_type = INSERT_WRITEBACK;
+		s->skip		= false;
+		s->writeback	= true;
 	}
 
 	if (s->skip) {
@@ -992,9 +989,9 @@ skip:		s->cache_bio = s->orig_bio;
 	}
 
 	if (should_writeback(d, s->orig_bio))
-		s->op.insert_type = INSERT_WRITEBACK;
+		s->writeback = true;
 
-	if (s->op.insert_type == INSERT_WRITE) {
+	if (!s->writeback) {
 		s->cache_bio = bbio_kmalloc(GFP_NOIO, bio->bi_max_vecs);
 		if (!s->cache_bio) {
 			s->skip = true;
@@ -1313,7 +1310,7 @@ static void flash_dev_bio_complete(struct closure *cl)
 		int i;
 		struct bio_vec *bv;
 
-		if (s->op.insert_type == INSERT_READ)
+		if (!s->write)
 			__bio_for_each_segment(bv, s->cache_bio, i, 0)
 				__free_page(bv->bv_page);
 		bio_put(s->cache_bio);
@@ -1388,8 +1385,9 @@ static void flash_dev_write(struct search *s)
 	struct closure *cl = &s->cl;
 	struct bio *bio = &s->bio.bio;
 
+	s->op.insert_type = INSERT_WRITE;
+
 	if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
-		s->op.insert_type = INSERT_WRITE;
 		s->cache_bio	= s->orig_bio;
 		s->skip		= true;
 
@@ -1397,7 +1395,7 @@ static void flash_dev_write(struct search *s)
 		bio_get(s->cache_bio);
 		bio_endio(bio, 0);
 	} else {
-		s->op.insert_type = INSERT_WRITEBACK;
+		s->writeback	= true;
 		s->cache_bio	= bio;
 	}
 

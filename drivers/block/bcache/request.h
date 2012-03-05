@@ -17,6 +17,8 @@ struct search {
 	unsigned		recoverable:1;
 	unsigned		unaligned_bvec:1;
 	unsigned		skip:1;
+	unsigned		write:1;
+	unsigned		writeback:1;
 
 	unsigned		bio_insert_done:1;
 	/*

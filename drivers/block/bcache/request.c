@@ -644,16 +644,6 @@ static struct search *do_bio_hook(struct bio *bio, struct bcache_device *d)
 	return s;
 }
 
-static void request_read_resubmit(struct closure *cl)
-{
-	struct btree_op *op = container_of(cl, struct btree_op, cl);
-	struct search *s = container_of(op, struct search, op);
-	struct bio *bio = s->cache_bio ?: s->cache_miss;
-
-	closure_bio_submit_put(bio, &s->cl, op->d->c->bio_split);
-	closure_return(cl);
-}
-
 /* Cached devices */
 
 static void cached_dev_bio_complete(struct search *s)
@@ -748,7 +738,6 @@ static void request_read_done(struct closure *cl)
 		void *dst_ptr;
 
 		bio_reset(s->cache_bio);
-		bio_put(s->cache_bio);
 		s->cache_bio->bi_sector	= s->cache_miss->bi_sector;
 		s->cache_bio->bi_bdev	= s->cache_miss->bi_bdev;
 		s->cache_bio->bi_size	= s->cache_bio_sectors << 9;
@@ -799,6 +788,7 @@ static void request_read_done(struct closure *cl)
 	__bio_complete(s);
 
 	if (s->cache_bio && !atomic_read(&s->op.d->c->closing)) {
+		s->op.insert_type = INSERT_REPLACE;
 		closure_init(&s->op.cl, &s->cl);
 		bio_insert(&s->op.cl);
 	}
@@ -810,6 +800,9 @@ static void request_read_done_bh(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
 	struct cached_dev *d = container_of(s->op.d, struct cached_dev, disk);
+
+	if (s->cache_miss && s->op.insert_collision)
+		mark_cache_miss_collision(&s->op);
 
 	if (s->error)
 		set_closure_fn(cl, request_read_error, bcache_wq);
@@ -824,60 +817,70 @@ static void request_read_done_bh(struct closure *cl)
 static int cached_dev_cache_miss(struct btree *b, struct search *s,
 				 struct bio *bio, unsigned sectors)
 {
-	struct bio *n = bio_split_get(bio, sectors, s->op.d);
+	int ret = 0;
+	unsigned reada;
+	struct cached_dev *d = container_of(s->op.d, struct cached_dev, disk);
+	struct bio *n;
+
+	sectors = min(sectors, bio_max_sectors(bio)),
+
+	n = bio_split_get(bio, sectors, s->op.d);
 	if (!n)
 		return -EAGAIN;
 
-	generic_make_request(n);
-	return 0;
-}
+	if (s->cache_miss || s->skip)
+		goto out_submit;
 
-static void setup_cache_miss(struct search *s, struct cached_dev *d,
-			     unsigned reada)
-{
-	struct bio *bio = s->cache_miss;
-
-	if ((bio->bi_rw & REQ_RAHEAD) ||
+	if (n != bio ||
+	    (bio->bi_rw & REQ_RAHEAD) ||
 	    (bio->bi_rw & REQ_META) ||
 	    s->op.d->c->gc_stats.in_use >= CUTOFF_CACHE_READA)
 		reada = 0;
+	else
+		reada = min(d->readahead >> 9, sectors - bio_sectors(n));
 
-	if (bio_end(bio) + reada > bdev_sectors(bio->bi_bdev))
-		reada = bdev_sectors(bio->bi_bdev) - bio_end(bio);
-
-	if (reada)
-		mark_cache_readahead(s);
-
-	s->cache_bio_sectors = bio_sectors(bio) + reada;
-
+	s->cache_bio_sectors = bio_sectors(n) + reada;
 	s->cache_bio = bbio_kmalloc(GFP_NOIO,
 			DIV_ROUND_UP(s->cache_bio_sectors, PAGE_SECTORS));
-	if (!s->cache_bio)
-		return;
 
-	s->cache_bio->bi_sector	= bio->bi_sector;
-	s->cache_bio->bi_bdev	= bio->bi_bdev;
+	if (!s->cache_bio)
+		goto out_submit;
+
+	s->cache_bio->bi_sector	= n->bi_sector;
+	s->cache_bio->bi_bdev	= n->bi_bdev;
 	s->cache_bio->bi_size	= s->cache_bio_sectors << 9;
 
 	s->cache_bio->bi_end_io	= request_endio;
 	s->cache_bio->bi_private = &s->cl;
 
-	bio_map(s->cache_bio, NULL);
-	if (bio_alloc_pages(s->cache_bio, __GFP_NOWARN|GFP_NOIO)) {
-		bio_put(s->cache_bio);
-		s->cache_bio = NULL;
-		return;
-	}
+	/* btree_search_recurse()'s btree iterator is no good anymore */
+	ret = -EINTR;
+	if (!btree_insert_check_key(b, &s->op, s->cache_bio))
+		goto out_put;
 
+	bio_map(s->cache_bio, NULL);
+	if (bio_alloc_pages(s->cache_bio, __GFP_NOWARN|GFP_NOIO))
+		goto out_put;
+
+	s->cache_miss = n;
 	bio_get(s->cache_bio);
+
+	trace_bcache_cache_miss(s->orig_bio);
+	generic_make_request(s->cache_bio);
+
+	return ret;
+out_put:
+	bio_put(s->cache_bio);
+	s->cache_bio = NULL;
+out_submit:
+	generic_make_request(n);
+	return ret;
 }
 
 static void __request_read(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 	struct search *s = container_of(op, struct search, op);
-	struct cached_dev *d = container_of(op->d, struct cached_dev, disk);
-	struct bio *bio = &s->bio.bio;
 
 	int ret = btree_root(search_recurse, op->d->c, op);
 
@@ -886,29 +889,13 @@ static void __request_read(struct closure *cl)
 
 	mark_cache_accounting(s, !s->cache_miss, s->skip);
 
-	set_closure_fn(&s->cl, request_read_done_bh, NULL);
-	closure_set_stopped(&s->cl);
-
-	if (s->cache_miss) {
-		if (!s->skip)
-			setup_cache_miss(s, d, 0);
-
-		trace_bcache_cache_miss(s->orig_bio);
-
-		bio = s->cache_bio ?: s->cache_miss;
-		if (bio == s->cache_miss)
-			bio_get(bio);
-
-		if (closure_bio_submit_put(bio, &s->cl, op->d->c->bio_split))
-			continue_at(cl, request_read_resubmit, bcache_wq);
-	}
-
 	closure_return(cl);
 }
 
 static void request_read(struct cached_dev *d, struct search *s)
 {
-	s->op.insert_type	= INSERT_READ;
+	set_closure_fn(&s->cl, request_read_done_bh, NULL);
+	closure_set_stopped(&s->cl);
 
 	__request_read(&s->op.cl);
 }
@@ -1353,8 +1340,6 @@ static void __flash_dev_read(struct closure *cl)
 
 static void flash_dev_read(struct search *s)
 {
-	s->op.insert_type = INSERT_READ;
-
 	set_closure_fn(&s->cl, flash_dev_bio_complete, NULL);
 	closure_set_stopped(&s->cl);
 

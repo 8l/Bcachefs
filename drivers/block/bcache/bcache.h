@@ -149,6 +149,7 @@ struct prio_set {
 #include "journal.h"
 #include "stats.h"
 struct search;
+struct btree;
 
 struct bcache_device {
 	struct closure		cl;
@@ -178,7 +179,7 @@ struct bcache_device {
 
 	unsigned		data_csum:1;
 
-	int (*cache_miss)(struct search *, struct bio *, unsigned);
+	int (*cache_miss)(struct btree *, struct search *, struct bio *, unsigned);
 	int (*ioctl) (struct bcache_device *, fmode_t, unsigned, unsigned long);
 };
 

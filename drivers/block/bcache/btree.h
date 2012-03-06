@@ -271,7 +271,7 @@ struct btree *get_bucket(struct cache_set *, struct bkey *,
 bool bcache_btree_insert_keys(struct btree *, struct btree_op *);
 bool btree_insert_check_key(struct btree *, struct btree_op *, struct bio *);
 int bcache_btree_insert(struct btree_op *, struct cache_set *);
-int btree_search_recurse(struct btree *, struct btree_op *, unsigned *);
+int btree_search_recurse(struct btree *, struct btree_op *);
 
 size_t btree_gc_finish(struct cache_set *);
 int btree_check(struct cache_set *, struct btree_op *);

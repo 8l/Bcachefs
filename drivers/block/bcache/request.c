@@ -821,17 +821,14 @@ static void request_read_done_bh(struct closure *cl)
 	closure_queue(cl);
 }
 
-static int cached_dev_cache_miss(struct search *s, struct bio *bio,
-				 unsigned sectors)
+static int cached_dev_cache_miss(struct btree *b, struct search *s,
+				 struct bio *bio, unsigned sectors)
 {
 	struct bio *n = bio_split_get(bio, sectors, s->op.d);
 	if (!n)
-		return -ENOMEM;
+		return -EAGAIN;
 
-	if (s->cache_miss)
-		generic_make_request(s->cache_miss);
-
-	s->cache_miss = n;
+	generic_make_request(n);
 	return 0;
 }
 
@@ -881,20 +878,11 @@ static void __request_read(struct closure *cl)
 	struct search *s = container_of(op, struct search, op);
 	struct cached_dev *d = container_of(op->d, struct cached_dev, disk);
 	struct bio *bio = &s->bio.bio;
-	unsigned reada = d->readahead >> 9;
 
-	int ret = btree_root(search_recurse, op->d->c, op, &reada);
+	int ret = btree_root(search_recurse, op->d->c, op);
 
 	if (ret == -EAGAIN)
 		continue_at(cl, __request_read, bcache_wq);
-
-	if (!s->cache_hit_done) {
-		if (s->cache_miss)
-			generic_make_request(s->cache_miss);
-
-		s->cache_miss = bio;
-	} else
-		reada = 0;
 
 	mark_cache_accounting(s, !s->cache_miss, s->skip);
 
@@ -903,7 +891,7 @@ static void __request_read(struct closure *cl)
 
 	if (s->cache_miss) {
 		if (!s->skip)
-			setup_cache_miss(s, d, reada);
+			setup_cache_miss(s, d, 0);
 
 		trace_bcache_cache_miss(s->orig_bio);
 
@@ -1323,8 +1311,8 @@ static void flash_dev_bio_complete(struct closure *cl)
 	mempool_free(s, d->c->search);
 }
 
-static int flash_dev_cache_miss(struct search *s, struct bio *bio,
-				unsigned sectors)
+static int flash_dev_cache_miss(struct btree *b, struct search *s,
+				struct bio *bio, unsigned sectors)
 {
 	sectors = min(sectors, bio_sectors(bio));
 
@@ -1355,17 +1343,10 @@ static int flash_dev_cache_miss(struct search *s, struct bio *bio,
 static void __flash_dev_read(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
-	struct search *s = container_of(op, struct search, op);
-	struct bio *bio = &s->bio.bio;
-	unsigned reada = 0;
-
-	int ret = btree_root(search_recurse, op->d->c, op, &reada);
+	int ret = btree_root(search_recurse, op->d->c, op);
 
 	if (ret == -EAGAIN)
 		continue_at(cl, __flash_dev_read, bcache_wq);
-
-	if (!s->cache_hit_done)
-		flash_dev_cache_miss(s, bio, bio_sectors(bio));
 
 	closure_return(cl);
 }

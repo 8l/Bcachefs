@@ -21,10 +21,6 @@ struct search {
 	unsigned		writeback:1;
 
 	unsigned		bio_insert_done:1;
-	/*
-	 *If true, s->bio was a cache hit and is already submitted
-	 */
-	unsigned		cache_hit_done:1;
 
 	/* IO error returned to s->bio */
 	short			error;

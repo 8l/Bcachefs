@@ -2172,6 +2172,34 @@ void bcache_btree_set_root(struct btree *b)
 
 /* Cache lookup */
 
+static int submit_partial_cache_miss(struct btree *b, struct btree_op *op,
+				     struct bkey *k)
+{
+	struct search *s = container_of(op, struct search, op);
+	struct bio *bio = &s->bio.bio;
+	int ret = 0;
+
+	while (!ret &&
+	       !op->lookup_done) {
+		unsigned sectors = INT_MAX;
+
+		if (KEY_DEV(k) == s->op.d->id) {
+			if (KEY_START(k) <= bio->bi_sector)
+				break;
+
+			sectors = min_t(uint64_t, sectors,
+					KEY_START(k) - bio->bi_sector);
+		}
+
+		if (sectors >= bio_sectors(bio))
+			op->lookup_done = true;
+
+		ret = s->op.d->cache_miss(b, s, bio, sectors);
+	}
+
+	return ret;
+}
+
 /*
  * Read from a single key, handling the initial cache miss if the key starts in
  * the middle of the bio
@@ -2184,27 +2212,24 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 
 	unsigned sectors, ptr;
 	struct bio *n;
-	int ret = 0;
-	int offset(void)	{ return bio->bi_sector - KEY_START(k); }
 
-	while (offset() < 0) {
-		sectors = min_t(unsigned, -offset(), bio_max_sectors(bio));
-
-		ret = s->op.d->cache_miss(s, bio, sectors);
-		if (ret)
-			return ret;
-	}
+	int ret = submit_partial_cache_miss(b, op, k);
+	if (ret || op->lookup_done)
+		return ret;
 
 	/* XXX: figure out best pointer - for multiple cache devices */
 	ptr = 0;
 
 	PTR_BUCKET(b->c, k, ptr)->prio = initial_prio;
 
-	do {
+	while (!op->lookup_done &&
+	       KEY_DEV(k) == s->op.d->id &&
+	       bio->bi_sector < k->key) {
 		struct bkey *bio_key;
 		struct block_device *bdev = PTR_CACHE(b->c, k, ptr)->bdev;
 
-		sector_t sector = PTR_OFFSET(k, ptr) + offset();
+		sector_t sector = PTR_OFFSET(k, ptr) +
+			(bio->bi_sector - KEY_START(k));
 
 		sectors = min_t(unsigned, k->key - bio->bi_sector,
 				__bio_max_sectors(bio, bdev, sector));
@@ -2214,7 +2239,7 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 			return -EAGAIN;
 
 		if (n == bio)
-			s->cache_hit_done = true;
+			op->lookup_done = true;
 
 		bio_key = &container_of(n, struct bbio, bio)->key;
 
@@ -2236,13 +2261,12 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 
 		trace_bcache_cache_hit(n);
 		__submit_bbio(n, b->c);
-	} while (!s->cache_hit_done &&
-		 bio->bi_sector < k->key);
+	}
 
 	return 0;
 }
 
-int btree_search_recurse(struct btree *b, struct btree_op *op, unsigned *reada)
+int btree_search_recurse(struct btree *b, struct btree_op *op)
 {
 	struct search *s = container_of(op, struct search, op);
 	struct bio *bio = &s->bio.bio;
@@ -2258,30 +2282,19 @@ int btree_search_recurse(struct btree *b, struct btree_op *op, unsigned *reada)
 	do {
 		k = btree_iter_next(&iter);
 		if (!k) {
-			btree_bug_on(b->level, b,
-				     "no key to recurse on at level %i/%i",
-				     b->level, b->c->root->level);
+			ret = submit_partial_cache_miss(b, op,
+					&KEY(KEY_DEV(&b->key), b->key.key, 0));
 			break;
 		}
-
-		if (!b->level && KEY_DEV(k) != op->d->id)
-			break;
 
 		if (ptr_bad(b, k))
 			continue;
 
-		if (!b->level && bio_end(bio) <= KEY_START(k)) {
-			*reada = min_t(unsigned, *reada,
-				       KEY_START(k) - bio_end(bio));
-			break;
-		}
-
 		ret = b->level
-			? btree(search_recurse, k, b, op, reada)
+			? btree(search_recurse, k, b, op)
 			: submit_partial_cache_hit(b, op, k);
 	} while (!ret &&
-		 !s->cache_hit_done &&
-		 bkey_cmp(k, &KEY(op->d->id, bio_end(bio), 0)) < 0);
+		 !op->lookup_done);
 
 	return ret;
 }

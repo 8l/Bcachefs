@@ -28,6 +28,7 @@
 #include <linux/slab.h>
 #include <linux/bitops.h>
 #include <linux/hash.h>
+#include <linux/random.h>
 #include <linux/rcupdate.h>
 #include <trace/events/bcache.h>
 
@@ -86,7 +87,7 @@
  */
 
 const char * const bcache_insert_types[] = {
-	"read", "write", "undirty", "replay"
+	"write", "read", "replace", "undirty", "replay"
 };
 
 #define MAX_NEED_GC		64
@@ -404,7 +405,6 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 	struct bset *i = b->sets[b->nsets].data;
 	struct btree_write *w = btree_current_write(b);
 
-	BUG_ON(!now && !op);
 	BUG_ON(b->written &&
 	       (b->written >= btree_blocks(b) ||
 		i->seq != b->sets[0].data->seq ||
@@ -431,6 +431,9 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
 			atomic_inc(w->journal);
 		}
 	}
+
+	if (current->bio_list)
+		return;
 
 	/* Force write if set is too big */
 	if (now ||
@@ -1606,6 +1609,8 @@ static bool fix_overlapping_extents(struct btree *b,
 			atomic_long_sub(sectors, &d->sectors_dirty);
 	}
 
+	unsigned sectors_found = 0;
+
 	while (1) {
 		struct bkey *k = btree_iter_next(iter);
 		if (!k ||
@@ -1651,6 +1656,47 @@ static bool fix_overlapping_extents(struct btree *b,
 			cut_front(insert, k);
 			atomic_long_inc(&b->c->writeback_keys_done);
 			return false;
+		}
+
+		/*
+		 * We might overlap with 0 size extents; we can't skip these
+		 * because if they're in the set we're inserting to we have to
+		 * adjust them so they don't overlap with the key we're
+		 * inserting. But we don't want to check them for BTREE_REPLACE
+		 * operations.
+		 */
+
+		if (op->insert_type == INSERT_REPLACE &&
+		    KEY_SIZE(k)) {
+			/*
+			 * k might have been split since we inserted/found the
+			 * key we're replacing
+			 */
+			uint64_t offset = KEY_START(k) -
+				KEY_START(&op->replace);
+
+			/* But it must be a subset of the replace key */
+			if (KEY_START(k) < KEY_START(&op->replace) ||
+			    KEY_OFFSET(k) > KEY_OFFSET(&op->replace))
+				goto check_failed;
+
+			/* We didn't find a key that we were supposed to */
+			if (KEY_START(k) > KEY_START(insert) + sectors_found)
+				goto check_failed;
+
+			if (KEY_PTRS(&op->replace) != KEY_PTRS(k))
+				goto check_failed;
+
+			/* skip past gen */
+			offset <<= 8;
+
+			BUG_ON(!KEY_PTRS(&op->replace));
+
+			for (unsigned i = 0; i < KEY_PTRS(&op->replace); i++)
+				if (k->ptr[i] != op->replace.ptr[i] + offset)
+					goto check_failed;
+
+			sectors_found = k->key - KEY_START(insert);
 		}
 
 		if (bkey_cmp(insert, k) < 0 &&
@@ -1721,6 +1767,17 @@ static bool fix_overlapping_extents(struct btree *b,
 	if (op->insert_type == INSERT_UNDIRTY) {
 wb_failed:	atomic_long_inc(&b->c->writeback_keys_failed);
 		return true;
+	}
+
+check_failed:
+	if (op->insert_type == INSERT_REPLACE) {
+		if (!sectors_found) {
+			op->insert_collision = true;
+			return true;
+		} else if (sectors_found < KEY_SIZE(insert)) {
+			insert->key -= KEY_SIZE(insert) - sectors_found;
+			SET_KEY_SIZE(insert, sectors_found);
+		}
 	}
 
 	return false;
@@ -1815,6 +1872,40 @@ bool bcache_btree_insert_keys(struct btree *b, struct btree_op *op)
 	}
 
 	BUG_ON(count_data(b) < oldsize);
+	return ret;
+}
+
+bool btree_insert_check_key(struct btree *b, struct btree_op *op,
+			    struct bio *bio)
+{
+	bool ret = false;
+	uint64_t btree_ptr = b->key.ptr[0];
+	unsigned long seq = b->seq;
+	BKEY_PADDED(k) tmp;
+
+	rw_unlock(false, b);
+	rw_lock(true, b, b->level);
+
+	if (b->key.ptr[0] != btree_ptr ||
+	    b->seq != seq + 1 ||
+	    should_split(b))
+		goto out;
+
+	op->replace = KEY(op->d->id, bio_end(bio), bio_sectors(bio));
+
+	SET_KEY_PTRS(&op->replace, 1);
+	get_random_bytes(&op->replace.ptr[0], sizeof(uint64_t));
+
+	SET_PTR_DEV(&op->replace, 0, PTR_CHECK_DEV);
+
+	bkey_copy(&tmp.k, &op->replace);
+
+	BUG_ON(op->insert_type != INSERT_WRITE);
+	BUG_ON(!btree_insert_key(b, op, &tmp.k));
+	btree_write(b, false, NULL);
+	ret = true;
+out:
+	downgrade_write(&b->lock);
 	return ret;
 }
 
@@ -1947,6 +2038,13 @@ static int btree_insert_recurse(struct btree *b, struct btree_op *op,
 		}
 
 		if (bkey_cmp(insert, k) > 0) {
+			if (op->insert_type == INSERT_REPLACE) {
+				__bkey_put(b->c, insert);
+				op->keys.top = op->keys.bottom;
+				op->insert_collision = true;
+				return 0;
+			}
+
 			if (op->insert_type == INSERT_UNDIRTY) {
 				op->keys.top = op->keys.bottom;
 				return 0;

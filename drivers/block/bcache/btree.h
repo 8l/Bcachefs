@@ -26,6 +26,7 @@ struct btree {
 
 	/* Single bit - set when accessed, cleared by shrinker */
 	unsigned long		accessed;
+	unsigned long		seq;
 	struct rw_semaphore	lock;
 	struct cache_set	*c;
 
@@ -153,16 +154,21 @@ struct btree_op {
 
 	/* Btree insertion type */
 	enum {
-		INSERT_READ,
 		INSERT_WRITE,
+		INSERT_READ,
+		INSERT_REPLACE,
 		INSERT_UNDIRTY,
 		INSERT_REPLAY,
 	} insert_type:8;
+
+	unsigned		lookup_done:1;
+	unsigned		insert_collision:1;
 
 	/* Anything after this point won't get zeroed in do_bio_hook() */
 
 	/* Keys to be inserted */
 	struct keylist		keys;
+	BKEY_PADDED(replace);
 };
 
 void btree_op_init_stack(struct btree_op *);
@@ -171,6 +177,8 @@ static inline void rw_lock(bool w, struct btree *b, int level)
 {
 	w ? down_write_nested(&b->lock, level + 1)
 	  : down_read_nested(&b->lock, level + 1);
+	if (w)
+		b->seq++;
 }
 
 static inline void rw_unlock(bool w, struct btree *b)
@@ -183,6 +191,8 @@ static inline void rw_unlock(bool w, struct btree *b)
 			check_key_order(b, b->sets[i].data);
 #endif
 
+	if (w)
+		b->seq++;
 	(w ? up_write : up_read)(&b->lock);
 }
 
@@ -259,6 +269,7 @@ struct btree *get_bucket(struct cache_set *, struct bkey *,
 			 int, struct btree_op *);
 
 bool bcache_btree_insert_keys(struct btree *, struct btree_op *);
+bool btree_insert_check_key(struct btree *, struct btree_op *, struct bio *);
 int bcache_btree_insert(struct btree_op *, struct cache_set *);
 int btree_search_recurse(struct btree *, struct btree_op *, unsigned *);
 

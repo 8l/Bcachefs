@@ -644,6 +644,18 @@ static struct search *do_bio_hook(struct bio *bio, struct bcache_device *d)
 	return s;
 }
 
+static void btree_read_async(struct closure *cl)
+{
+	struct btree_op *op = container_of(cl, struct btree_op, cl);
+
+	int ret = btree_root(search_recurse, op->d->c, op);
+
+	if (ret == -EAGAIN)
+		continue_at(cl, btree_read_async, bcache_wq);
+
+	closure_return(cl);
+}
+
 /* Cached devices */
 
 static void cached_dev_bio_complete(struct search *s)
@@ -804,6 +816,8 @@ static void request_read_done_bh(struct closure *cl)
 	if (s->cache_miss && s->op.insert_collision)
 		mark_cache_miss_collision(&s->op);
 
+	mark_cache_accounting(s, !s->cache_miss, s->skip);
+
 	if (s->error)
 		set_closure_fn(cl, request_read_error, bcache_wq);
 	else if (s->cache_bio || verify(d, &s->bio.bio))
@@ -877,27 +891,12 @@ out_submit:
 	return ret;
 }
 
-static void __request_read(struct closure *cl)
-{
-	struct btree_op *op = container_of(cl, struct btree_op, cl);
-	struct search *s = container_of(op, struct search, op);
-
-	int ret = btree_root(search_recurse, op->d->c, op);
-
-	if (ret == -EAGAIN)
-		continue_at(cl, __request_read, bcache_wq);
-
-	mark_cache_accounting(s, !s->cache_miss, s->skip);
-
-	closure_return(cl);
-}
-
 static void request_read(struct cached_dev *d, struct search *s)
 {
 	set_closure_fn(&s->cl, request_read_done_bh, NULL);
 	closure_set_stopped(&s->cl);
 
-	__request_read(&s->op.cl);
+	btree_read_async(&s->op.cl);
 }
 
 /* Process writes */
@@ -1327,23 +1326,12 @@ static int flash_dev_cache_miss(struct btree *b, struct search *s,
 	return 0;
 }
 
-static void __flash_dev_read(struct closure *cl)
-{
-	struct btree_op *op = container_of(cl, struct btree_op, cl);
-	int ret = btree_root(search_recurse, op->d->c, op);
-
-	if (ret == -EAGAIN)
-		continue_at(cl, __flash_dev_read, bcache_wq);
-
-	closure_return(cl);
-}
-
 static void flash_dev_read(struct search *s)
 {
 	set_closure_fn(&s->cl, flash_dev_bio_complete, NULL);
 	closure_set_stopped(&s->cl);
 
-	__flash_dev_read(&s->op.cl);
+	btree_read_async(&s->op.cl);
 }
 
 static void flash_dev_write(struct search *s)

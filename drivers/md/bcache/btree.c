@@ -1005,12 +1005,18 @@ static struct btree *btree_alloc_replacement(struct btree *b,
 
 /* Garbage collection */
 
-void __btree_mark_key(struct cache_set *c, int level, struct bkey *k)
+uint8_t __btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 {
+	uint8_t stale = 0;
 	struct bucket *g;
 
-	if (!k->key || !KEY_SIZE(k))
-		return;
+	/*
+	 * ptr_invalid() can't return true for the keys that mark btree nodes as
+	 * freed, but since ptr_bad() returns true we'll never actually use them
+	 * for anything and thus we don't want mark their pointers here
+	 */
+	if (!bkey_cmp(k, &ZERO_KEY))
+		return stale;
 
 	for (unsigned i = 0; i < KEY_PTRS(k); i++) {
 		if (!ptr_available(c, k, i))
@@ -1021,8 +1027,10 @@ void __btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 		if (gen_after(g->gc_gen, PTR_GEN(k, i)))
 			g->gc_gen = PTR_GEN(k, i);
 
-		if (ptr_stale(c, k, i))
+		if (ptr_stale(c, k, i)) {
+			stale = max(stale, ptr_stale(c, k, i));
 			continue;
+		}
 
 		cache_bug_on(level
 			     ? g->mark && g->mark != GC_MARK_BTREE
@@ -1038,49 +1046,37 @@ void __btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 			 ((int) g->mark) + KEY_SIZE(k) < SHRT_MAX)
 			g->mark += KEY_SIZE(k);
 	}
+
+	return stale;
 }
 
 #define btree_mark_key(b, k)	__btree_mark_key(b->c, b->level, k)
 
-static int btree_gc_mark(struct btree *b, unsigned *keys, struct gc_stat *gc)
+static int btree_gc_mark_node(struct btree *b, unsigned *keys, struct gc_stat *gc)
 {
 	uint8_t stale = 0;
 	unsigned last_dev = -1;
 	struct bcache_device *d = NULL;
+	struct bkey *k;
 
 	struct btree_iter iter;
 	btree_iter_init(b, &iter, NULL);
 
 	gc->nodes++;
 
-	while (1) {
-		struct bkey *k = btree_iter_next(&iter);
-		if (!k)
-			break;
+	while ((k = btree_iter_next(&iter))) {
+		if (ptr_invalid(b, k))
+			continue;
 
 		if (last_dev != KEY_DEV(k)) {
 			last_dev = KEY_DEV(k);
 
-			d = b->c->devices[last_dev];
+			d = KEY_DEV(k) < b->c->nr_uuids
+				? b->c->devices[last_dev]
+				: NULL;
 		}
 
-		if (ptr_invalid(b, k))
-			continue;
-
-		for (unsigned i = 0; i < KEY_PTRS(k); i++) {
-			if (!ptr_available(b->c, k, i))
-				continue;
-
-			stale = max(stale, ptr_stale(b->c, k, i));
-
-			btree_bug_on(gen_after(PTR_BUCKET(b->c, k, i)->last_gc,
-					       PTR_GEN(k, i)),
-				     b, "found old gen %u > %llu in gc: %s",
-				     PTR_BUCKET(b->c, k, i)->last_gc,
-				     PTR_GEN(k, i), pkey(k));
-		}
-
-		btree_mark_key(b, k);
+		stale = max(stale, btree_mark_key(b, k));
 
 		if (ptr_bad(b, k))
 			continue;
@@ -1271,7 +1267,7 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 		}
 
 		r->keys	= 0;
-		stale = btree_gc_mark(r->b, &r->keys, gc);
+		stale = btree_gc_mark_node(r->b, &r->keys, gc);
 
 		if (!b->written &&
 		    (r->b->level || stale > 10 ||
@@ -1325,7 +1321,7 @@ static int btree_gc_root(struct btree *b, struct btree_op *op,
 {
 	struct btree *n = NULL;
 	unsigned keys = 0;
-	int ret = 0, stale = btree_gc_mark(b, &keys, gc);
+	int ret = 0, stale = btree_gc_mark_node(b, &keys, gc);
 
 	if (b->level || stale > 10)
 		n = btree_alloc_replacement(b, NULL);
@@ -1352,6 +1348,38 @@ static int btree_gc_root(struct btree *b, struct btree_op *op,
 	return ret;
 }
 
+static void btree_gc_start(struct cache_set *c)
+{
+	struct cache *ca;
+	struct bucket *b;
+
+	if (!c->gc_mark_valid)
+		return;
+
+	mutex_lock(&c->bucket_lock);
+
+	for_each_cache(ca, c)
+		free_some_buckets(ca);
+
+	c->gc_mark_valid = 0;
+	c->gc_done = ZERO_KEY;
+
+	for_each_cache(ca, c)
+		for_each_bucket(b, ca) {
+			b->gc_gen = b->gen;
+			if (!atomic_read(&b->pin))
+				b->mark = GC_MARK_RECLAIMABLE;
+		}
+
+	for (struct bcache_device **d = c->devices;
+	     d < c->devices + c->nr_uuids;
+	     d++)
+		if (*d)
+			(*d)->sectors_dirty_gc = 0;
+
+	mutex_unlock(&c->bucket_lock);
+}
+
 size_t btree_gc_finish(struct cache_set *c)
 {
 	size_t available = 0;
@@ -1364,7 +1392,6 @@ size_t btree_gc_finish(struct cache_set *c)
 	set_gc_sectors(c);
 	c->gc_mark_valid = 1;
 	c->need_gc	= 0;
-	c->min_prio	= INITIAL_PRIO;
 
 	if (c->root)
 		for (unsigned i = 0; i < KEY_PTRS(&c->root->key); i++)
@@ -1384,17 +1411,7 @@ size_t btree_gc_finish(struct cache_set *c)
 			ca->buckets[*i].mark = GC_MARK_BTREE;
 
 		for_each_bucket(b, ca) {
-			/*
-			 * the c->journal.cur check is a hack because when we're
-			 * called from run_cache_set() gc_gen isn't going to be
-			 * correct
-			 */
-			cache_bug_on(c->journal.cur &&
-				     gen_after(b->last_gc, b->gc_gen), c,
-				     "found old gen in gc");
-
 			b->last_gc	= b->gc_gen;
-			b->gc_gen	= b->gen;
 			c->need_gc	= max(c->need_gc, bucket_gc_gen(b));
 
 			if (!atomic_read(&b->pin) &&
@@ -1403,9 +1420,6 @@ size_t btree_gc_finish(struct cache_set *c)
 				if (!b->mark)
 					bucket_add_unused(ca, b);
 			}
-
-			if (b->prio)
-				c->min_prio = min(c->min_prio, b->prio);
 		}
 	}
 
@@ -1434,43 +1448,20 @@ static void btree_gc(struct closure *cl)
 	struct cache_set *c = container_of(cl, struct cache_set, gc.cl);
 	int ret;
 	unsigned long available;
-	struct bucket *b;
-	struct cache *ca;
-
 	struct gc_stat stats;
 	struct closure writes;
 	struct btree_op op;
 
 	uint64_t start_time = local_clock();
 	trace_bcache_gc_start(c->sb.set_uuid);
+	blktrace_msg_all(c, "Starting gc");
 
 	memset(&stats, 0, sizeof(struct gc_stat));
 	closure_init_stack(&writes);
 	btree_op_init_stack(&op);
 	op.lock = SHRT_MAX;
 
-	blktrace_msg_all(c, "Starting gc");
-
-	mutex_lock(&c->bucket_lock);
-	for_each_cache(ca, c)
-		free_some_buckets(ca);
-
-	if (c->gc_mark_valid) {
-		c->gc_mark_valid = 0;
-		c->gc_done = ZERO_KEY;
-
-		for_each_cache(ca, c)
-			for_each_bucket(b, ca)
-				if (!atomic_read(&b->pin))
-					b->mark = 0;
-
-		for (struct bcache_device **d = c->devices;
-		     d < c->devices + c->nr_uuids;
-		     d++)
-			if (*d)
-				(*d)->sectors_dirty_gc = 0;
-	}
-	mutex_unlock(&c->bucket_lock);
+	btree_gc_start(c);
 
 	ret = btree_root(gc_root, c, &op, &writes, &stats);
 	closure_sync(&op.cl);

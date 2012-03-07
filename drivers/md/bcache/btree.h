@@ -267,6 +267,6 @@ int btree_search_recurse(struct btree *, struct btree_op *);
 void bcache_queue_gc(struct cache_set *);
 size_t btree_gc_finish(struct cache_set *);
 int btree_check(struct cache_set *, struct btree_op *);
-void __btree_mark_key(struct cache_set *, int, struct bkey *);
+uint8_t __btree_mark_key(struct cache_set *, int, struct bkey *);
 
 #endif

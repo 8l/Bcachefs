@@ -102,6 +102,8 @@ void rescale_priorities(struct cache_set *c, int sectors)
 
 	mutex_lock(&c->bucket_lock);
 
+	c->min_prio = USHRT_MAX;
+
 	for_each_cache(ca, c)
 		for_each_bucket(b, ca)
 			if (b->prio &&

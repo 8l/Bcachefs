@@ -273,6 +273,8 @@ static inline bool can_inc_bucket_gen(struct bucket *b)
 
 bool bucket_add_unused(struct cache *c, struct bucket *b)
 {
+	BUG_ON(GC_MARK(b) || GC_SECTORS_USED(b));
+
 	if (c->prio_alloc == prio_buckets(c) &&
 	    CACHE_REPLACEMENT(&c->sb) == CACHE_REPLACEMENT_FIFO)
 		return false;
@@ -290,7 +292,7 @@ bool bucket_add_unused(struct cache *c, struct bucket *b)
 
 static bool can_invalidate_bucket(struct cache *c, struct bucket *b)
 {
-	return b->mark >= 0 &&
+	return GC_MARK(b) == GC_MARK_RECLAIMABLE &&
 		!atomic_read(&b->pin) &&
 		can_inc_bucket_gen(b);
 }
@@ -307,7 +309,8 @@ static void invalidate_buckets_lru(struct cache *c)
 {
 	unsigned bucket_prio(struct bucket *b)
 	{
-		return ((unsigned) (b->prio - c->set->min_prio)) * b->mark;
+		return ((unsigned) (b->prio - c->set->min_prio)) *
+			GC_SECTORS_USED(b);
 	}
 
 	bool bucket_max_cmp(struct bucket *l, struct bucket *r)
@@ -328,7 +331,7 @@ static void invalidate_buckets_lru(struct cache *c)
 		if (!can_invalidate_bucket(c, b))
 			continue;
 
-		if (!b->mark) {
+		if (!GC_SECTORS_USED(b)) {
 			if (!bucket_add_unused(c, b))
 				return;
 		} else {
@@ -462,7 +465,7 @@ void free_some_buckets(struct cache *c)
 		struct bucket *b = c->buckets + r;
 		c->prio_next[c->prio_alloc++] = r;
 
-		b->mark = GC_MARK_BTREE;
+		SET_GC_MARK(b, GC_MARK_BTREE);
 		atomic_dec_bug(&b->pin);
 	}
 
@@ -518,7 +521,8 @@ again:
 #endif
 		BUG_ON(atomic_read(&b->pin) != 1);
 
-		b->mark		= mark ?: c->sb.bucket_size;
+		SET_GC_MARK(b, mark);
+		SET_GC_SECTORS_USED(b, c->sb.bucket_size);
 		b->prio		= (mark == GC_MARK_BTREE)
 			? BTREE_PRIO : INITIAL_PRIO;
 
@@ -553,7 +557,8 @@ void unpop_bucket(struct cache_set *c, struct bkey *k)
 	for (unsigned i = 0; i < KEY_PTRS(k); i++) {
 		struct bucket *b = PTR_BUCKET(c, k, i);
 
-		b->mark = 0;
+		SET_GC_MARK(b, 0);
+		SET_GC_SECTORS_USED(b, 0);
 		bucket_add_unused(PTR_CACHE(c, k, i), b);
 	}
 }

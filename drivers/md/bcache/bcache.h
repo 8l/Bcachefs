@@ -23,12 +23,19 @@ struct bucket {
 	uint8_t		disk_gen;
 	uint8_t		last_gc; /* Most out of date gen in the btree */
 	uint8_t		gc_gen;
-
-#define GC_MARK_RECLAIMABLE	0
-#define GC_MARK_DIRTY		-1
-#define GC_MARK_BTREE		-2
-	short		mark;
+	uint16_t	gc_mark;
 };
+
+/*
+ * I'd use bitfields for these, but I don't trust the compiler not to screw me
+ * as multiple threads touch struct bucket without locking
+ */
+
+BITMASK(GC_MARK,	 struct bucket, gc_mark, 0, 2);
+#define GC_MARK_RECLAIMABLE	0
+#define GC_MARK_DIRTY		1
+#define GC_MARK_BTREE		2
+BITMASK(GC_SECTORS_USED, struct bucket, gc_mark, 2, 14);
 
 struct bkey {
 	uint64_t	header;

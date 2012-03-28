@@ -419,7 +419,7 @@ found:
 
 	if (w)
 		for (unsigned i = 0; i < KEY_PTRS(&ret->key); i++)
-			PTR_BUCKET(c, &ret->key, i)->mark = GC_MARK_DIRTY;
+			SET_GC_MARK(PTR_BUCKET(c, &ret->key, i), GC_MARK_DIRTY);
 
 	ret->last = s->task;
 	bkey_copy_key(&ret->key, search);

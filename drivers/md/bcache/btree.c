@@ -1032,19 +1032,22 @@ uint8_t __btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 			continue;
 		}
 
-		cache_bug_on(level
-			     ? g->mark && g->mark != GC_MARK_BTREE
-			     : g->mark < GC_MARK_DIRTY, c,
-			     "inconsistent pointers: mark = %i, "
-			     "level = %i", g->mark, level);
+		cache_bug_on(GC_MARK(g) &&
+			     (GC_MARK(g) == GC_MARK_BTREE) != (level != 0), c,
+			     "inconsistent pointers: mark = %llu, level = %i",
+			     GC_MARK(g), level);
 
 		if (level)
-			g->mark = GC_MARK_BTREE;
+			SET_GC_MARK(g, GC_MARK_BTREE);
 		else if (KEY_DIRTY(k))
-			g->mark = GC_MARK_DIRTY;
-		else if (g->mark >= 0 &&
-			 ((int) g->mark) + KEY_SIZE(k) < SHRT_MAX)
-			g->mark += KEY_SIZE(k);
+			SET_GC_MARK(g, GC_MARK_DIRTY);
+
+		/* guard against overflow */
+		SET_GC_SECTORS_USED(g, min_t(unsigned,
+					     GC_SECTORS_USED(g) + KEY_SIZE(k),
+					     (1 << 14) - 1));
+
+		BUG_ON(!GC_SECTORS_USED(g));
 	}
 
 	return stale;
@@ -1368,7 +1371,7 @@ static void btree_gc_start(struct cache_set *c)
 		for_each_bucket(b, ca) {
 			b->gc_gen = b->gen;
 			if (!atomic_read(&b->pin))
-				b->mark = GC_MARK_RECLAIMABLE;
+				SET_GC_MARK(b, GC_MARK_RECLAIMABLE);
 		}
 
 	for (struct bcache_device **d = c->devices;
@@ -1395,29 +1398,29 @@ size_t btree_gc_finish(struct cache_set *c)
 
 	if (c->root)
 		for (unsigned i = 0; i < KEY_PTRS(&c->root->key); i++)
-			PTR_BUCKET(c, &c->root->key, i)->mark = GC_MARK_BTREE;
+			SET_GC_MARK(PTR_BUCKET(c, &c->root->key, i), GC_MARK_BTREE);
 
 	for (unsigned i = 0; i < KEY_PTRS(&c->uuid_bucket); i++)
-		PTR_BUCKET(c, &c->uuid_bucket, i)->mark = GC_MARK_BTREE;
+		SET_GC_MARK(PTR_BUCKET(c, &c->uuid_bucket, i), GC_MARK_BTREE);
 
 	for_each_cache(ca, c) {
 		ca->invalidate_needs_gc = 0;
 
 		for (i = ca->sb.d; i < ca->sb.d + ca->sb.keys; i++)
-			ca->buckets[*i].mark = GC_MARK_BTREE;
+			SET_GC_MARK(ca->buckets + *i, GC_MARK_BTREE);
 
 		for (i = ca->prio_buckets;
 		     i < ca->prio_buckets + prio_buckets(ca) * 2; i++)
-			ca->buckets[*i].mark = GC_MARK_BTREE;
+			SET_GC_MARK(ca->buckets + *i, GC_MARK_BTREE);
 
 		for_each_bucket(b, ca) {
 			b->last_gc	= b->gc_gen;
 			c->need_gc	= max(c->need_gc, bucket_gc_gen(b));
 
 			if (!atomic_read(&b->pin) &&
-			    b->mark >= 0) {
+			    GC_MARK(b) == GC_MARK_RECLAIMABLE) {
 				available++;
-				if (!b->mark)
+				if (!GC_SECTORS_USED(b))
 					bucket_add_unused(ca, b);
 			}
 		}

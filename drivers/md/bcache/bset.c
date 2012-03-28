@@ -138,7 +138,7 @@ bool ptr_bad(struct btree *b, const struct bkey *k)
 				if (KEY_DIRTY(k) ||
 				    g->prio != BTREE_PRIO ||
 				    (b->c->gc_mark_valid &&
-				     g->mark != GC_MARK_BTREE))
+				     GC_MARK(g) != GC_MARK_BTREE))
 					goto bug;
 
 			} else {
@@ -147,7 +147,7 @@ bool ptr_bad(struct btree *b, const struct bkey *k)
 
 				if (KEY_DIRTY(k) &&
 				    b->c->gc_mark_valid &&
-				    g->mark != GC_MARK_DIRTY)
+				    GC_MARK(g) != GC_MARK_DIRTY)
 					goto bug;
 			}
 			mutex_unlock(&b->c->bucket_lock);
@@ -159,9 +159,9 @@ bool ptr_bad(struct btree *b, const struct bkey *k)
 bug:
 	mutex_unlock(&b->c->bucket_lock);
 	btree_bug(b, "inconsistent pointer %s: bucket %li pin %i "
-		  "prio %i gen %i last_gc %i mark %i gc_gen %i", pkey(k),
+		  "prio %i gen %i last_gc %i mark %llu gc_gen %i", pkey(k),
 		  PTR_BUCKET_NR(b->c, k, i), atomic_read(&g->pin),
-		  g->prio, g->gen, g->last_gc, g->mark, g->gc_gen);
+		  g->prio, g->gen, g->last_gc, GC_MARK(g), g->gc_gen);
 	return true;
 #endif
 }

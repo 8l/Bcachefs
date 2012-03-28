@@ -444,7 +444,7 @@ static int __uuid_write(struct cache_set *c)
 
 	lockdep_assert_held(&register_lock);
 
-	if (pop_bucket_set(c, BTREE_PRIO, &k.key, 1, &cl))
+	if (pop_bucket_set(c, GC_MARK_BTREE, &k.key, 1, &cl))
 		return 1;
 
 	SET_KEY_SIZE(&k.key, c->sb.bucket_size);

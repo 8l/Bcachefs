@@ -441,6 +441,7 @@ bool can_save_prios(struct cache *c)
 void free_some_buckets(struct cache *c)
 {
 	long r;
+	lockdep_assert_held(&c->set->bucket_lock);
 
 	/*
 	 * XXX: do_discard(), prio_write() take refcounts on the cache set.  How
@@ -490,13 +491,13 @@ void free_some_buckets(struct cache *c)
 		prio_write(c);
 }
 
-static long pop_bucket(struct cache *c, uint16_t priority, struct closure *cl)
+static long pop_bucket(struct cache *c, int mark, struct closure *cl)
 {
 	long r = -1;
 again:
 	free_some_buckets(c);
 
-	if ((priority == BTREE_PRIO || fifo_used(&c->free) > 8) &&
+	if ((mark == GC_MARK_BTREE || fifo_used(&c->free) > 8) &&
 	    fifo_pop(&c->free, r)) {
 		struct bucket *b = c->buckets + r;
 #ifdef CONFIG_BCACHE_EDEBUG
@@ -515,10 +516,10 @@ again:
 #endif
 		BUG_ON(atomic_read(&b->pin) != 1);
 
-		b->prio = priority;
-		b->mark = priority == BTREE_PRIO
-			? GC_MARK_BTREE
-			: c->sb.bucket_size;
+		b->mark		= mark ?: c->sb.bucket_size;
+		b->prio		= (mark == GC_MARK_BTREE)
+			? BTREE_PRIO : INITIAL_PRIO;
+
 		return r;
 	}
 
@@ -555,7 +556,7 @@ void unpop_bucket(struct cache_set *c, struct bkey *k)
 	}
 }
 
-int __pop_bucket_set(struct cache_set *c, uint16_t prio,
+int __pop_bucket_set(struct cache_set *c, int mark,
 		     struct bkey *k, int n, struct closure *cl)
 {
 	lockdep_assert_held(&c->bucket_lock);
@@ -567,7 +568,7 @@ int __pop_bucket_set(struct cache_set *c, uint16_t prio,
 
 	for (int i = 0; i < n; i++) {
 		struct cache *ca = c->cache_by_alloc[i];
-		long b = pop_bucket(ca, prio, cl);
+		long b = pop_bucket(ca, mark, cl);
 
 		if (b == -1)
 			goto err;
@@ -586,12 +587,12 @@ err:
 	return -1;
 }
 
-int pop_bucket_set(struct cache_set *c, uint16_t prio,
+int pop_bucket_set(struct cache_set *c, int mark,
 		   struct bkey *k, int n, struct closure *cl)
 {
 	int ret;
 	mutex_lock(&c->bucket_lock);
-	ret = __pop_bucket_set(c, prio, k, n, cl);
+	ret = __pop_bucket_set(c, mark, k, n, cl);
 	mutex_unlock(&c->bucket_lock);
 	return ret;
 }

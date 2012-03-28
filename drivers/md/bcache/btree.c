@@ -963,7 +963,7 @@ struct btree *bcache_btree_alloc(struct cache_set *c, int level,
 
 	mutex_lock(&c->bucket_lock);
 retry:
-	if (__pop_bucket_set(c, BTREE_PRIO, &k.key, 1, cl))
+	if (__pop_bucket_set(c, GC_MARK_BTREE, &k.key, 1, cl))
 		goto err;
 
 	SET_KEY_SIZE(&k.key, c->btree_pages * PAGE_SECTORS);

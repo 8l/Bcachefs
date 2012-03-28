@@ -24,8 +24,9 @@ struct bucket {
 	uint8_t		last_gc; /* Most out of date gen in the btree */
 	uint8_t		gc_gen;
 
-#define GC_MARK_DIRTY	-1
-#define GC_MARK_BTREE	-2
+#define GC_MARK_RECLAIMABLE	0
+#define GC_MARK_DIRTY		-1
+#define GC_MARK_BTREE		-2
 	short		mark;
 };
 
@@ -917,10 +918,10 @@ bool bucket_add_unused(struct cache *, struct bucket *);
 bool can_save_prios(struct cache *);
 void free_some_buckets(struct cache *);
 void unpop_bucket(struct cache_set *, struct bkey *);
-int __pop_bucket_set(struct cache_set *, uint16_t,
-		     struct bkey *, int, struct closure *);
-int pop_bucket_set(struct cache_set *, uint16_t,
-		   struct bkey *, int, struct closure *);
+int __pop_bucket_set(struct cache_set *, int, struct bkey *,
+		     int, struct closure *);
+int pop_bucket_set(struct cache_set *, int, struct bkey *,
+		   int, struct closure *);
 
 __printf(2, 3)
 bool cache_set_error(struct cache_set *, const char *, ...);

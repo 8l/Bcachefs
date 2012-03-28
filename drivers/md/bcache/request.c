@@ -386,7 +386,15 @@ found:
 			spin_unlock(&c->data_bucket_lock);
 			k = &alloc.key;
 
-			if (pop_bucket_set(c, INITIAL_PRIO, k, 1, w))
+			/*
+			 * We don't segregate buckets for dirty and clean data -
+			 * so when we allocate it always mark it reclaimable
+			 * first, and then mark it dirty down below the first
+			 * time we use it for dirty data
+			 */
+
+			if (pop_bucket_set(c, GC_MARK_RECLAIMABLE,
+					   k, 1, w))
 				return NULL;
 
 			goto again;

@@ -515,13 +515,19 @@ static void mca_bucket_free(struct btree *b)
 	list_move(&b->list, &b->c->btree_cache_freeable);
 }
 
+static unsigned btree_order(struct bkey *k)
+{
+	return ilog2(KEY_SIZE(k) / PAGE_SECTORS ?: 1);
+}
+
 static void mca_data_alloc(struct btree *b, struct bkey *k, gfp_t gfp)
 {
 	struct bset_tree *t = b->sets;
 	BUG_ON(t->data);
 
-	b->page_order = ilog2(max_t(unsigned, b->c->btree_pages,
-				    KEY_SIZE(k) / PAGE_SECTORS ?: 1));
+	b->page_order = max_t(unsigned,
+			      ilog2(b->c->btree_pages),
+			      btree_order(k));
 
 	t->data = (void *) __get_free_pages(gfp, b->page_order);
 	if (!t->data)
@@ -564,12 +570,17 @@ static struct btree *mca_bucket_alloc(struct cache_set *c,
 	return b->sets[0].data ? b : NULL;
 }
 
-static int mca_reap(struct btree *b, struct closure *cl)
+static int mca_reap(struct btree *b, struct closure *cl, unsigned min_order)
 {
 	lockdep_assert_held(&b->c->bucket_lock);
 
 	if (!down_write_trylock(&b->lock))
-		return -1;
+		return -ENOMEM;
+
+	if (b->page_order < min_order) {
+		rw_unlock(true, b);
+		return -ENOMEM;
+	}
 
 	BUG_ON(btree_node_dirty(b) && !b->sets[0].data);
 
@@ -581,7 +592,7 @@ static int mca_reap(struct btree *b, struct closure *cl)
 			 atomic_read(&b->io.cl.remaining) == -1);
 
 	if (btree_node_dirty(b) ||
-	    atomic_read(&b->io.cl.remaining) != -1 ||
+	    !closure_is_unlocked(&b->io.cl) ||
 	    work_pending(&b->work.work)) {
 		rw_unlock(true, b);
 		return -EAGAIN;
@@ -635,7 +646,7 @@ static int bcache_shrink_buckets(struct shrinker *shrink,
 			break;
 
 		if (++i > 3 &&
-		    !mca_reap(b, NULL)) {
+		    !mca_reap(b, NULL, 0)) {
 			mca_data_free(b);
 			rw_unlock(true, b);
 			--nr;
@@ -649,7 +660,7 @@ static int bcache_shrink_buckets(struct shrinker *shrink,
 		list_rotate_left(&c->btree_cache);
 
 		if (!b->accessed &&
-		    !mca_reap(b, NULL)) {
+		    !mca_reap(b, NULL, 0)) {
 			mca_bucket_free(b);
 			mca_data_free(b);
 			rw_unlock(true, b);
@@ -760,7 +771,6 @@ static struct btree *alloc_bucket(struct cache_set *c, struct bkey *k,
 				  int level, struct closure *cl)
 {
 	struct btree *b, *i;
-	unsigned page_order = ilog2(KEY_SIZE(k) / PAGE_SECTORS ?: 1);
 
 	lockdep_assert_held(&c->bucket_lock);
 retry:
@@ -771,16 +781,14 @@ retry:
 	 * the list. Check if there's any freed nodes there:
 	 */
 	list_for_each_entry(b, &c->btree_cache_freeable, list)
-		if (page_order <= b->page_order &&
-		    !b->key.ptr[0] &&
-		    !mca_reap(b, NULL))
+		if (!mca_reap(b, NULL, btree_order(k)))
 			goto out;
 
 	/* We never free struct btree itself, just the memory that holds the on
 	 * disk node. Check the freed list before allocating a new one:
 	 */
 	list_for_each_entry(b, &c->btree_cache_freed, list)
-		if (!mca_reap(b, NULL)) {
+		if (!mca_reap(b, NULL, 0)) {
 			mca_data_alloc(b, k, __GFP_NOWARN|GFP_NOIO);
 			if (!b->sets[0].data) {
 				rw_unlock(true, b);
@@ -832,16 +840,15 @@ err:
 	c->try_harder_start = local_clock();
 	b = ERR_PTR(-ENOMEM);
 
-	list_for_each_entry_reverse(i, &c->btree_cache, list)
-		if (page_order <= i->page_order) {
-			int e = mca_reap(i, cl);
-			if (e == -EAGAIN)
-				b = ERR_PTR(-EAGAIN);
-			if (!e) {
-				b = i;
-				goto out;
-			}
+	list_for_each_entry_reverse(i, &c->btree_cache, list) {
+		int e = mca_reap(i, cl, btree_order(k));
+		if (e == -EAGAIN)
+			b = ERR_PTR(-EAGAIN);
+		if (!e) {
+			b = i;
+			goto out;
 		}
+	}
 
 	if (b == ERR_PTR(-EAGAIN) &&
 	    closure_blocking(cl)) {

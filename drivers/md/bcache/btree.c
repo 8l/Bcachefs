@@ -567,7 +567,7 @@ static struct btree *mca_bucket_alloc(struct cache_set *c,
 	closure_init_unlocked(&b->io);
 
 	mca_data_alloc(b, k, gfp);
-	return b->sets[0].data ? b : NULL;
+	return b;
 }
 
 static int mca_reap(struct btree *b, struct closure *cl, unsigned min_order)
@@ -790,10 +790,9 @@ retry:
 	list_for_each_entry(b, &c->btree_cache_freed, list)
 		if (!mca_reap(b, NULL, 0)) {
 			mca_data_alloc(b, k, __GFP_NOWARN|GFP_NOIO);
-			if (!b->sets[0].data) {
-				rw_unlock(true, b);
+			if (!b->sets[0].data)
 				goto err;
-			} else
+			else
 				goto out;
 		}
 
@@ -802,6 +801,8 @@ retry:
 		goto err;
 
 	BUG_ON(!down_write_trylock(&b->lock));
+	if (!b->sets->data)
+		goto err;
 out:
 	BUG_ON(!closure_is_unlocked(&b->io.cl));
 
@@ -817,6 +818,9 @@ out:
 
 	return b;
 err:
+	if (b)
+		rw_unlock(true, b);
+
 	/*
 	 * Trying to free up some memory - i.e. reuse some btree nodes - may
 	 * require initiating IO to flush the dirty part of the node. If we're

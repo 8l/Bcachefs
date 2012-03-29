@@ -460,6 +460,22 @@ void btree_write(struct btree *b, bool now, struct btree_op *op)
  * mca -> memory cache
  */
 
+static void mca_reinit(struct btree *b)
+{
+	b->flags	= 0;
+	b->written	= 0;
+	b->nsets	= 0;
+
+	for (int i = 0; i < MAX_BSETS; i++)
+		b->sets[i].size = 0;
+	/*
+	 * Second loop starts at 1 because b->sets[0]->data is the memory we
+	 * allocated
+	 */
+	for (int i = 1; i < MAX_BSETS; i++)
+		b->sets[i].data = NULL;
+}
+
 #define mca_reserve(c)	((c->root ? c->root->level : 1) * 8 + 16)
 #define mca_can_free(c)						\
 	max_t(int, 0, c->bucket_cache_used - mca_reserve(c))
@@ -785,20 +801,11 @@ out:
 	list_move(&b->list, &c->btree_cache);
 	hlist_del_init_rcu(&b->hash);
 	hlist_add_head_rcu(&b->hash, hash_bucket(c, k));
-	lock_set_subclass(&b->lock.dep_map, level + 1, _THIS_IP_);
 
-	b->flags	= 0;
+	lock_set_subclass(&b->lock.dep_map, level + 1, _THIS_IP_);
 	b->level	= level;
-	b->written	= 0;
-	b->nsets	= 0;
-	for (int i = 0; i < MAX_BSETS; i++)
-		b->sets[i].size = 0;
-	/*
-	 * Second loop starts at 1 because b->sets[0]->data is the memory we
-	 * allocated
-	 */
-	for (int i = 1; i < MAX_BSETS; i++)
-		b->sets[i].data = NULL;
+
+	mca_reinit(b);
 
 	return b;
 err:

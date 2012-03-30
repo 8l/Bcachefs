@@ -328,27 +328,10 @@ static void btree_flush_write(struct cache_set *c)
 	 * Try to find the btree node with that references the oldest journal
 	 * entry, best is our current candidate and is locked if non NULL:
 	 */
-	struct btree *b, *best;
+	struct btree *b, *best = NULL;
+	struct hlist_node *cursor;
 
-	/*
-	 * The root of the btree isn't on the lru list. Normally this is fine
-	 * because only leaf nodes can have references to journal entries -
-	 * unless the root _is_ a leaf node. So we have to special case that:
-	 */
-
-	while (!c->root->level) {
-		best = c->root;
-		rw_lock(true, best, 0);
-
-		if (best == c->root && !best->level)
-			goto found;
-		rw_unlock(true, best);
-	}
-
-	mutex_lock(&c->bucket_lock);
-
-	best = NULL;
-	list_for_each_entry(b, &c->btree_cache, list) {
+	for_each_cached_btree(b, cursor, c) {
 		if (!down_write_trylock(&b->lock))
 			continue;
 
@@ -376,14 +359,11 @@ static void btree_flush_write(struct cache_set *c)
 	list_for_each_entry(b, &c->btree_cache, list)
 		if (!b->level && btree_node_dirty(b)) {
 			best = b;
-			mutex_unlock(&c->bucket_lock);
 			rw_lock(true, best, best->level);
 			goto found;
 		}
 
 out:
-	mutex_unlock(&c->bucket_lock);
-
 	if (!best)
 		return;
 found:

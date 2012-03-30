@@ -115,6 +115,13 @@ static inline void set_gc_sectors(struct cache_set *c)
 
 /* Looping macros */
 
+#define for_each_cached_btree(b, cursor, c)				\
+	for (unsigned _i = 0;						\
+	     _i < ARRAY_SIZE((c)->bucket_hash);				\
+	     _i++)							\
+		hlist_for_each_entry_rcu((b), cursor,			\
+					 (c)->bucket_hash + _i, hash)
+
 #define for_each_sorted_set_start(b, i, start)				\
 	for (int _i = start; i = (b)->sets[_i].data, _i <= (b)->nsets; _i++)
 

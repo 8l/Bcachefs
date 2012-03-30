@@ -756,6 +756,7 @@ static void request_read_done(struct closure *cl)
 		void *dst_ptr;
 
 		bio_reset(s->cache_bio);
+		atomic_set(&s->cache_bio->bi_cnt, 1);
 		s->cache_bio->bi_sector	= s->cache_miss->bi_sector;
 		s->cache_bio->bi_bdev	= s->cache_miss->bi_bdev;
 		s->cache_bio->bi_size	= s->cache_bio_sectors << 9;

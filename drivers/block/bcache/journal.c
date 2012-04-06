@@ -491,10 +491,7 @@ static void journal_write_done(struct closure *cl)
 
 	__closure_wake_up(&w->wait);
 
-	if (j->cur->need_write)
-		continue_at(cl, journal_write, system_wq);
-	else
-		closure_return(cl);
+	continue_at(cl, journal_write, system_wq);
 }
 
 static void journal_write_unlocked(struct closure *cl)
@@ -510,8 +507,15 @@ static void journal_write_unlocked(struct closure *cl)
 	bio_list_init(&list);
 
 	if (!w->need_write) {
+		/*
+		 * XXX: have to unlock closure before we unlock journal lock,
+		 * else we race with bcache_journal(). But this way we race
+		 * against cache set unregister. Doh.
+		 */
+		set_closure_fn(cl, NULL, NULL);
+		closure_sub(cl, CLOSURE_RUNNING + 1);
 		spin_unlock(&c->journal.lock);
-		closure_return(cl);
+		return;
 	} else if (journal_full(&c->journal)) {
 		journal_reclaim(c);
 		spin_unlock(&c->journal.lock);

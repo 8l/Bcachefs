@@ -1522,10 +1522,14 @@ static int btree_check_recurse(struct btree *b, struct btree_op *op,
 {
 	int ret;
 	struct bkey *k;
+	struct bucket *g;
 
 	for_each_key_filter(b, k, ptr_invalid) {
 		for (unsigned i = 0; i < KEY_PTRS(k); i++) {
-			struct bucket *g = PTR_BUCKET(b->c, k, i);
+			if (!ptr_available(b->c, k, i))
+				continue;
+
+			g = PTR_BUCKET(b->c, k, i);
 
 			if (!__test_and_set_bit(PTR_BUCKET_NR(b->c, k, i),
 						seen[PTR_DEV(k, i)]) ||

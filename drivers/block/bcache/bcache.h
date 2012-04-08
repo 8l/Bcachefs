@@ -562,6 +562,7 @@ struct cache_set {
 	atomic_long_t		writeback_keys_failed;
 	unsigned		error_limit;
 	unsigned		error_decay;
+	unsigned short		journal_delay_ms;
 	unsigned		verify:1;
 	unsigned		key_merging_disabled:1;
 	unsigned		gc_always_rewrite:1;

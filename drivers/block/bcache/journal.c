@@ -477,26 +477,31 @@ static void journal_write_endio(struct bio *bio, int error)
 	cache_set_err_on(error, w->c, "journal io error");
 
 	bio_put(bio);
-	closure_put(&w->c->journal.io);
+	closure_put(&w->c->journal.io.cl);
 }
 
 static void journal_write(struct closure *);
 
 static void journal_write_done(struct closure *cl)
 {
-	struct journal *j = container_of(cl, struct journal, io);
+	struct journal *j = container_of(cl, struct journal, io.cl);
+	struct cache_set *c = container_of(j, struct cache_set, journal);
+
 	struct journal_write *w = (j->cur == j->w)
 		? &j->w[1]
 		: &j->w[0];
 
 	__closure_wake_up(&w->wait);
 
+	if (c->journal_delay_ms)
+		closure_sleep(&j->io, msecs_to_jiffies(c->journal_delay_ms));
+
 	continue_at(cl, journal_write, system_wq);
 }
 
 static void journal_write_unlocked(struct closure *cl)
 {
-	struct cache_set *c = container_of(cl, struct cache_set, journal.io);
+	struct cache_set *c = container_of(cl, struct cache_set, journal.io.cl);
 	struct cache *ca;
 	struct journal_write *w = c->journal.cur;
 	struct bkey *k = &c->journal.key;
@@ -577,7 +582,7 @@ static void journal_write_unlocked(struct closure *cl)
 
 static void journal_write(struct closure *cl)
 {
-	struct cache_set *c = container_of(cl, struct cache_set, journal.io);
+	struct cache_set *c = container_of(cl, struct cache_set, journal.io.cl);
 
 	spin_lock(&c->journal.lock);
 	journal_write_unlocked(cl);
@@ -585,7 +590,7 @@ static void journal_write(struct closure *cl)
 
 static void __journal_try_write(struct cache_set *c, bool noflush)
 {
-	struct closure *cl = &c->journal.io;
+	struct closure *cl = &c->journal.io.cl;
 
 	if (!closure_trylock(cl, &c->cl))
 		spin_unlock(&c->journal.lock);
@@ -667,6 +672,8 @@ void bcache_journal(struct closure *cl)
 		/* XXX: tracepoint */
 		BUG_ON(!closure_wait(&w->wait, cl));
 
+		closure_flush(&c->journal.io);
+
 		journal_try_write(c);
 		continue_at(cl, bcache_journal, bcache_wq);
 	}
@@ -677,8 +684,10 @@ void bcache_journal(struct closure *cl)
 	op->journal = &fifo_back(&c->journal.pin);
 	atomic_inc(op->journal);
 
-	if (op->flush_journal)
+	if (op->flush_journal) {
+		closure_flush(&c->journal.io);
 		closure_wait(&w->wait, cl->parent);
+	}
 
 	journal_try_write(c);
 out:
@@ -698,6 +707,8 @@ int bcache_journal_alloc(struct cache_set *c)
 
 	closure_init_unlocked(&j->io);
 	spin_lock_init(&j->lock);
+
+	c->journal_delay_ms = 100;
 
 	j->w[0].c = c;
 	j->w[1].c = c;

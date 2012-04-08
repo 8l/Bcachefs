@@ -65,7 +65,7 @@ struct journal {
 	spinlock_t		lock;
 	/* used when waiting because the journal was full */
 	closure_list_t		wait;
-	struct closure		io;
+	struct closure_with_timer io;
 
 	unsigned		blocks_free;
 	uint64_t		seq;

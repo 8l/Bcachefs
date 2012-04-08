@@ -59,6 +59,7 @@ rw_attribute(writeback_rate_d_smooth);
 read_attribute(writeback_rate_debug);
 
 rw_attribute(synchronous);
+rw_attribute(journal_delay_ms);
 rw_attribute(discard);
 rw_attribute(running);
 rw_attribute(label);
@@ -418,6 +419,7 @@ lock_root:
 	struct cache_set *c = container_of(kobj, struct cache_set, kobj);
 
 	sysfs_print(synchronous,		CACHE_SYNC(&c->sb));
+	sysfs_print(journal_delay_ms,		c->journal_delay_ms);
 	sysfs_hprint(bucket_size,		bucket_bytes(c));
 	sysfs_hprint(block_size,		block_bytes(c));
 	sysfs_print(tree_depth,			c->root->level);
@@ -527,6 +529,7 @@ STORE(__cache_set)
 	if (attr == &sysfs_io_error_halflife)
 		c->error_decay = strtoul_or_return(buf) / 88;
 
+	sysfs_strtoul(journal_delay_ms,		c->journal_delay_ms);
 	sysfs_strtoul(verify,			c->verify);
 	sysfs_strtoul(key_merging_disabled,	c->key_merging_disabled);
 	sysfs_strtoul(gc_always_rewrite,	c->gc_always_rewrite);
@@ -554,6 +557,7 @@ static void cache_set_kobject_init(struct cache_set *c)
 		&sysfs_unregister,
 		&sysfs_stop,
 		&sysfs_synchronous,
+		&sysfs_journal_delay_ms,
 		&sysfs_flash_vol_create,
 
 		&sysfs_bucket_size,

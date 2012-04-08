@@ -160,6 +160,7 @@ struct btree_op {
 
 	unsigned		lookup_done:1;
 	unsigned		insert_collision:1;
+	unsigned		flush_journal:1;
 
 	/* Anything after this point won't get zeroed in do_bio_hook() */
 

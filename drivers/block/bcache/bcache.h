@@ -93,7 +93,6 @@ BITMASK(CACHE_REPLACEMENT,	struct cache_sb, flags, 2, 3);
 #define CACHE_REPLACEMENT_LRU	0U
 #define CACHE_REPLACEMENT_FIFO	1U
 #define CACHE_REPLACEMENT_RANDOM 2U
-BITMASK(CACHE_ASYNC_JOURNAL,	struct cache_sb, flags, 5, 1);
 
 BITMASK(BDEV_CACHE_MODE,	struct cache_sb, flags, 0, 4);
 #define CACHE_MODE_WRITETHROUGH	0U

@@ -59,7 +59,6 @@ rw_attribute(writeback_rate_d_smooth);
 read_attribute(writeback_rate_debug);
 
 rw_attribute(synchronous);
-rw_attribute(async_journal);
 rw_attribute(discard);
 rw_attribute(running);
 rw_attribute(label);
@@ -419,7 +418,6 @@ lock_root:
 	struct cache_set *c = container_of(kobj, struct cache_set, kobj);
 
 	sysfs_print(synchronous,		CACHE_SYNC(&c->sb));
-	sysfs_print(async_journal,		CACHE_ASYNC_JOURNAL(&c->sb));
 	sysfs_hprint(bucket_size,		bucket_bytes(c));
 	sysfs_hprint(block_size,		block_bytes(c));
 	sysfs_print(tree_depth,			c->root->level);
@@ -491,15 +489,6 @@ STORE(__cache_set)
 		}
 	}
 
-	if (attr == &sysfs_async_journal) {
-		bool sync = strtoul_or_return(buf);
-
-		if (sync != CACHE_ASYNC_JOURNAL(&c->sb)) {
-			SET_CACHE_ASYNC_JOURNAL(&c->sb, sync);
-			bcache_write_super(c);
-		}
-	}
-
 	if (attr == &sysfs_flash_vol_create) {
 		int r;
 		uint64_t v;
@@ -565,7 +554,6 @@ static void cache_set_kobject_init(struct cache_set *c)
 		&sysfs_unregister,
 		&sysfs_stop,
 		&sysfs_synchronous,
-		&sysfs_async_journal,
 		&sysfs_flash_vol_create,
 
 		&sysfs_bucket_size,

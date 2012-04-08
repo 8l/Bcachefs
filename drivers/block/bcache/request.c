@@ -28,6 +28,8 @@ struct bio_passthrough {
 struct kmem_cache *passthrough_cache;
 struct kmem_cache *search_cache;
 
+static void check_should_skip(struct cached_dev *, struct search *);
+
 static const char *search_type(struct search *s)
 {
 	return s->writeback ? "writeback"
@@ -635,6 +637,7 @@ static struct search *do_bio_hook(struct bio *bio, struct bcache_device *d)
 	s->task			= get_current();
 	s->orig_bio		= bio;
 	s->write		= bio->bi_rw & REQ_WRITE;
+	s->op.flush_journal	= bio->bi_rw & REQ_FLUSH;
 	s->recoverable		= 1;
 	__do_bio_hook(s);
 
@@ -664,8 +667,9 @@ static void btree_read_async(struct closure *cl)
 
 /* Cached devices */
 
-static void cached_dev_bio_complete(struct search *s)
+static void cached_dev_bio_complete(struct closure *cl)
 {
+	struct search *s = container_of(cl, struct search, cl);
 	struct cached_dev *dc = container_of(s->op.d, struct cached_dev, disk);
 
 	if (s->cache_bio)
@@ -698,7 +702,7 @@ static void cached_dev_read_complete(struct closure *cl)
 			__free_page(bv->bv_page);
 	}
 
-	cached_dev_bio_complete(s);
+	cached_dev_bio_complete(cl);
 }
 
 static void request_read_error(struct closure *cl)
@@ -900,6 +904,8 @@ out_submit:
 
 static void request_read(struct cached_dev *d, struct search *s)
 {
+	check_should_skip(d, s);
+
 	set_closure_fn(&s->cl, request_read_done_bh, NULL);
 	closure_set_stopped(&s->cl);
 
@@ -914,7 +920,7 @@ static void cached_dev_write_complete(struct closure *cl)
 	struct cached_dev *dc = container_of(s->op.d, struct cached_dev, disk);
 
 	up_read_non_owner(&dc->writeback_lock);
-	cached_dev_bio_complete(s);
+	cached_dev_bio_complete(cl);
 }
 
 static bool should_writeback(struct cached_dev *d, struct bio *bio)
@@ -943,6 +949,7 @@ static void request_write(struct cached_dev *d, struct search *s)
 	struct closure *cl = &s->cl;
 	struct bio *bio = &s->bio.bio;
 
+	check_should_skip(d, s);
 	down_read_non_owner(&d->writeback_lock);
 
 	if (bcache_in_writeback(d, bio->bi_sector, bio_sectors(bio))) {
@@ -993,6 +1000,28 @@ submit:
 out:
 	bio_insert(&s->op.cl);
 	continue_at(cl, cached_dev_write_complete, NULL);
+}
+
+static void request_nodata(struct cached_dev *d, struct search *s)
+{
+	struct closure *cl = &s->cl;
+	struct bio *bio = &s->bio.bio;
+
+	if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
+		request_write(d, s);
+		return;
+	}
+
+	if (s->op.flush_journal)
+		bcache_journal_meta(s->op.d->c, cl);
+
+	closure_get(cl);
+	generic_make_request(bio);
+
+	closure_set_stopped(&s->op.cl);
+	closure_put(&s->op.cl);
+
+	continue_at(cl, cached_dev_bio_complete, NULL);
 }
 
 /* Split bios in passthrough mode */
@@ -1057,7 +1086,8 @@ static void bio_passthrough(struct cached_dev *d, struct bio *bio)
 		return;
 	}
 
-	if (bio_max_sectors(bio) << 9 >= bio->bi_size) {
+	if (!bio_has_data(bio) ||
+	    bio->bi_size <= bio_max_sectors(bio) << 9) {
 		generic_make_request(bio);
 		return;
 	}
@@ -1204,17 +1234,16 @@ static int cached_dev_make_request(struct request_queue *q, struct bio *bio)
 	bio->bi_bdev = dc->bdev;
 	bio->bi_sector += 16;
 
-	if (!bio_has_data(bio))
-		generic_make_request(bio);
-	else if (!cached_dev_get(dc))
-		bio_passthrough(dc, bio);
-	else {
+	if (cached_dev_get(dc)) {
 		s = do_bio_hook(bio, d);
 		trace_bcache_request_start(&s->op, bio);
-		check_should_skip(dc, s);
 
-		(bio->bi_rw & REQ_WRITE ? request_write : request_read)(dc, s);
-	}
+		(!bio_has_data(bio)	? request_nodata :
+		 bio->bi_rw & REQ_WRITE ? request_write :
+					  request_read)(dc, s);
+	} else
+		bio_passthrough(dc, bio);
+
 	return 0;
 }
 
@@ -1361,21 +1390,39 @@ static void flash_dev_write(struct search *s)
 	continue_at(&s->cl, flash_dev_bio_complete, NULL);
 }
 
+static void flash_dev_req_nodata(struct search *s)
+{
+	struct closure *cl = &s->cl;
+	struct bio *bio = &s->bio.bio;
+
+	if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
+		flash_dev_write(s);
+		return;
+	}
+
+	if (s->op.flush_journal)
+		bcache_journal_meta(s->op.d->c, cl);
+
+	closure_get(cl);
+	generic_make_request(bio);
+
+	closure_set_stopped(&s->op.cl);
+	closure_put(&s->op.cl);
+
+	continue_at(&s->cl, flash_dev_bio_complete, NULL);
+}
+
 static int flash_dev_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct search *s;
 	struct bcache_device *d = bio->bi_bdev->bd_disk->private_data;
 
-	if (!bio_has_data(bio)) {
-		/* XXX */
-		bio_endio(bio, 0);
-		return 0;
-	}
-
 	s = do_bio_hook(bio, d);
 	trace_bcache_request_start(&s->op, bio);
 
-	(bio->bi_rw & REQ_WRITE ? flash_dev_write : flash_dev_read)(s);
+	(!bio_has_data(bio)	? flash_dev_req_nodata :
+	 bio->bi_rw & REQ_WRITE ? flash_dev_write :
+				  flash_dev_read)(s);
 
 	return 0;
 }
@@ -1393,7 +1440,6 @@ static void flash_dev_unplug(struct request_queue *q)
 
 	for_each_cache(ca, d->c)
 		blk_unplug(bdev_get_queue(ca->bdev));
-
 }
 
 static int flash_dev_congested(void *data, int bits)

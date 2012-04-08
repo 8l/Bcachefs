@@ -677,7 +677,7 @@ void bcache_journal(struct closure *cl)
 	op->journal = &fifo_back(&c->journal.pin);
 	atomic_inc(op->journal);
 
-	if (!CACHE_ASYNC_JOURNAL(&c->sb))
+	if (op->flush_journal)
 		closure_wait(&w->wait, cl->parent);
 
 	journal_try_write(c);

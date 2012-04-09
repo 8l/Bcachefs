@@ -612,7 +612,7 @@ static void bio_complete(struct closure *cl)
 
 	__bio_complete(s);
 
-	closure_del(&s->cl);
+	closure_debug_destroy(&s->cl);
 	mempool_free(s, d->c->search);
 	cached_dev_put(d);
 }
@@ -1201,7 +1201,7 @@ static void bio_passthrough_done(struct closure *cl)
 	s->bio->bi_private	= s->bi_private;
 	bio_endio(s->bio, 0);
 
-	closure_del(&s->cl);
+	closure_debug_destroy(&s->cl);
 	mempool_free(s, s->d->bio_passthrough);
 }
 

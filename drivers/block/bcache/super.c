@@ -2513,7 +2513,6 @@ err:
 static void bcache_exit(void)
 {
 	bcache_debug_exit();
-	bcache_util_exit();
 	bcache_writeback_exit();
 	bcache_request_exit();
 	bcache_btree_exit();
@@ -2544,7 +2543,6 @@ static int __init bcache_init(void)
 	    bcache_btree_init() ||
 	    bcache_request_init() ||
 	    bcache_writeback_init() ||
-	    bcache_util_init() ||
 	    bcache_debug_init(bcache_kobj))
 		goto err;
 

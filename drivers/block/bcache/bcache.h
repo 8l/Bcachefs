@@ -3,6 +3,7 @@
 
 #include <linux/bio.h>
 #include <linux/blktrace_api.h>
+#include <linux/closure.h>
 #include <linux/kobject.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -930,5 +931,3 @@ void bcache_request_exit(void);
 int bcache_request_init(void);
 void bcache_btree_exit(void);
 int bcache_btree_init(void);
-void bcache_util_exit(void);
-int bcache_util_init(void);

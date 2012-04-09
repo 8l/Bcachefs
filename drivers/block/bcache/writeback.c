@@ -227,7 +227,7 @@ static void write_dirty_finish(struct closure *cl)
 	while (bv-- != w->io->bio.bi_io_vec)
 		__free_page(bv->bv_page);
 
-	closure_del(cl);
+	closure_debug_destroy(cl);
 	kfree(io);
 
 	if (!KEY_DIRTY(&w->key)) {

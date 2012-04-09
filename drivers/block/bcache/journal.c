@@ -630,7 +630,7 @@ void bcache_journal(struct closure *cl)
 		spin_unlock(&c->journal.lock);
 
 		btree_flush_write(c);
-		return_f(cl, bcache_journal, bcache_wq);
+		continue_at(cl, bcache_journal, bcache_wq);
 	}
 
 	w = c->journal.cur;
@@ -649,7 +649,7 @@ void bcache_journal(struct closure *cl)
 		BUG_ON(!closure_wait(&w->wait, cl));
 
 		journal_try_write(c);
-		return_f(cl, bcache_journal, bcache_wq);
+		continue_at(cl, bcache_journal, bcache_wq);
 	}
 
 	memcpy(end(w->data), op->keys.list, n * sizeof(uint64_t));

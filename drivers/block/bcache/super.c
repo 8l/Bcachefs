@@ -408,7 +408,7 @@ void write_bdev_super(struct cached_dev *d, struct closure *parent)
 	closure_get(cl);
 	__write_super(&d->sb, bio);
 
-	return_f(cl, NULL, NULL);
+	closure_return(cl);
 }
 
 static void write_super_endio(struct bio *bio, int error)
@@ -446,7 +446,7 @@ void bcache_write_super(struct cache_set *c, struct closure *parent)
 		__write_super(&ca->sb, bio);
 	}
 
-	return_f(cl, NULL, NULL);
+	closure_return(cl);
 }
 
 /* UUID io */
@@ -493,7 +493,7 @@ static void uuid_io(struct cache_set *c, unsigned long rw,
 			pr_debug("Slot %zi: %pU: %s: 1st: %u last: %u inv: %u",
 				 u - c->uuids, u->uuid, u->label,
 				 u->first_reg, u->last_reg, u->invalidated);
-	return_f(cl, NULL, NULL);
+	closure_return(cl);
 }
 
 static char *uuid_read(struct cache_set *c, struct jset *j, struct closure *cl)
@@ -686,7 +686,7 @@ static void prio_write_journal(struct closure *cl)
 
 	mutex_unlock(&c->set->bucket_lock);
 
-	return_f(cl, prio_write_done, system_wq);
+	continue_at(cl, prio_write_done, system_wq);
 }
 
 static void prio_write_bucket(struct closure *cl)
@@ -762,7 +762,7 @@ static int prio_read(struct cache *c, uint64_t bucket)
 
 			/* XXX: doesn't get error handling right with splits */
 			if (!test_bit(BIO_UPTODATE, &c->prio_bio->bi_flags))
-				return_f(&c->prio, NULL, NULL, -1);
+				continue_at(&c->prio, NULL, NULL, -1);
 
 			if (p->csum != crc64(&p->magic, bucket_bytes(c) - 8))
 				printk(KERN_WARNING "bcache: "
@@ -780,7 +780,7 @@ static int prio_read(struct cache *c, uint64_t bucket)
 		b->gen = b->disk_gen = b->last_gc = b->gc_gen = d->gen;
 	}
 
-	return_f(&c->prio, NULL, NULL, 0);
+	continue_at(&c->prio, NULL, NULL, 0);
 }
 
 /* Cached device - sysfs */

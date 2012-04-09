@@ -472,7 +472,7 @@ static void bio_insert(struct closure *cl)
 		if (keylist_realloc(&op->keys,
 				    1 + (op->d->data_csum ? 1 : 0),
 				    op->d->c))
-			return_f(cl, bcache_journal, bcache_wq);
+			continue_at(cl, bcache_journal, bcache_wq);
 
 		k = op->keys.top;
 
@@ -485,7 +485,7 @@ static void bio_insert(struct closure *cl)
 		n = bio_split_get(bio, KEY_SIZE(k), op->d);
 		if (!n) {
 			__bkey_put(op->d->c, k);
-			return_f(cl, bio_insert, bcache_wq);
+			continue_at(cl, bio_insert, bcache_wq);
 		}
 
 		if (op->insert_type == INSERT_WRITEBACK)
@@ -560,7 +560,7 @@ again:
 		goto again;
 	}
 
-	return_f(cl, !s->bio_insert_done
+	continue_at(cl, !s->bio_insert_done
 		 ? bio_insert : NULL, bcache_wq);
 }
 
@@ -666,7 +666,7 @@ static void request_resubmit(struct closure *cl)
 	struct bio *bio = s->cache_bio ?: s->cache_miss;
 
 	closure_bio_submit(bio, &s->cl, op->d->c->bio_split);
-	return_f(cl, NULL, NULL);
+	closure_return(cl);
 }
 
 /* Cached devices */
@@ -739,7 +739,7 @@ static void request_read_error(struct closure *cl)
 		closure_bio_submit(&s->bio.bio, &s->cl, s->op.d->c->bio_split);
 	}
 
-	return_f(cl, cached_dev_bio_complete, NULL);
+	continue_at(cl, cached_dev_bio_complete, NULL);
 }
 
 static void do_verify(struct search *s)
@@ -867,7 +867,7 @@ static void request_read_done(struct closure *cl)
 		bio_insert(&s->op.cl);
 	}
 
-	return_f(cl, cached_dev_bio_complete, NULL);
+	continue_at(cl, cached_dev_bio_complete, NULL);
 }
 
 static void request_read_done_bh(struct closure *cl)
@@ -877,7 +877,7 @@ static void request_read_done_bh(struct closure *cl)
 
 	if (!s->lookup_done) {
 		closure_init(&s->op.cl, &s->cl);
-		return_f(&s->op.cl, __request_read, bcache_wq);
+		continue_at(&s->op.cl, __request_read, bcache_wq);
 	}
 
 	if (s->error)
@@ -956,11 +956,11 @@ static void __request_read(struct closure *cl)
 
 	if (ret == -ENOMEM) {
 		closure_put(&s->cl);
-		return_f(cl, NULL, NULL);
+		closure_return(cl);
 	}
 
 	if (ret == -EAGAIN)
-		return_f(cl, __request_read, bcache_wq);
+		continue_at(cl, __request_read, bcache_wq);
 
 	s->lookup_done = true;
 
@@ -985,10 +985,10 @@ static void __request_read(struct closure *cl)
 
 		bio = s->cache_bio ?: s->cache_miss;
 		if (closure_bio_submit(bio, &s->cl, op->d->c->bio_split))
-			return_f(cl, request_resubmit, bcache_wq);
+			continue_at(cl, request_resubmit, bcache_wq);
 	}
 
-	return_f(cl, NULL, NULL);
+	closure_return(cl);
 }
 
 static void request_read(struct cached_dev *d, struct search *s)
@@ -1017,7 +1017,7 @@ static void request_invalidate_resubmit(struct closure *cl)
 	struct bio *bio = &s->bio.bio;
 
 	closure_bio_submit(bio, &s->cl, op->d->c->bio_split);
-	return_f(cl, bcache_journal, bcache_wq);
+	continue_at(cl, bcache_journal, bcache_wq);
 }
 
 static void request_write_resubmit(struct closure *cl)
@@ -1058,9 +1058,9 @@ skip:		s->cache_bio = s->orig_bio;
 				bio_endio(bio, 0);
 		} else if (closure_bio_submit(bio, &s->cl,
 					      s->op.d->c->bio_split))
-			return_f(&s->op.cl,
-				 request_invalidate_resubmit,
-				 bcache_wq);
+			continue_at(&s->op.cl,
+				    request_invalidate_resubmit,
+				    bcache_wq);
 
 		closure_put(&s->op.cl);
 		return;
@@ -1079,7 +1079,9 @@ skip:		s->cache_bio = s->orig_bio;
 		__bio_clone(s->cache_bio, bio);
 		trace_bcache_writethrough(s->orig_bio);
 		if (closure_bio_submit(bio, &s->cl, s->op.d->c->bio_split))
-			return_f(&s->op.cl, request_write_resubmit, bcache_wq);
+			continue_at(&s->op.cl,
+				    request_write_resubmit,
+				    bcache_wq);
 	} else {
 		bcache_writeback_add(d, bio_sectors(bio));
 		trace_bcache_writeback(s->orig_bio);
@@ -1130,7 +1132,7 @@ static void bio_passthrough_submit(struct closure *cl)
 	do {
 		n = bio_split_get(bio, bio_max_sectors(bio), &s->d->disk);
 		if (!n)
-			return_f(&s->cl, bio_passthrough_submit, bcache_wq);
+			continue_at(&s->cl, bio_passthrough_submit, bcache_wq);
 
 		trace_bcache_passthrough(n);
 		generic_make_request(n);
@@ -1436,18 +1438,18 @@ static void __flash_dev_read(struct closure *cl)
 
 	if (ret == -ENOMEM) {
 		closure_put(&s->cl);
-		return_f(cl, NULL, NULL);
+		closure_return(cl);
 	}
 
 	if (ret == -EAGAIN)
-		return_f(cl, __flash_dev_read, bcache_wq);
+		continue_at(cl, __flash_dev_read, bcache_wq);
 
 	s->lookup_done = true;
 
 	if (!s->cache_hit_done)
 		flash_dev_cache_miss(s, bio, bio_sectors(bio));
 
-	return_f(cl, NULL, NULL);
+	closure_return(cl);
 }
 
 static void flash_dev_read(struct search *s)

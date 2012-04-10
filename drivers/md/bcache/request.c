@@ -656,7 +656,7 @@ void cache_read_endio(struct bio *bio, int error)
 	bcache_endio(s->op.d->c, bio, error, "reading from cache");
 }
 
-static void __do_bio_hook(struct search *s)
+static void do_bio_hook(struct search *s)
 {
 	struct bio *bio = &s->bio.bio;
 	memcpy(bio, s->orig_bio, sizeof(struct bio));
@@ -667,7 +667,7 @@ static void __do_bio_hook(struct search *s)
 	atomic_set(&bio->bi_cnt, 3);
 }
 
-static struct search *do_bio_hook(struct bio *bio, struct bcache_device *d)
+static struct search *search_alloc(struct bio *bio, struct bcache_device *d)
 {
 	struct bio_vec *bv;
 	struct search *s = mempool_alloc(d->c->search, GFP_NOIO);
@@ -683,7 +683,7 @@ static struct search *do_bio_hook(struct bio *bio, struct bcache_device *d)
 	s->write		= bio->bi_rw & REQ_WRITE;
 	s->op.flush_journal	= bio->bi_rw & REQ_FLUSH;
 	s->recoverable		= 1;
-	__do_bio_hook(s);
+	do_bio_hook(s);
 
 	if (bio->bi_size != bio_segments(bio) * PAGE_SIZE) {
 		bv = mempool_alloc(d->unaligned_bvec, GFP_NOIO);
@@ -764,7 +764,7 @@ static void request_read_error(struct closure *cl)
 
 		s->error = 0;
 		bv = s->bio.bio.bi_io_vec;
-		__do_bio_hook(s);
+		do_bio_hook(s);
 		s->bio.bio.bi_io_vec = bv;
 
 		if (!s->unaligned_bvec)
@@ -1286,7 +1286,7 @@ static void cached_dev_make_request(struct request_queue *q, struct bio *bio)
 	bio->bi_sector += BDEV_DATA_START;
 
 	if (cached_dev_get(dc)) {
-		s = do_bio_hook(bio, d);
+		s = search_alloc(bio, d);
 		trace_bcache_request_start(&s->op, bio);
 
 		if (!bio_has_data(bio))
@@ -1454,7 +1454,7 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 	struct search *s;
 	struct bcache_device *d = bio->bi_bdev->bd_disk->private_data;
 
-	s = do_bio_hook(bio, d);
+	s = search_alloc(bio, d);
 	trace_bcache_request_start(&s->op, bio);
 
 	(!bio_has_data(bio)	? flash_dev_req_nodata :

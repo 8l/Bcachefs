@@ -853,6 +853,9 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	if (!n)
 		return -EAGAIN;
 
+	if (n == bio)
+		s->op.lookup_done = true;
+
 	if (s->cache_miss || s->skip)
 		goto out_submit;
 
@@ -1337,7 +1340,10 @@ static int flash_dev_cache_miss(struct btree *b, struct search *s,
 		sectors		-= j;
 	}
 
-	bio_endio(bio, 0);
+	if (sectors >= bio_sectors(bio)) {
+		s->op.lookup_done = true;
+		bio_endio(bio, 0);
+	}
 	return 0;
 }
 

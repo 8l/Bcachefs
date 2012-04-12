@@ -2151,9 +2151,6 @@ static int submit_partial_cache_miss(struct btree *b, struct btree_op *op,
 					KEY_START(k) - bio->bi_sector);
 		}
 
-		if (sectors >= bio_sectors(bio))
-			op->lookup_done = true;
-
 		ret = s->op.d->cache_miss(b, s, bio, sectors);
 	}
 

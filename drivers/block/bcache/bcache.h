@@ -171,7 +171,7 @@ struct bcache_device {
 	atomic_long_t		sectors_dirty;
 	unsigned long		sectors_dirty_gc;
 	unsigned long		sectors_dirty_last;
-	int64_t			sectors_dirty_derivative;
+	long			sectors_dirty_derivative;
 
 	mempool_t		*unaligned_bvec;
 	struct bio_set		*bio_split;

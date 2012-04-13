@@ -429,28 +429,30 @@ struct time_stats {
 
 void time_stats_update(struct time_stats *stats, uint64_t time);
 
-static const uint64_t __time_ns		= 1;
-static const uint64_t __time_us		= NSEC_PER_USEC;
-static const uint64_t __time_ms		= NSEC_PER_MSEC;
-static const uint64_t __time_sec	= NSEC_PER_SEC;
+#define NSEC_PER_ns			1L
+#define NSEC_PER_us			NSEC_PER_USEC
+#define NSEC_PER_ms			NSEC_PER_MSEC
+#define NSEC_PER_sec			NSEC_PER_SEC
+
+#define __print_time_stat(stats, name, stat, units)			\
+	sysfs_print(name ## _ ## stat ## _ ## units,			\
+		    div_u64((stats)->stat >> 8, NSEC_PER_ ## units))
 
 #define sysfs_print_time_stats(stats, name,				\
 			       frequency_units,				\
 			       duration_units)				\
 do {									\
-	sysfs_print(name ## _average_frequency_ ## frequency_units,	\
-		    ((stats)->average_frequency >> 8) /			\
-		     __time_ ## frequency_units);			\
-	sysfs_print(name ## _average_duration_ ## duration_units,	\
-		    ((stats)->average_duration >> 8) /			\
-		    __time_ ## duration_units);				\
-	sysfs_print(name ## _max_duration_ ## duration_units,		\
-		    ((stats)->max_duration) /				\
-		    __time_ ## duration_units);				\
-	sysfs_print(name ## _last_ ## frequency_units,			\
-		    !(stats)->last ? -1LL				\
-		    : (int64_t) ((local_clock() - (stats)->last) /	\
-				 __time_ ## frequency_units));		\
+	__print_time_stat(stats, name,					\
+			  average_frequency,	frequency_units);	\
+	__print_time_stat(stats, name,					\
+			  average_duration,	duration_units);	\
+	__print_time_stat(stats, name,					\
+			  max_duration,		duration_units);	\
+									\
+	sysfs_print(name ## _last_ ## frequency_units, (stats)->last	\
+		    ? div_s64(local_clock() - (stats)->last,		\
+			      NSEC_PER_ ## frequency_units)		\
+		    : -1LL);						\
 } while (0)
 
 #define sysfs_time_stats_attribute(name,				\

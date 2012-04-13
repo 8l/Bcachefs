@@ -227,10 +227,10 @@ static void __update_writeback_rate(struct cached_dev *dc)
 	struct cache_set *c = dc->disk.c;
 	uint64_t cache_sectors = c->nbuckets * c->sb.bucket_size;
 	uint64_t cache_dirty_target =
-		(cache_sectors * dc->writeback_percent) / 100;
+		div_u64(cache_sectors * dc->writeback_percent, 100);
 
-	int64_t target = (cache_dirty_target * bdev_sectors(dc->bdev)) /
-		c->cached_dev_sectors;
+	int64_t target = div64_u64(cache_dirty_target * bdev_sectors(dc->bdev),
+				   c->cached_dev_sectors);
 
 	/* PD controller */
 
@@ -251,10 +251,10 @@ static void __update_writeback_rate(struct cached_dev *dc)
 	if (!target)
 		goto out;
 
-	error = ((dirty + derivative - target) << 8) / target;
+	error = div64_s64((dirty + derivative - target) << 8, target);
 
-	change = ((dc->writeback_rate * error) >> 8) /
-		dc->writeback_rate_p_term_inverse;
+	change = div_s64((dc->writeback_rate * error) >> 8,
+			 dc->writeback_rate_p_term_inverse);
 
 	/* Don't increase writeback rate if the device isn't keeping up */
 	if (change > 0 &&
@@ -301,7 +301,7 @@ static unsigned writeback_delay(struct cached_dev *dc, unsigned sectors)
 					 dc->writeback_rate);
 
 	return time_after64(dc->next_writeback_io, now)
-		? (dc->next_writeback_io - now) / (NSEC_PER_SEC / HZ)
+		? div_u64(dc->next_writeback_io - now, NSEC_PER_SEC / HZ)
 		: 0;
 }
 

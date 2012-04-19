@@ -169,6 +169,7 @@ struct btree_op {
 
 	unsigned		csum:1;
 
+	unsigned		bio_insert_done:1;
 	unsigned		lookup_done:1;
 	unsigned		insert_collision:1;
 	unsigned		flush_journal:1;

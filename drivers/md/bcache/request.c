@@ -246,7 +246,7 @@ static void bio_invalidate(struct closure *cl)
 		keylist_add(&op->keys, &KEY(op->inode, bio->bi_sector, len));
 	}
 
-	s->bio_insert_done = true;
+	op->bio_insert_done = true;
 out:
 	continue_at(cl, bcache_journal, bcache_wq);
 }
@@ -537,7 +537,7 @@ static void bio_insert_loop(struct closure *cl)
 		submit_bbio(n, op->c, k, 0);
 	} while (n != bio);
 
-	s->bio_insert_done = true;
+	op->bio_insert_done = true;
 	continue_at(cl, bcache_journal, bcache_wq);
 err:
 	/* IO never happened, so bbio key isn't set up, so we can't call
@@ -558,13 +558,13 @@ err:
 		 * closure, then invalidate in btree and do normal
 		 * write
 		 */
-		s->bio_insert_done	= true;
+		op->bio_insert_done	= true;
 		s->error		= -ENOMEM;
 	} else if (s->write) {
 		s->skip			= true;
 		return bio_invalidate(cl);
 	} else
-		s->bio_insert_done	= true;
+		op->bio_insert_done	= true;
 
 	if (!keylist_empty(&op->keys))
 		continue_at(cl, bcache_journal, bcache_wq);
@@ -595,10 +595,10 @@ void bcache_btree_insert_async(struct closure *cl)
 
 	if (bcache_btree_insert(op, op->c)) {
 		s->error		= -ENOMEM;
-		s->bio_insert_done	= true;
+		op->bio_insert_done	= true;
 	}
 
-	if (s->bio_insert_done) {
+	if (op->bio_insert_done) {
 		keylist_free(&op->keys);
 		closure_return(cl);
 	} else

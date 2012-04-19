@@ -21,8 +21,6 @@ struct search {
 	unsigned		write:1;
 	unsigned		writeback:1;
 
-	unsigned		bio_insert_done:1;
-
 	/* IO error returned to s->bio */
 	short			error;
 

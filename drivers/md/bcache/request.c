@@ -1006,22 +1006,25 @@ static void request_write(struct cached_dev *d, struct search *s)
 		s->writeback	= true;
 	}
 
+	if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
+		s->skip		= true;
+		s->cache_bio	= s->orig_bio;
+		bio_get(s->cache_bio);
+
+		if (blk_queue_discard(bdev_get_queue(d->bdev))) {
+			closure_get(cl);
+			generic_make_request(bio);
+		}
+
+		goto out;
+	}
+
 	if (s->skip) {
 skip:		s->cache_bio = s->orig_bio;
 		bio_get(s->cache_bio);
 		trace_bcache_write_skip(s->orig_bio);
 
-		if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
-			closure_get(cl);
-
-			if (blk_queue_discard(bdev_get_queue(d->bdev)))
-				generic_make_request(bio);
-			else
-				bio_endio(bio, 0);
-
-			goto out;
-		} else
-			goto submit;
+		goto submit;
 	}
 
 	if (should_writeback(d, s->orig_bio))

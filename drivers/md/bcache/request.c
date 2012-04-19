@@ -495,8 +495,8 @@ static void bio_insert_loop(struct closure *cl)
 	do {
 		struct open_bucket *b;
 		struct bkey *k;
-		struct bio_set *split = op->d
-			? op->d->bio_split : op->c->bio_split;
+		struct bio_set *split = s->d
+			? s->d->bio_split : op->c->bio_split;
 
 		/* 1 for the device pointer and 1 for the chksum */
 		if (keylist_realloc(&op->keys,
@@ -651,7 +651,7 @@ static void bio_complete(struct search *s)
 		if (s->error)
 			clear_bit(BIO_UPTODATE, &s->orig_bio->bi_flags);
 
-		trace_bcache_request_end(&s->op, s->orig_bio);
+		trace_bcache_request_end(s, s->orig_bio);
 		bio_endio(s->orig_bio, s->error);
 		s->orig_bio = NULL;
 	}
@@ -677,10 +677,10 @@ static void search_free(struct closure *cl)
 		bio_put(s->cache_bio);
 
 	if (s->unaligned_bvec)
-		mempool_free(s->bio.bio.bi_io_vec, s->op.d->unaligned_bvec);
+		mempool_free(s->bio.bio.bi_io_vec, s->d->unaligned_bvec);
 
 	closure_debug_destroy(cl);
-	mempool_free(s, s->op.d->c->search);
+	mempool_free(s, s->d->c->search);
 }
 
 static struct search *search_alloc(struct bio *bio, struct bcache_device *d)
@@ -693,7 +693,7 @@ static struct search *search_alloc(struct bio *bio, struct bcache_device *d)
 
 	s->op.inode		= d->id;
 	s->op.c			= d->c;
-	s->op.d			= d;
+	s->d			= d;
 	s->op.lock		= -1;
 	s->task			= current;
 	s->orig_bio		= bio;
@@ -731,7 +731,7 @@ static void btree_read_async(struct closure *cl)
 static void cached_dev_bio_complete(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
-	struct cached_dev *dc = container_of(s->op.d, struct cached_dev, disk);
+	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 
 	search_free(cl);
 	cached_dev_put(dc);
@@ -796,7 +796,7 @@ static void request_read_error(struct closure *cl)
 static void request_read_done(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
-	struct cached_dev *d = container_of(s->op.d, struct cached_dev, disk);
+	struct cached_dev *d = container_of(s->d, struct cached_dev, disk);
 
 	/*
 	 * s->cache_bio != NULL implies that we had a cache miss; cache_bio now
@@ -874,10 +874,10 @@ static void request_read_done(struct closure *cl)
 static void request_read_done_bh(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
-	struct cached_dev *d = container_of(s->op.d, struct cached_dev, disk);
+	struct cached_dev *d = container_of(s->d, struct cached_dev, disk);
 
 	if (s->cache_miss && s->op.insert_collision)
-		mark_cache_miss_collision(&s->op);
+		mark_cache_miss_collision(s);
 
 	mark_cache_accounting(s, !s->cache_miss, s->skip);
 
@@ -896,12 +896,12 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 {
 	int ret = 0;
 	unsigned reada;
-	struct cached_dev *d = container_of(s->op.d, struct cached_dev, disk);
+	struct cached_dev *d = container_of(s->d, struct cached_dev, disk);
 	struct bio *n;
 
 	sectors = min(sectors, bio_max_sectors(bio)),
 
-	n = bio_split_get(bio, sectors, s->op.d);
+	n = bio_split_get(bio, sectors, s->d);
 	if (!n)
 		return -EAGAIN;
 
@@ -980,7 +980,7 @@ static void request_read(struct cached_dev *d, struct search *s)
 static void cached_dev_write_complete(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
-	struct cached_dev *dc = container_of(s->op.d, struct cached_dev, disk);
+	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 
 	up_read_non_owner(&dc->writeback_lock);
 	cached_dev_bio_complete(cl);
@@ -1302,7 +1302,7 @@ static void cached_dev_make_request(struct request_queue *q, struct bio *bio)
 
 	if (cached_dev_get(dc)) {
 		s = search_alloc(bio, d);
-		trace_bcache_request_start(&s->op, bio);
+		trace_bcache_request_start(s, bio);
 
 		if (!bio_has_data(bio))
 			request_nodata(dc, s);
@@ -1436,7 +1436,7 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 	struct bcache_device *d = bio->bi_bdev->bd_disk->private_data;
 
 	s = search_alloc(bio, d);
-	trace_bcache_request_start(&s->op, bio);
+	trace_bcache_request_start(s, bio);
 
 	(!bio_has_data(bio)	? flash_dev_req_nodata :
 	 bio->bi_rw & REQ_WRITE ? flash_dev_write :

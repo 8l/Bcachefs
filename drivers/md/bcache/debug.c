@@ -209,7 +209,7 @@ static void data_verify_endio(struct bio *bio, int error)
 void data_verify(struct search *s)
 {
 	char name[BDEVNAME_SIZE];
-	struct cached_dev *dc = container_of(s->op.d, struct cached_dev, disk);
+	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 	struct closure *cl = &s->cl;
 	struct bio *check;
 	struct bio_vec *bv;
@@ -230,7 +230,7 @@ void data_verify(struct search *s)
 	check->bi_private	= cl;
 	check->bi_end_io	= data_verify_endio;
 
-	closure_bio_submit(check, cl, s->op.d->c->bio_split);
+	closure_bio_submit(check, cl, s->d->bio_split);
 	closure_sync(cl);
 
 	bio_for_each_segment(bv, s->orig_bio, i) {

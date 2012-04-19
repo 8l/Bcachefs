@@ -2140,7 +2140,7 @@ static int submit_partial_cache_miss(struct btree *b, struct btree_op *op,
 					KEY_START(k) - bio->bi_sector);
 		}
 
-		ret = s->op.d->cache_miss(b, s, bio, sectors);
+		ret = s->d->cache_miss(b, s, bio, sectors);
 	}
 
 	return ret;
@@ -2180,7 +2180,7 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 		sectors = min_t(unsigned, k->key - bio->bi_sector,
 				__bio_max_sectors(bio, bdev, sector));
 
-		n = bio_split_get(bio, sectors, op->d);
+		n = bio_split_get(bio, sectors, s->d);
 		if (!n)
 			return -EAGAIN;
 

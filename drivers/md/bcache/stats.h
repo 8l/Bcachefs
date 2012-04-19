@@ -52,7 +52,7 @@ struct search;
 void mark_cache_accounting(struct search *s, bool hit, bool bypass);
 
 void mark_cache_readahead(struct search *s);
-void mark_cache_miss_collision(struct btree_op *op);
+void mark_cache_miss_collision(struct search *s);
 void mark_sectors_bypassed(struct search *s, int sectors);
 
 #endif /* _BCACHE_STATS_H_ */

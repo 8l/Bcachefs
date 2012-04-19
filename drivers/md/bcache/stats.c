@@ -215,9 +215,9 @@ static void mark_cache_stats(struct cache_stat_collector *stats,
 
 void mark_cache_accounting(struct search *s, bool hit, bool bypass)
 {
-	struct cached_dev *dc = container_of(s->op.d, struct cached_dev, disk);
+	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 	mark_cache_stats(&dc->accounting.collector, hit, bypass);
-	mark_cache_stats(&s->op.d->c->accounting.collector, hit, bypass);
+	mark_cache_stats(&s->op.c->accounting.collector, hit, bypass);
 #ifdef CONFIG_CGROUP_BCACHE
 	mark_cache_stats(&(bio_to_cgroup(s->orig_bio)->stats), hit, bypass);
 #endif
@@ -225,19 +225,19 @@ void mark_cache_accounting(struct search *s, bool hit, bool bypass)
 
 void mark_cache_readahead(struct search *s)
 {
-	struct cached_dev *dc = container_of(s->op.d, struct cached_dev, disk);
+	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 	atomic_inc(&dc->accounting.collector.cache_readaheads);
-	atomic_inc(&s->op.d->c->accounting.collector.cache_readaheads);
+	atomic_inc(&s->op.c->accounting.collector.cache_readaheads);
 }
-void mark_cache_miss_collision(struct btree_op *op)
+void mark_cache_miss_collision(struct search *s)
 {
-	struct cached_dev *dc = container_of(op->d, struct cached_dev, disk);
+	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 	atomic_inc(&dc->accounting.collector.cache_miss_collisions);
-	atomic_inc(&op->d->c->accounting.collector.cache_miss_collisions);
+	atomic_inc(&s->op.c->accounting.collector.cache_miss_collisions);
 }
 void mark_sectors_bypassed(struct search *s, int sectors)
 {
-	struct cached_dev *dc = container_of(s->op.d, struct cached_dev, disk);
+	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 	atomic_add(sectors, &dc->accounting.collector.sectors_bypassed);
-	atomic_add(sectors, &s->op.d->c->accounting.collector.sectors_bypassed);
+	atomic_add(sectors, &s->op.c->accounting.collector.sectors_bypassed);
 }

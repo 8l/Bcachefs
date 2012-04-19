@@ -38,14 +38,14 @@ static int btree_refill_dirty_leaf(struct btree *b, struct btree_op *op,
 {
 	struct dirty *w;
 	struct btree_iter iter;
-	btree_iter_init(b, &iter, &KEY(op->d->id, dc->last_found, 0));
+	btree_iter_init(b, &iter, &KEY(dc->disk.id, dc->last_found, 0));
 
 	/* To protect rb tree access vs. read_dirty() */
 	spin_lock(&dc->dirty_lock);
 
 	while (!array_freelist_empty(&dc->dirty_freelist)) {
 		struct bkey *k = btree_iter_next(&iter);
-		if (!k || KEY_DEV(k) != op->d->id)
+		if (!k || KEY_DEV(k) != dc->disk.id)
 			break;
 
 		if (ptr_bad(b, k))
@@ -75,7 +75,7 @@ static int btree_refill_dirty(struct btree *b, struct btree_op *op,
 {
 	int r;
 	struct btree_iter iter;
-	btree_iter_init(b, &iter, &KEY(op->d->id, dc->last_found, 0));
+	btree_iter_init(b, &iter, &KEY(dc->disk.id, dc->last_found, 0));
 
 	if (!b->level)
 		return btree_refill_dirty_leaf(b, op, dc);
@@ -98,7 +98,7 @@ static int btree_refill_dirty(struct btree *b, struct btree_op *op,
 			       "dirty data may have been lost!\n", buf);
 		}
 
-		if (KEY_DEV(k) != op->d->id)
+		if (KEY_DEV(k) != dc->disk.id)
 			break;
 
 		cond_resched();
@@ -115,7 +115,7 @@ static void refill_dirty(struct work_struct *work)
 
 	struct btree_op op;
 	btree_op_init_stack(&op);
-	op.d = &dc->disk;
+	op.c = dc->disk.c;
 
 	if (!atomic_read(&dc->disk.detaching) &&
 	    !dc->writeback_running)

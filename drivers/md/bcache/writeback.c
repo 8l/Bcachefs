@@ -4,7 +4,7 @@
 
 static struct workqueue_struct *dirty_wq;
 
-static void read_dirty(struct cached_dev *);
+static void read_dirty(struct work_struct *);
 
 struct dirty_io {
 	struct closure		cl;
@@ -50,11 +50,6 @@ static void refill_dirty(struct work_struct *work)
 
 	down_write(&dc->writeback_lock);
 
-	if (KEY_INODE(&buf->last_scanned) > dc->disk.id) {
-		buf->last_scanned = KEY(dc->disk.id, 0, 0);
-		searched_from_start = true;
-	}
-
 	if (!atomic_read(&dc->has_dirty)) {
 		SET_BDEV_STATE(&dc->sb, BDEV_STATE_CLEAN);
 		bch_write_bdev_super(dc, NULL);
@@ -62,13 +57,17 @@ static void refill_dirty(struct work_struct *work)
 		return;
 	}
 
+	if (bkey_cmp(&buf->last_scanned, &end) >= 0) {
+		buf->last_scanned = KEY(dc->disk.id, 0, 0);
+		searched_from_start = true;
+	}
+
 	bch_refill_keybuf(dc->disk.c, buf, &end);
 
-	if (searched_from_start) {
+	if (bkey_cmp(&buf->last_scanned, &end) >= 0 && searched_from_start) {
 		/* Searched the entire btree - delay for awhile */
-		if (bkey_cmp(&buf->last_scanned, &end) >= 0)
-			queue_delayed_work(dirty_wq, &dc->refill_dirty,
-					   dc->writeback_delay * HZ);
+		queue_delayed_work(dirty_wq, &dc->refill_dirty,
+				   dc->writeback_delay * HZ);
 
 		if (RB_EMPTY_ROOT(&buf->keys)) {
 			atomic_set(&dc->has_dirty, 0);
@@ -80,8 +79,7 @@ static void refill_dirty(struct work_struct *work)
 
 	dc->next_writeback_io = local_clock();
 
-	spin_lock(&buf->lock);
-	read_dirty(dc);
+	read_dirty(&dc->read_dirty.work);
 }
 
 void bch_writeback_queue(struct cached_dev *dc)
@@ -233,11 +231,10 @@ static void write_dirty_finish(struct closure *cl)
 				: &dc->disk.c->writeback_keys_done);
 	}
 
-	spin_lock(&dc->writeback_keys.lock);
-	__bch_keybuf_del(&dc->writeback_keys, w);
+	bch_keybuf_del(&dc->writeback_keys, w);
 	atomic_dec_bug(&dc->in_flight);
 
-	read_dirty(dc);
+	read_dirty(&dc->read_dirty.work);
 }
 
 static void dirty_endio(struct bio *bio, int error)
@@ -289,8 +286,10 @@ static void read_dirty_submit(struct closure *cl)
 	continue_at(cl, write_dirty, dirty_wq);
 }
 
-static void read_dirty(struct cached_dev *dc)
+static void read_dirty(struct work_struct *work)
 {
+	struct cached_dev *dc = container_of(to_delayed_work(work),
+					     struct cached_dev, read_dirty);
 	unsigned delay = writeback_delay(dc, 0);
 	struct keybuf_key *w;
 	struct dirty_io *io;
@@ -299,7 +298,6 @@ static void read_dirty(struct cached_dev *dc)
 
 	while (1) {
 		w = bch_keybuf_next(&dc->writeback_keys);
-
 		if (!w)
 			break;
 
@@ -308,13 +306,12 @@ static void read_dirty(struct cached_dev *dc)
 		if (delay > 0 &&
 		    (KEY_START(&w->key) != dc->last_read ||
 		     jiffies_to_msecs(delay) > 50)) {
+			w->private = NULL;
 			queue_delayed_work(dirty_wq, &dc->read_dirty, delay);
-			break;
+			return;
 		}
 
 		dc->last_read	= KEY_OFFSET(&w->key);
-		w->private	= ERR_PTR(-EINTR);
-		spin_unlock(&dc->writeback_keys.lock);
 
 		io = kzalloc(sizeof(struct dirty_io) + sizeof(struct bio_vec)
 			     * DIV_ROUND_UP(KEY_SIZE(&w->key), PAGE_SECTORS),
@@ -333,7 +330,7 @@ static void read_dirty(struct cached_dev *dc)
 		io->bio.bi_end_io	= read_dirty_endio;
 
 		if (bio_alloc_pages(&io->bio, GFP_KERNEL))
-			goto err;
+			goto err_free;
 
 		pr_debug("%s", pkey(&w->key));
 
@@ -343,37 +340,23 @@ static void read_dirty(struct cached_dev *dc)
 
 		if (atomic_inc_return(&dc->in_flight) >= 64)
 			return;
-
-		spin_lock(&dc->writeback_keys.lock);
 	}
 
 	if (0) {
-err:		spin_lock(&dc->writeback_keys.lock);
-		if (!IS_ERR_OR_NULL(w->private))
-			kfree(w->private);
-
-		__bch_keybuf_del(&dc->writeback_keys, w);
+err_free:
+		kfree(w->private);
+err:
+		bch_keybuf_del(&dc->writeback_keys, w);
 	}
 
 	if (RB_EMPTY_ROOT(&dc->writeback_keys.keys))
 		queue_delayed_work(dirty_wq, &dc->refill_dirty, 0);
-
-	spin_unlock(&dc->writeback_keys.lock);
-}
-
-static void read_dirty_work(struct work_struct *work)
-{
-	struct cached_dev *dc = container_of(to_delayed_work(work),
-					     struct cached_dev, read_dirty);
-
-	spin_lock(&dc->writeback_keys.lock);
-	read_dirty(dc);
 }
 
 void bch_writeback_init_cached_dev(struct cached_dev *dc)
 {
 	INIT_DELAYED_WORK(&dc->refill_dirty, refill_dirty);
-	INIT_DELAYED_WORK(&dc->read_dirty, read_dirty_work);
+	INIT_DELAYED_WORK(&dc->read_dirty, read_dirty);
 	init_rwsem(&dc->writeback_lock);
 
 	bch_keybuf_init(&dc->writeback_keys, dirty_pred);

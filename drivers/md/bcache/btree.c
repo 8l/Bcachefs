@@ -2396,7 +2396,7 @@ void bch_refill_keybuf(struct cache_set *c, struct keybuf *buf,
 	spin_unlock(&buf->lock);
 }
 
-void __bch_keybuf_del(struct keybuf *buf, struct keybuf_key *w)
+static void __bch_keybuf_del(struct keybuf *buf, struct keybuf_key *w)
 {
 	rb_erase(&w->node, &buf->keys);
 	array_free(&buf->freelist, w);
@@ -2438,11 +2438,18 @@ bool bch_keybuf_check_overlapping(struct keybuf *buf, struct bkey *start,
 
 struct keybuf_key *bch_keybuf_next(struct keybuf *buf)
 {
-	struct keybuf_key *w = RB_FIRST(&buf->keys, struct keybuf_key, node);
+	struct keybuf_key *w;
+	spin_lock(&buf->lock);
+
+	w = RB_FIRST(&buf->keys, struct keybuf_key, node);
 
 	while (w && w->private)
 		w = RB_NEXT(w, node);
 
+	if (w)
+		w->private = ERR_PTR(-EINTR);
+
+	spin_unlock(&buf->lock);
 	return w;
 }
 
@@ -2452,26 +2459,19 @@ struct keybuf_key *bch_keybuf_next_rescan(struct cache_set *c,
 {
 	struct keybuf_key *ret;
 
-	spin_lock(&buf->lock);
-
 	while (1) {
 		ret = bch_keybuf_next(buf);
-		if (ret) {
-			ret->private = ERR_PTR(-EINTR);
+		if (ret)
 			break;
-		}
 
 		if (bkey_cmp(&buf->last_scanned, end) >= 0) {
 			pr_debug("scan finished");
 			break;
 		}
 
-		spin_unlock(&buf->lock);
 		bch_refill_keybuf(c, buf, end);
-		spin_lock(&buf->lock);
 	}
 
-	spin_unlock(&buf->lock);
 	return ret;
 }
 

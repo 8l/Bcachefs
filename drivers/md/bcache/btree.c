@@ -1845,7 +1845,7 @@ bool btree_insert_check_key(struct btree *b, struct btree_op *op,
 	    should_split(b))
 		goto out;
 
-	op->replace = KEY(op->d->id, bio_end(bio), bio_sectors(bio));
+	op->replace = KEY(op->inode, bio_end(bio), bio_sectors(bio));
 
 	SET_KEY_PTRS(&op->replace, 1);
 	get_random_bytes(&op->replace.ptr[0], sizeof(uint64_t));
@@ -2132,7 +2132,7 @@ static int submit_partial_cache_miss(struct btree *b, struct btree_op *op,
 	       !op->lookup_done) {
 		unsigned sectors = INT_MAX;
 
-		if (KEY_DEV(k) == s->op.d->id) {
+		if (KEY_DEV(k) == op->inode) {
 			if (KEY_START(k) <= bio->bi_sector)
 				break;
 
@@ -2169,7 +2169,7 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 	PTR_BUCKET(b->c, k, ptr)->prio = INITIAL_PRIO;
 
 	while (!op->lookup_done &&
-	       KEY_DEV(k) == s->op.d->id &&
+	       KEY_DEV(k) == op->inode &&
 	       bio->bi_sector < k->key) {
 		struct bkey *bio_key;
 		struct block_device *bdev = PTR_CACHE(b->c, k, ptr)->bdev;
@@ -2220,9 +2220,9 @@ int btree_search_recurse(struct btree *b, struct btree_op *op)
 	int ret = 0;
 	struct bkey *k;
 	struct btree_iter iter;
-	btree_iter_init(b, &iter, &KEY(op->d->id, bio->bi_sector, 0));
+	btree_iter_init(b, &iter, &KEY(op->inode, bio->bi_sector, 0));
 
-	pr_debug("at %s searching for %u:%llu", pbtree(b), op->d->id,
+	pr_debug("at %s searching for %u:%llu", pbtree(b), op->inode,
 		 (uint64_t) bio->bi_sector);
 
 	do {

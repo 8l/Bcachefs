@@ -151,10 +151,13 @@ static inline void set_gc_sectors(struct cache_set *c)
 
 struct btree_op {
 	struct closure		cl;
+	struct cache_set	*c;
 	struct bcache_device	*d;
 
 	/* Journal entry we have a refcount on */
 	atomic_t		*journal;
+
+	unsigned		inode;
 
 	/* Btree level at which we start taking write locks */
 	short			lock;
@@ -164,6 +167,8 @@ struct btree_op {
 		BTREE_INSERT,
 		BTREE_REPLACE
 	} type:8;
+
+	unsigned		csum:1;
 
 	unsigned		lookup_done:1;
 	unsigned		insert_collision:1;

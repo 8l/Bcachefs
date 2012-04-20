@@ -237,14 +237,13 @@ static void bio_invalidate(struct closure *cl)
 	while (bio_sectors(bio)) {
 		unsigned len = min(bio_sectors(bio), 1U << 14);
 
-		if (keylist_realloc(&s->op.keys, 0, s->op.d->c))
+		if (keylist_realloc(&op->keys, 0, op->c))
 			goto out;
 
 		bio->bi_sector	+= len;
 		bio->bi_size	-= len << 9;
 
-		keylist_add(&s->op.keys,
-			    &KEY(s->op.d->id, bio->bi_sector, len));
+		keylist_add(&op->keys, &KEY(op->inode, bio->bi_sector, len));
 	}
 
 	s->bio_insert_done = true;
@@ -351,7 +350,7 @@ static struct open_bucket *get_data_bucket(struct bkey *search,
 					   struct search *s)
 {
 	struct closure cl, *w = NULL;
-	struct cache_set *c = s->op.d->c;
+	struct cache_set *c = s->op.c;
 	struct open_bucket *l, *ret, *ret_task;
 	BKEY_PADDED(key) alloc;
 	struct bkey *k = NULL;
@@ -475,7 +474,7 @@ static void bio_insert_endio(struct bio *bio, int error)
 			set_closure_fn(cl, NULL, NULL);
 	}
 
-	bcache_endio(op->d->c, bio, error, "writing data to cache");
+	bcache_endio(op->c, bio, error, "writing data to cache");
 }
 
 static void bio_insert_loop(struct closure *cl)
@@ -488,40 +487,42 @@ static void bio_insert_loop(struct closure *cl)
 	if (s->skip)
 		return bio_invalidate(cl);
 
-	if (atomic_sub_return(bio_sectors(bio), &op->d->c->sectors_to_gc) < 0) {
-		set_gc_sectors(op->d->c);
-		bcache_queue_gc(op->d->c);
+	if (atomic_sub_return(bio_sectors(bio), &op->c->sectors_to_gc) < 0) {
+		set_gc_sectors(op->c);
+		bcache_queue_gc(op->c);
 	}
 
 	do {
 		struct open_bucket *b;
 		struct bkey *k;
+		struct bio_set *split = op->d
+			? op->d->bio_split : op->c->bio_split;
 
 		/* 1 for the device pointer and 1 for the chksum */
 		if (keylist_realloc(&op->keys,
-				    1 + (op->d->data_csum ? 1 : 0),
-				    op->d->c))
+				    1 + (op->csum ? 1 : 0),
+				    op->c))
 			continue_at(cl, bcache_journal, bcache_wq);
 
 		k = op->keys.top;
 
-		b = get_data_bucket(&KEY(op->d->id, bio->bi_sector, 0), s);
+		b = get_data_bucket(&KEY(op->inode, bio->bi_sector, 0), s);
 		if (!b)
 			goto err;
 
-		put_data_bucket(b, op->d->c, k, bio);
+		put_data_bucket(b, op->c, k, bio);
 
-		n = bio_split_get(bio, KEY_SIZE(k), op->d);
+		n = __bio_split_get(bio, KEY_SIZE(k), split);
 		if (!n) {
-			__bkey_put(op->d->c, k);
+			__bkey_put(op->c, k);
 			continue_at(cl, bio_insert_loop, bcache_wq);
 		}
 
 		if (s->writeback)
 			SET_KEY_DIRTY(k, true);
 
-		SET_KEY_CSUM(k, op->d->data_csum);
-		if (op->d->data_csum)
+		SET_KEY_CSUM(k, op->csum);
+		if (KEY_CSUM(k))
 			bio_csum(n, k);
 
 		pr_debug("%s", pkey(k));
@@ -533,7 +534,7 @@ static void bio_insert_loop(struct closure *cl)
 			closure_get(cl);
 
 		trace_bcache_cache_insert(n, n->bi_sector, n->bi_bdev);
-		submit_bbio(n, op->d->c, k, 0);
+		submit_bbio(n, op->c, k, 0);
 	} while (n != bio);
 
 	s->bio_insert_done = true;
@@ -592,7 +593,7 @@ void bcache_btree_insert_async(struct closure *cl)
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 	struct search *s = container_of(op, struct search, op);
 
-	if (bcache_btree_insert(op, op->d->c)) {
+	if (bcache_btree_insert(op, op->c)) {
 		s->error		= -ENOMEM;
 		s->bio_insert_done	= true;
 	}
@@ -636,12 +637,12 @@ void cache_read_endio(struct bio *bio, int error)
 
 	if (error)
 		s->error = error;
-	else if (ptr_stale(s->op.d->c, &b->key, 0)) {
-		atomic_long_inc(&s->op.d->c->cache_read_races);
+	else if (ptr_stale(s->op.c, &b->key, 0)) {
+		atomic_long_inc(&s->op.c->cache_read_races);
 		s->error = -EINTR;
 	}
 
-	bcache_endio(s->op.d->c, bio, error, "reading from cache");
+	bcache_endio(s->op.c, bio, error, "reading from cache");
 }
 
 static void bio_complete(struct search *s)
@@ -690,6 +691,8 @@ static struct search *search_alloc(struct bio *bio, struct bcache_device *d)
 
 	__closure_init(&s->cl, NULL);
 
+	s->op.inode		= d->id;
+	s->op.c			= d->c;
 	s->op.d			= d;
 	s->op.lock		= -1;
 	s->task			= current;
@@ -715,7 +718,7 @@ static void btree_read_async(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 
-	int ret = btree_root(search_recurse, op->d->c, op);
+	int ret = btree_root(search_recurse, op->c, op);
 
 	if (ret == -EAGAIN)
 		continue_at(cl, btree_read_async, bcache_wq);
@@ -784,7 +787,7 @@ static void request_read_error(struct closure *cl)
 		/* XXX: invalidate cache */
 
 		trace_bcache_read_retry(&s->bio.bio);
-		closure_bio_submit(&s->bio.bio, &s->cl, s->op.d->c->bio_split);
+		closure_bio_submit(&s->bio.bio, &s->cl, s->op.c->bio_split);
 	}
 
 	continue_at(cl, cached_dev_read_complete, NULL);
@@ -859,7 +862,7 @@ static void request_read_done(struct closure *cl)
 
 	bio_complete(s);
 
-	if (s->cache_bio && !atomic_read(&s->op.d->c->closing)) {
+	if (s->cache_bio && !atomic_read(&s->op.c->closing)) {
 		s->op.type = BTREE_REPLACE;
 		closure_init(&s->op.cl, &s->cl);
 		bio_insert(&s->op.cl);
@@ -911,7 +914,7 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	if (n != bio ||
 	    (bio->bi_rw & REQ_RAHEAD) ||
 	    (bio->bi_rw & REQ_META) ||
-	    s->op.d->c->gc_stats.in_use >= CUTOFF_CACHE_READA)
+	    s->op.c->gc_stats.in_use >= CUTOFF_CACHE_READA)
 		reada = 0;
 	else
 		reada = min(d->readahead >> 9, sectors - bio_sectors(n));
@@ -999,7 +1002,7 @@ static void request_write_resubmit(struct closure *cl)
 	struct search *s = container_of(cl, struct search, cl);
 	struct bio *bio = &s->bio.bio;
 
-	closure_bio_submit(bio, cl, s->op.d->c->bio_split);
+	closure_bio_submit(bio, cl, s->op.c->bio_split);
 
 	__closure_init(&s->op.cl, cl);
 	bio_insert(&s->op.cl);
@@ -1053,7 +1056,7 @@ skip:		s->cache_bio = s->orig_bio;
 		__bio_clone(s->cache_bio, bio);
 		trace_bcache_writethrough(s->orig_bio);
 submit:
-		if (closure_bio_submit(bio, cl, s->op.d->c->bio_split))
+		if (closure_bio_submit(bio, cl, s->op.c->bio_split))
 			continue_at(cl, request_write_resubmit, bcache_wq);
 	} else {
 		s->cache_bio = bio;
@@ -1077,7 +1080,7 @@ static void request_nodata(struct cached_dev *d, struct search *s)
 	}
 
 	if (s->op.flush_journal)
-		bcache_journal_meta(s->op.d->c, cl);
+		bcache_journal_meta(s->op.c, cl);
 
 	closure_get(cl);
 	generic_make_request(bio);
@@ -1204,7 +1207,7 @@ static void check_should_skip(struct cached_dev *d, struct search *s)
 	struct hlist_head *iohash(uint64_t k)
 	{ return &d->io_hash[hash_64(k, RECENT_IO_BITS)]; }
 
-	struct cache_set *c = s->op.d->c;
+	struct cache_set *c = s->op.c;
 	struct bio *bio = &s->bio.bio;
 
 	long rand;
@@ -1424,7 +1427,7 @@ static void flash_dev_req_nodata(struct search *s)
 	}
 
 	if (s->op.flush_journal)
-		bcache_journal_meta(s->op.d->c, cl);
+		bcache_journal_meta(s->op.c, cl);
 }
 
 static void flash_dev_make_request(struct request_queue *q, struct bio *bio)

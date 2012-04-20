@@ -609,7 +609,7 @@ void bcache_journal_meta(struct cache_set *c, struct closure *cl)
 void bcache_journal(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
-	struct cache_set *c = op->d->c;
+	struct cache_set *c = op->c;
 	struct journal_write *w;
 	size_t b, n = ((uint64_t *) op->keys.top) - op->keys.list;
 

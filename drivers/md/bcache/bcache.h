@@ -928,10 +928,10 @@ bool bucket_add_unused(struct cache *, struct bucket *);
 bool can_save_prios(struct cache *);
 void free_some_buckets(struct cache *);
 void unpop_bucket(struct cache_set *, struct bkey *);
-int __pop_bucket_set(struct cache_set *, int, struct bkey *,
-		     int, struct closure *);
-int pop_bucket_set(struct cache_set *, int, struct bkey *,
-		   int, struct closure *);
+int __pop_bucket_set(struct cache_set *, int, uint16_t,
+		     struct bkey *, int, struct closure *);
+int pop_bucket_set(struct cache_set *, int, uint16_t,
+		   struct bkey *, int, struct closure *);
 
 __printf(2, 3)
 bool cache_set_error(struct cache_set *, const char *, ...);

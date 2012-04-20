@@ -161,6 +161,8 @@ struct btree_op {
 
 	unsigned		inode;
 
+	uint16_t		write_prio;
+
 	/* Btree level at which we start taking write locks */
 	short			lock;
 

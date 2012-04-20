@@ -496,13 +496,23 @@ void free_some_buckets(struct cache *c)
 		prio_write(c);
 }
 
-static long pop_bucket(struct cache *c, int mark, struct closure *cl)
+static long pop_bucket(struct cache *c, int mark,
+		       uint16_t write_prio, struct closure *cl)
 {
 	long r = -1;
+	unsigned watermark;
+
+	if (mark == GC_MARK_BTREE)
+		watermark = 0;
+	else if (write_prio)
+		watermark = 8;
+	else
+		watermark = c->free.size / 2;
+
 again:
 	free_some_buckets(c);
 
-	if ((mark == GC_MARK_BTREE || fifo_used(&c->free) > 8) &&
+	if (fifo_used(&c->free) > watermark &&
 	    fifo_pop(&c->free, r)) {
 		struct bucket *b = c->buckets + r;
 #ifdef CONFIG_BCACHE_EDEBUG
@@ -563,7 +573,7 @@ void unpop_bucket(struct cache_set *c, struct bkey *k)
 	}
 }
 
-int __pop_bucket_set(struct cache_set *c, int mark,
+int __pop_bucket_set(struct cache_set *c, int mark, uint16_t write_prio,
 		     struct bkey *k, int n, struct closure *cl)
 {
 	lockdep_assert_held(&c->bucket_lock);
@@ -575,7 +585,7 @@ int __pop_bucket_set(struct cache_set *c, int mark,
 
 	for (int i = 0; i < n; i++) {
 		struct cache *ca = c->cache_by_alloc[i];
-		long b = pop_bucket(ca, mark, cl);
+		long b = pop_bucket(ca, mark, write_prio, cl);
 
 		if (b == -1)
 			goto err;
@@ -594,12 +604,12 @@ err:
 	return -1;
 }
 
-int pop_bucket_set(struct cache_set *c, int mark,
+int pop_bucket_set(struct cache_set *c, int mark, uint16_t write_prio,
 		   struct bkey *k, int n, struct closure *cl)
 {
 	int ret;
 	mutex_lock(&c->bucket_lock);
-	ret = __pop_bucket_set(c, mark, k, n, cl);
+	ret = __pop_bucket_set(c, mark, write_prio, k, n, cl);
 	mutex_unlock(&c->bucket_lock);
 	return ret;
 }

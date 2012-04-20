@@ -392,6 +392,7 @@ found:
 			 */
 
 			if (pop_bucket_set(c, GC_MARK_RECLAIMABLE,
+					   s->op.write_prio,
 					   k, 1, w))
 				return NULL;
 

@@ -11,13 +11,12 @@ struct search {
 
 	struct bbio		bio;
 	struct bio		*orig_bio;
-	struct bio		*cache_bio;
 	struct bio		*cache_miss;
 	unsigned		cache_bio_sectors;
 
 	unsigned		recoverable:1;
 	unsigned		unaligned_bvec:1;
-	unsigned		skip:1;
+
 	unsigned		write:1;
 	unsigned		writeback:1;
 

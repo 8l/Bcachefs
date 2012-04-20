@@ -156,6 +156,9 @@ struct btree_op {
 	/* Journal entry we have a refcount on */
 	atomic_t		*journal;
 
+	/* Bio to be inserted into the cache */
+	struct bio		*cache_bio;
+
 	unsigned		inode;
 
 	/* Btree level at which we start taking write locks */
@@ -168,11 +171,12 @@ struct btree_op {
 	} type:8;
 
 	unsigned		csum:1;
+	unsigned		skip:1;
+	unsigned		flush_journal:1;
 
 	unsigned		bio_insert_done:1;
 	unsigned		lookup_done:1;
 	unsigned		insert_collision:1;
-	unsigned		flush_journal:1;
 
 	/* Anything after this point won't get zeroed in do_bio_hook() */
 

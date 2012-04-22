@@ -96,7 +96,7 @@ SHOW(__cached_dev)
 	var_printf(writeback_running,	"%i");
 	var_print(writeback_delay);
 	var_print(writeback_percent);
-	var_print(writeback_rate);
+	sysfs_print(writeback_rate,	dc->writeback_rate.rate);
 
 	var_print(writeback_rate_update_seconds);
 	var_print(writeback_rate_d_term);
@@ -162,7 +162,7 @@ STORE(__cached_dev)
 	d_strtoul(writeback_metadata);
 	d_strtoul(writeback_running);
 	d_strtoul(writeback_delay);
-	sysfs_strtoul_clamp(writeback_rate, dc->writeback_rate, 1, 1000000);
+	sysfs_strtoul_clamp(writeback_rate, dc->writeback_rate.rate, 1, 1000000);
 	sysfs_strtoul_clamp(writeback_percent, dc->writeback_percent, 0, 40);
 
 	d_strtoul(writeback_rate_update_seconds);

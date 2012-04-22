@@ -447,6 +447,18 @@ read_attribute(name ## _last_ ## frequency_units)
 	(ewma) >> factor;						\
 })
 
+struct ratelimit {
+	uint64_t		next;
+	unsigned		rate;
+};
+
+static inline void ratelimit_reset(struct ratelimit *d)
+{
+	d->next = local_clock();
+}
+
+unsigned next_delay(struct ratelimit *d, uint64_t done);
+
 #define __DIV_SAFE(n, d, zero)						\
 ({									\
 	typeof(n) _n = (n);						\

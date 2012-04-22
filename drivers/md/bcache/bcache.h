@@ -267,7 +267,7 @@ struct cached_dev {
 	 */
 	atomic_t		has_dirty;
 
-	uint64_t		next_writeback_io;
+	struct ratelimit	writeback_rate;
 	struct delayed_work	writeback_rate_update;
 
 	/*
@@ -305,7 +305,6 @@ struct cached_dev {
 	unsigned char		writeback_percent;
 	unsigned		writeback_delay;
 
-	unsigned		writeback_rate;
 	int			writeback_rate_change;
 	int64_t			writeback_rate_derivative;
 	uint64_t		writeback_rate_target;

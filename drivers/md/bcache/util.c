@@ -171,6 +171,18 @@ void time_stats_update(struct time_stats *stats, uint64_t start_time)
 }
 EXPORT_SYMBOL_GPL(time_stats_update);
 
+unsigned next_delay(struct ratelimit *d, uint64_t done)
+{
+	uint64_t now = local_clock();
+
+	d->next += div_u64(done, d->rate);
+
+	return time_after64(d->next, now)
+		? div_u64(d->next - now, NSEC_PER_SEC / HZ)
+		: 0;
+}
+EXPORT_SYMBOL_GPL(next_delay);
+
 #ifdef CONFIG_BCACHE_LATENCY_DEBUG
 unsigned latency_warn_ms;
 #endif

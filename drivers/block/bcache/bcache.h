@@ -632,9 +632,9 @@ static inline unsigned local_clock_us(void)
 #define prio_buckets(c)					\
 	DIV_ROUND_UP((size_t) (c)->sb.nbuckets, prios_per_bucket(c))
 
-#define JSET_MAGIC		0x245235c1a3625032
-#define PSET_MAGIC		0x6750e15f87337f91
-#define BSET_MAGIC		0x90135c78b99e07f5
+#define JSET_MAGIC		0x245235c1a3625032ULL
+#define PSET_MAGIC		0x6750e15f87337f91ULL
+#define BSET_MAGIC		0x90135c78b99e07f5ULL
 
 #define jset_magic(c)		((c)->sb.set_magic ^ JSET_MAGIC)
 #define pset_magic(c)		((c)->sb.set_magic ^ PSET_MAGIC)

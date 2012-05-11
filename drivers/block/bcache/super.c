@@ -747,9 +747,6 @@ static void bcache_device_detach(struct bcache_device *d)
 		atomic_set(&d->detaching, 0);
 	}
 
-	sysfs_remove_link(&d->c->kobj, d->name);
-	sysfs_remove_link(&d->kobj, "cache");
-
 	d->c->devices[d->id] = NULL;
 	closure_put(&d->c->caching);
 	d->c = NULL;
@@ -1049,10 +1046,13 @@ static void cached_dev_free(struct closure *cl)
 
 static void cached_dev_flush(struct closure *cl)
 {
-	struct cached_dev *d = container_of(cl, struct cached_dev, disk.cl);
+	struct cached_dev *cd = container_of(cl, struct cached_dev, disk.cl);
+	struct bcache_device *d = &cd->disk;
 
-	destroy_cache_accounting(&d->accounting);
-	kobject_del(&d->disk.kobj);
+	destroy_cache_accounting(&cd->accounting);
+	sysfs_remove_link(&d->kobj, d->name);
+	sysfs_remove_link(&d->kobj, "cache");
+	kobject_del(&d->kobj);
 
 	continue_at(cl, cached_dev_free, system_wq);
 }
@@ -1175,6 +1175,9 @@ static void flash_dev_free(struct closure *cl)
 static void flash_dev_flush(struct closure *cl)
 {
 	struct bcache_device *d = container_of(cl, struct bcache_device, cl);
+
+	sysfs_remove_link(&d->c->kobj, d->name);
+	sysfs_remove_link(&d->kobj, "cache");
 	kobject_del(&d->kobj);
 	continue_at(cl, flash_dev_free, system_wq);
 }

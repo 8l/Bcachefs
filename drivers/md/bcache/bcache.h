@@ -705,19 +705,34 @@ PTR_FIELD(PTR_GEN,		0,  8)
 /* Error handling macros */
 
 #define btree_bug(b, ...)						\
-	({ if (cache_set_error((b)->c, __VA_ARGS__)) dump_stack(); })
+do {									\
+	if (cache_set_error((b)->c, __VA_ARGS__))			\
+		dump_stack();						\
+} while (0)
 
 #define cache_bug(c, ...)						\
-	({ if (cache_set_error(c, __VA_ARGS__)) dump_stack(); })
+do {									\
+	if (cache_set_error(c, __VA_ARGS__))				\
+		dump_stack();						\
+} while (0)
 
 #define btree_bug_on(cond, b, ...)					\
-	({ if (cond) btree_bug(b, __VA_ARGS__); })
+do {									\
+	if (cond)							\
+		btree_bug(b, __VA_ARGS__);				\
+} while (0)
 
 #define cache_bug_on(cond, c, ...)					\
-	({ if (cond) cache_bug(c, __VA_ARGS__); })
+do {									\
+	if (cond)							\
+		cache_bug(c, __VA_ARGS__);				\
+} while (0)
 
 #define cache_set_err_on(cond, c, ...)					\
-	({ if (cond) cache_set_error(c, __VA_ARGS__); })
+do {									\
+	if (cond)							\
+		cache_set_error(c, __VA_ARGS__);			\
+} while (0)
 
 /* Looping macros */
 

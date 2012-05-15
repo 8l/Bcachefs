@@ -372,6 +372,9 @@ unsigned __bio_max_sectors(struct bio *bio, struct block_device *bdev,
 		ret = 0;
 
 		for (struct bio_vec *bv = bio_iovec(bio); bv < end; bv++) {
+			if (bv ==  bio_iovec(bio) + queue_max_segments(q))
+				break;
+
 			if (q->merge_bvec_fn &&
 			    q->merge_bvec_fn(q, &bvm, bv) < (int) bv->bv_len)
 				break;

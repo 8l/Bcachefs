@@ -1064,7 +1064,7 @@ static int btree_gc_mark(struct btree *b, unsigned *keys, struct gc_stat *gc)
 
 			btree_bug_on(gen_after(PTR_BUCKET(b->c, k, i)->last_gc,
 					       PTR_GEN(k, i)),
-				     b, "found old gen %u > %u in gc: %s",
+				     b, "found old gen %u > %llu in gc: %s",
 				     PTR_BUCKET(b->c, k, i)->last_gc,
 				     PTR_GEN(k, i), pkey(k));
 		}

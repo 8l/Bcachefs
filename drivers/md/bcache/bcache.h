@@ -816,6 +816,7 @@ int __pop_bucket_set(struct cache_set *, uint16_t,
 int pop_bucket_set(struct cache_set *, uint16_t,
 		   struct bkey *, int, struct closure *);
 
+__printf(2, 3)
 bool cache_set_error(struct cache_set *, const char *, ...);
 
 void prio_write(struct cache *);

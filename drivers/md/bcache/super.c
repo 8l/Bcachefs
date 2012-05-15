@@ -1250,6 +1250,7 @@ static int flash_dev_create(struct cache_set *c, uint64_t size)
 
 /* Cache set */
 
+__printf(2, 3)
 bool cache_set_error(struct cache_set *c, const char *m, ...)
 {
 	va_list args;

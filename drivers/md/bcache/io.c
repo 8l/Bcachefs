@@ -158,10 +158,11 @@ void count_io_errors(struct cache *c, int error, const char *m)
 		errors >>= IO_ERROR_SHIFT;
 
 		if (errors < c->set->error_limit)
-			err_printk("IO error on %s %s, recovering\n",
+			err_printk("%s: IO error on %s, recovering\n",
 				   bdevname(c->bdev, buf), m);
 		else
-			cache_set_error(c->set, "too many IO errors", m);
+			cache_set_error(c->set, "%s: too many IO errors %s",
+					bdevname(c->bdev, buf), m);
 	}
 }
 

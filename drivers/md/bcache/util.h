@@ -406,8 +406,6 @@ static inline int strtoul_h(const char *cp, long *res)
 		__builtin_types_compatible_p(typeof(var), const char *)	\
 		     ? "%s\n" : "%i\n", var)
 
-ssize_t hprint(char *buf, int64_t v);
-
 bool is_zero(const char *p, size_t n);
 int parse_uuid(const char *s, char *uuid);
 

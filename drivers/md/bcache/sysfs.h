@@ -56,16 +56,8 @@ STORE(fn)								\
 	if (attr == &sysfs_ ## file)					\
 		return snprint(buf, PAGE_SIZE, var)
 
-#define sysfs_hprint(file, val)						\
-	if (attr == &sysfs_ ## file) {					\
-		ssize_t ret = hprint(buf, val);				\
-		strcat(buf, "\n");					\
-		return ret + 1;						\
-	}
-
 #define var_printf(_var, fmt)	sysfs_printf(_var, fmt, var(_var))
 #define var_print(_var)		sysfs_print(_var, var(_var))
-#define var_hprint(_var)	sysfs_hprint(_var, var(_var))
 
 #define sysfs_strtoul(file, var)					\
 	if (attr == &sysfs_ ## file)					\

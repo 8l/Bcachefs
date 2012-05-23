@@ -72,7 +72,7 @@ ssize_t cache_stats_show(struct kobject *kobj,
 
 	var_print(cache_readaheads);
 	var_print(cache_miss_collisions);
-	sysfs_hprint(bypassed,	var(sectors_bypassed) << 9);
+	sysfs_printf(bypassed,	"%hli", var(sectors_bypassed) << 9);
 #undef var
 	return 0;
 }

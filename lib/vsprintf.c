@@ -338,6 +338,7 @@ int num_to_str(char *buf, int size, unsigned long long num)
 #define LEFT	16		/* left justified */
 #define SMALL	32		/* use lowercase in hex (must be 32 == 0x20) */
 #define SPECIAL	64		/* prefix hex with "0x", octal with "0" */
+#define HUNITS	128		/* Human readable units, i.e. k/M/G/T */
 
 enum format_type {
 	FORMAT_TYPE_NONE, /* Just a string part */
@@ -377,6 +378,7 @@ char *number(char *buf, char *end, unsigned long long num,
 {
 	/* we are called with base 8, 10 or 16, only, thus don't need "G..."  */
 	static const char digits[16] = "0123456789ABCDEF"; /* "GHIJKLMNOPQRSTUVWXYZ"; */
+	static const char units[] = "?kMGTPEZY";
 
 	char tmp[66];
 	char sign;
@@ -431,7 +433,26 @@ char *number(char *buf, char *end, unsigned long long num,
 			num >>= shift;
 		} while (num);
 	} else { /* base 10 */
-		i = put_dec(tmp, num) - tmp;
+		if (spec.flags & HUNITS) {
+			int u, rem = 0;
+
+			for (u = 0; num >= 1024; u++) {
+				rem = num & ~(~0 << 10);
+				num >>= 10;
+			}
+
+			if (u) {
+				tmp[i++] = units[u];
+
+				if (num < 100) {
+					rem /= 100;
+					i = put_dec(tmp + i, rem) - tmp;
+					tmp[i++] = '.';
+				}
+			}
+		}
+
+		i = put_dec(tmp + i, num) - tmp;
 	}
 
 	/* printing 100 using %2d gives "100", not "00" */
@@ -1196,6 +1217,7 @@ int format_decode(const char *fmt, struct printf_spec *spec)
 		case ' ': spec->flags |= SPACE;   break;
 		case '#': spec->flags |= SPECIAL; break;
 		case '0': spec->flags |= ZEROPAD; break;
+		case 'h': spec->flags |= HUNITS;  break;
 		default:  found = false;
 		}
 

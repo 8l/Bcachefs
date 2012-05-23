@@ -107,7 +107,9 @@ EXPORT_SYMBOL_GPL(read_string_list);
 
 bool is_zero(const char *p, size_t n)
 {
-	for (size_t i = 0; i < n; i++)
+	size_t i;
+
+	for (i = 0; i < n; i++)
 		if (p[i])
 			return false;
 	return true;
@@ -160,8 +162,9 @@ void time_stats_update(struct time_stats *stats, uint64_t start_time)
 			ewma_add(stats->average_frequency, last, 8, 8);
 		else
 			stats->average_frequency  = last << 8;
-	} else
+	} else {
 		stats->average_duration  = duration << 8;
+	}
 
 	stats->last = now ?: 1;
 }
@@ -178,6 +181,7 @@ static void check_bio(struct bio *bio)
 	unsigned i, size = 0;
 	struct bio_vec *bv;
 	struct request_queue *q = bdev_get_queue(bio->bi_bdev);
+
 	BUG_ON(!bio->bi_vcnt);
 	BUG_ON(!bio->bi_size);
 
@@ -217,8 +221,8 @@ void bio_map(struct bio *bio, void *base)
 	struct bio_vec *bv = bio->bi_inline_vecs;
 
 	BUG_ON(!bio->bi_size);
-	bio->bi_vcnt	= 0;
-	bio->bi_io_vec	= bv;
+	bio->bi_vcnt = 0;
+	bio->bi_io_vec = bv;
 
 	bv->bv_offset = base ? ((unsigned long) base) % PAGE_SIZE : 0;
 	goto start;
@@ -245,6 +249,7 @@ int bio_alloc_pages(struct bio *bio, gfp_t gfp)
 {
 	int i;
 	struct bio_vec *bv;
+
 	bio_for_each_segment(bv, bio, i) {
 		bv->bv_page = alloc_page(gfp);
 		if (!bv->bv_page) {
@@ -253,6 +258,7 @@ int bio_alloc_pages(struct bio *bio, gfp_t gfp)
 			return -ENOMEM;
 		}
 	}
+
 	return 0;
 }
 EXPORT_SYMBOL_GPL(bio_alloc_pages);

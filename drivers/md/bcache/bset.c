@@ -303,6 +303,8 @@ static unsigned inorder_prev(unsigned j, unsigned size)
  * a heap), it converts a node in the tree - referenced by array index - to the
  * index it would have if you did an inorder traversal.
  *
+ * Also tested for every j, size up to size somewhere around 6 million.
+ *
  * The binary tree starts at array index 1, not 0
  * extra is a function of size:
  *   extra = (size - rounddown_pow_of_two(size - 1)) << 1;

@@ -295,28 +295,21 @@ static struct request *elv_rqhash_find(struct request_queue *q, sector_t offset)
 	return NULL;
 }
 
+static int elv_rb_cmp(struct rb_node *l, struct rb_node *r)
+{
+	return clamp_t(int64_t,
+		       blk_rq_pos(rb_entry(l, struct request, rb_node)) -
+		       blk_rq_pos(rb_entry(r, struct request, rb_node)),
+		       -1, 1);
+}
+
 /*
  * RB-tree support functions for inserting/lookup/removal of requests
  * in a sorted RB tree.
  */
 void elv_rb_add(struct rb_root *root, struct request *rq)
 {
-	struct rb_node **p = &root->rb_node;
-	struct rb_node *parent = NULL;
-	struct request *__rq;
-
-	while (*p) {
-		parent = *p;
-		__rq = rb_entry(parent, struct request, rb_node);
-
-		if (blk_rq_pos(rq) < blk_rq_pos(__rq))
-			p = &(*p)->rb_left;
-		else if (blk_rq_pos(rq) >= blk_rq_pos(__rq))
-			p = &(*p)->rb_right;
-	}
-
-	rb_link_node(&rq->rb_node, parent, p);
-	rb_insert_color(&rq->rb_node, root);
+	rb_insert_allow_dup(root, &rq->rb_node, elv_rb_cmp);
 }
 EXPORT_SYMBOL(elv_rb_add);
 
@@ -330,21 +323,10 @@ EXPORT_SYMBOL(elv_rb_del);
 
 struct request *elv_rb_find(struct rb_root *root, sector_t sector)
 {
-	struct rb_node *n = root->rb_node;
-	struct request *rq;
+	struct request search = { .__sector = sector };
+	struct rb_node *r = _rb_search(root, &search.rb_node, elv_rb_cmp);
 
-	while (n) {
-		rq = rb_entry(n, struct request, rb_node);
-
-		if (sector < blk_rq_pos(rq))
-			n = n->rb_left;
-		else if (sector > blk_rq_pos(rq))
-			n = n->rb_right;
-		else
-			return rq;
-	}
-
-	return NULL;
+	return container_of_or_null(r, struct request, rb_node);
 }
 EXPORT_SYMBOL(elv_rb_find);
 

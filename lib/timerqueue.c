@@ -27,6 +27,14 @@
 #include <linux/rbtree.h>
 #include <linux/export.h>
 
+static int timerqueue_cmp(struct rb_node *l, struct rb_node *r)
+{
+	return clamp_t(int64_t,
+		       rb_entry(l, struct timerqueue_node, node)->expires.tv64 -
+		       rb_entry(r, struct timerqueue_node, node)->expires.tv64,
+		       -1, 1);
+}
+
 /**
  * timerqueue_add - Adds timer to timerqueue.
  *
@@ -38,23 +46,10 @@
  */
 void timerqueue_add(struct timerqueue_head *head, struct timerqueue_node *node)
 {
-	struct rb_node **p = &head->head.rb_node;
-	struct rb_node *parent = NULL;
-	struct timerqueue_node  *ptr;
-
 	/* Make sure we don't add nodes that are already added */
 	WARN_ON_ONCE(!RB_EMPTY_NODE(&node->node));
 
-	while (*p) {
-		parent = *p;
-		ptr = rb_entry(parent, struct timerqueue_node, node);
-		if (node->expires.tv64 < ptr->expires.tv64)
-			p = &(*p)->rb_left;
-		else
-			p = &(*p)->rb_right;
-	}
-	rb_link_node(&node->node, parent, p);
-	rb_insert_color(&node->node, &head->head);
+	rb_insert_allow_dup(&head->head, &node->node, timerqueue_cmp);
 
 	if (!head->next || node->expires.tv64 < head->next->expires.tv64)
 		head->next = node;

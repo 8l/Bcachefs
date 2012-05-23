@@ -106,6 +106,8 @@ int submit_bbio_split(struct bio *bio, struct cache_set *c,
 		SET_KEY_SIZE(&b->key, KEY_SIZE(k) - sectors_done);
 		SET_PTR_OFFSET(&b->key, 0, PTR_OFFSET(k, ptr) + sectors_done);
 
+		sectors_done += bio_sectors(n);
+
 		b->submit_time_us = local_clock_us();
 		generic_make_request(n);
 	} while (n != bio);

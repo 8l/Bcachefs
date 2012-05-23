@@ -86,8 +86,9 @@ SHOW(__cached_dev)
 #define var(stat)		(d->stat)
 
 	if (attr == &sysfs_cache_mode)
-		return sprint_string_list(buf, bcache_cache_modes + 1,
-					  BDEV_CACHE_MODE(&d->sb));
+		return snprint_string_list(buf, PAGE_SIZE,
+					   bcache_cache_modes + 1,
+					   BDEV_CACHE_MODE(&d->sb));
 
 	sysfs_printf(data_csum,		"%i", d->disk.data_csum);
 	var_printf(verify,		"%i");
@@ -638,8 +639,9 @@ SHOW(__cache)
 		    ((size_t) c->sb.nbuckets));
 
 	if (attr == &sysfs_cache_replacement_policy)
-		return sprint_string_list(buf, cache_replacement_policies,
-					  CACHE_REPLACEMENT(&c->sb));
+		return snprint_string_list(buf, PAGE_SIZE,
+					   cache_replacement_policies,
+					   CACHE_REPLACEMENT(&c->sb));
 
 	if (attr == &sysfs_priority_stats) {
 		int cmp(const void *l, const void *r)

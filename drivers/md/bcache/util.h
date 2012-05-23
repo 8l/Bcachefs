@@ -411,8 +411,8 @@ ssize_t hprint(char *buf, int64_t v);
 bool is_zero(const char *p, size_t n);
 int parse_uuid(const char *s, char *uuid);
 
-ssize_t sprint_string_list(char *buf, const char * const list[],
-			   size_t selected);
+ssize_t snprint_string_list(char *buf, size_t size, const char * const list[],
+			    size_t selected);
 
 ssize_t read_string_list(const char *buf, const char * const list[]);
 

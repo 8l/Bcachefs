@@ -90,18 +90,19 @@ ssize_t hprint(char *buf, int64_t v)
 }
 EXPORT_SYMBOL_GPL(hprint);
 
-ssize_t sprint_string_list(char *buf, const char * const list[],
-			   size_t selected)
+ssize_t snprint_string_list(char *buf, size_t size, const char * const list[],
+			    size_t selected)
 {
 	char *out = buf;
 
 	for (size_t i = 0; list[i]; i++)
-		out += sprintf(out, i == selected ? "[%s] " : "%s ", list[i]);
+		out += snprintf(out, buf + size - out,
+				i == selected ? "[%s] " : "%s ", list[i]);
 
 	out[-1] = '\n';
 	return out - buf;
 }
-EXPORT_SYMBOL_GPL(sprint_string_list);
+EXPORT_SYMBOL_GPL(snprint_string_list);
 
 ssize_t read_string_list(const char *buf, const char * const list[])
 {

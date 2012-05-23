@@ -60,8 +60,8 @@ static ssize_t cache_mode_read(struct cgroup *cgrp, struct cftype *cft,
 			char __user *buf, size_t nbytes, loff_t *ppos)
 {
 	char tmp[1024];
-	int len = sprint_string_list(tmp, bcache_cache_modes,
-				     cgroup_to_bcache(cgrp)->cache_mode + 1);
+	int len = snprint_string_list(tmp, PAGE_SIZE, bcache_cache_modes,
+				      cgroup_to_bcache(cgrp)->cache_mode + 1);
 
 	if (len < 0)
 		return len;

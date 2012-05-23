@@ -1149,6 +1149,7 @@ static void check_should_skip(struct cached_dev *d, struct search *s)
 	struct cache_set *c = s->op.d->c;
 	struct bio *bio = &s->bio.bio;
 
+	long rand;
 	int cutoff = bcache_get_congested(c);
 	unsigned mode = cache_mode(d, bio);
 
@@ -1214,7 +1215,8 @@ found:
 		add_sequential(s->task);
 	}
 
-	cutoff -= popcount_32(get_random_int());
+	rand = get_random_int();
+	cutoff -= bitmap_weight(&rand, BITS_PER_LONG);
 
 	if (cutoff <= (int) (max(s->task->sequential_io,
 				 s->task->sequential_io_avg) >> 9))

@@ -531,31 +531,3 @@ uint64_t crc64(const void *data, size_t len)
 	return crc ^ 0xffffffffffffffff;
 }
 EXPORT_SYMBOL(crc64);
-
-unsigned popcount_64(uint64_t x)
-{
-	static const uint64_t m1  = 0x5555555555555555LLU;
-	static const uint64_t m2  = 0x3333333333333333LLU;
-	static const uint64_t m4  = 0x0f0f0f0f0f0f0f0fLLU;
-	static const uint64_t h01 = 0x0101010101010101LLU;
-
-	x -= (x >> 1) & m1;
-	x = (x & m2) + ((x >> 2) & m2);
-	x = (x + (x >> 4)) & m4;
-	return (x * h01) >> 56;
-}
-EXPORT_SYMBOL(popcount_64);
-
-unsigned popcount_32(uint32_t x)
-{
-	static const uint32_t m1  = 0x55555555;
-	static const uint32_t m2  = 0x33333333;
-	static const uint32_t m4  = 0x0f0f0f0f;
-	static const uint32_t h01 = 0x01010101;
-
-	x -= (x >> 1) & m1;
-	x = (x & m2) + ((x >> 2) & m2);
-	x = (x + (x >> 4)) & m4;
-	return (x * h01) >> 24;
-}
-EXPORT_SYMBOL(popcount_32);

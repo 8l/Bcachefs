@@ -135,6 +135,34 @@ void rb_insert_color(struct rb_node *node, struct rb_root *root)
 }
 EXPORT_SYMBOL(rb_insert_color);
 
+int rb_insert(struct rb_root *root, struct rb_node *new, rb_cmp_t cmp)
+{
+	return _rb_insert(root, new, cmp);
+}
+EXPORT_SYMBOL(rb_insert);
+
+void rb_insert_allow_dup(struct rb_root *root, struct rb_node *new, rb_cmp_t cmp)
+{
+	_rb_insert_allow_dup(root, new, cmp);
+}
+EXPORT_SYMBOL(rb_insert_allow_dup);
+
+struct rb_node *rb_search(struct rb_root *root,
+			  struct rb_node *search,
+			  rb_cmp_t cmp)
+{
+	return _rb_search(root, search, cmp);
+}
+EXPORT_SYMBOL(rb_search);
+
+struct rb_node *rb_greater(struct rb_root *root,
+			   struct rb_node *search,
+			   rb_cmp_t cmp)
+{
+	return _rb_greater(root, search, cmp);
+}
+EXPORT_SYMBOL(rb_greater);
+
 static void __rb_erase_color(struct rb_node *node, struct rb_node *parent,
 			     struct rb_root *root)
 {

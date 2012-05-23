@@ -174,4 +174,114 @@ static inline void rb_link_node(struct rb_node * node, struct rb_node * parent,
 	*rb_link = node;
 }
 
+typedef int (rb_cmp_t) (struct rb_node *l, struct rb_node *r);
+
+static inline int _rb_insert(struct rb_root *root,
+			     struct rb_node *new,
+			     rb_cmp_t cmp)
+{
+	struct rb_node **n = &root->rb_node, *parent = NULL;
+	int res;
+
+	while (*n) {
+		parent = *n;
+		res = cmp(new, *n);
+		if (!res)
+			return -1;
+		n = res < 0
+			? &(*n)->rb_left
+			: &(*n)->rb_right;
+	}
+
+	rb_link_node(new, parent, n);
+	rb_insert_color(new, root);
+	return 0;
+}
+
+static inline void _rb_insert_allow_dup(struct rb_root *root,
+				       struct rb_node *new,
+				       rb_cmp_t cmp)
+{
+	struct rb_node **n = &root->rb_node, *parent = NULL;
+
+	while (*n) {
+		parent = *n;
+		n = cmp(new, *n) < 0
+			? &(*n)->rb_left
+			: &(*n)->rb_right;
+	}
+
+	rb_link_node(new, parent, n);
+	rb_insert_color(new, root);
+}
+
+static inline struct rb_node *_rb_search(struct rb_root *root,
+					 struct rb_node *search,
+					 rb_cmp_t cmp)
+{
+	struct rb_node *n = root->rb_node;
+
+	while (n) {
+		int res = cmp(search, n);
+		if (!res)
+			return n;
+
+		n = res < 0
+			? n->rb_left
+			: n->rb_right;
+	}
+
+	return NULL;
+}
+
+static inline struct rb_node *_rb_greater(struct rb_root *root,
+					  struct rb_node *search,
+					  rb_cmp_t cmp)
+{
+	struct rb_node *n = root->rb_node;
+	struct rb_node *ret = NULL;
+
+	while (n) {
+		int res = cmp(search, n);
+
+		if (res < 0) {
+			ret = n;
+			n = n->rb_left;
+		} else {
+			n = n->rb_right;
+		}
+	}
+
+	return ret;
+}
+
+int rb_insert(struct rb_root *root, struct rb_node *new, rb_cmp_t cmp);
+void rb_insert_allow_dup(struct rb_root *root,
+			 struct rb_node *new,
+			 rb_cmp_t cmp);
+struct rb_node *rb_search(struct rb_root *root,
+			  struct rb_node *search,
+			  rb_cmp_t cmp);
+struct rb_node *rb_greater(struct rb_root *root,
+			   struct rb_node *search,
+			   rb_cmp_t cmp);
+
+#define container_of_or_null(ptr, type, member)				\
+({									\
+	typeof(ptr) _ptr = ptr;						\
+	_ptr ? container_of(_ptr, type, member) : NULL;			\
+})
+
+#define RB_FIRST(root, type, member)					\
+	container_of_or_null(rb_first(root), type, member)
+
+#define RB_LAST(root, type, member)					\
+	container_of_or_null(rb_last(root), type, member)
+
+#define RB_NEXT(ptr, member)						\
+	container_of_or_null(rb_next(&(ptr)->member), typeof(*ptr), member)
+
+#define RB_PREV(ptr, member)						\
+	container_of_or_null(rb_prev(&(ptr)->member), typeof(*ptr), member)
+
 #endif	/* _LINUX_RBTREE_H */

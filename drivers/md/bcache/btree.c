@@ -1354,12 +1354,6 @@ static int btree_gc_root(struct btree *b, struct btree_op *op,
 
 size_t btree_gc_finish(struct cache_set *c)
 {
-	void mark_key(struct bkey *k)
-	{
-		for (unsigned i = 0; i < KEY_PTRS(k); i++)
-			PTR_BUCKET(c, k, i)->mark = GC_MARK_BTREE;
-	}
-
 	size_t available = 0;
 	struct bucket *b;
 	struct cache *ca;
@@ -1373,9 +1367,11 @@ size_t btree_gc_finish(struct cache_set *c)
 	c->min_prio	= initial_prio;
 
 	if (c->root)
-		mark_key(&c->root->key);
+		for (unsigned i = 0; i < KEY_PTRS(&c->root->key); i++)
+			PTR_BUCKET(c, &c->root->key, i)->mark = GC_MARK_BTREE;
 
-	mark_key(&c->uuid_bucket);
+	for (unsigned i = 0; i < KEY_PTRS(&c->uuid_bucket); i++)
+		PTR_BUCKET(c, &c->uuid_bucket, i)->mark = GC_MARK_BTREE;
 
 	for_each_cache(ca, c) {
 		ca->invalidate_needs_gc = 0;

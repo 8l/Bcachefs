@@ -1133,16 +1133,16 @@ int bcache_get_congested(struct cache_set *c)
 	return i <= 0 ? 1 : fract_exp_two(i, 6);
 }
 
+static void add_sequential(struct task_struct *t)
+{
+	ewma_add(t->sequential_io_avg,
+		 t->sequential_io, 8, 0);
+
+	t->sequential_io = 0;
+}
+
 static void check_should_skip(struct cached_dev *d, struct search *s)
 {
-	void add_sequential(struct task_struct *t)
-	{
-		ewma_add(t->sequential_io_avg,
-			 t->sequential_io, 8, 0);
-
-		t->sequential_io = 0;
-	}
-
 	struct hlist_head *iohash(uint64_t k)
 	{ return &d->io_hash[hash_64(k, RECENT_IO_BITS)]; }
 

@@ -981,6 +981,12 @@ static void __btree_sort(struct btree *b, struct btree_iter *iter,
 		btree_verify(b, out);
 
 	if (!start && order == b->page_order) {
+		/*
+		 * Our temporary buffer is the same size as the btree node's
+		 * buffer, we can just swap buffers instead of doing a big
+		 * memcpy()
+		 */
+
 		out->magic	= bset_magic(b->c);
 		out->seq	= b->sets[0].data->seq;
 		out->version	= b->sets[0].data->version;

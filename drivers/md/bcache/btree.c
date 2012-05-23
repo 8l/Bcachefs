@@ -224,13 +224,7 @@ void btree_read_done(struct closure *cl)
 
 	if (b->written < btree_blocks(b))
 		bset_init_next(b);
-
-	if (0) {
-err:		set_btree_node_io_error(b);
-		cache_set_error(b->c, "%s at bucket %lu, block %zu, %u keys",
-				err, PTR_BUCKET_NR(b->c, &b->key, 0),
-				index(i, b), i->keys);
-	}
+out:
 
 	mutex_unlock(&b->c->fill_lock);
 
@@ -242,6 +236,12 @@ err:		set_btree_node_io_error(b);
 	set_btree_node_read_done(b);
 
 	closure_return(cl);
+err:
+	set_btree_node_io_error(b);
+	cache_set_error(b->c, "%s at bucket %lu, block %zu, %u keys",
+			err, PTR_BUCKET_NR(b->c, &b->key, 0),
+			index(i, b), i->keys);
+	goto out;
 }
 
 static void btree_read_resubmit(struct closure *cl)
@@ -793,11 +793,22 @@ out:
 	b->nsets	= 0;
 	for (int i = 0; i < MAX_BSETS; i++)
 		b->sets[i].size = 0;
+	/*
+	 * Second loop starts at 1 because b->sets[0]->data is the memory we
+	 * allocated
+	 */
 	for (int i = 1; i < MAX_BSETS; i++)
 		b->sets[i].data = NULL;
 
 	return b;
 err:
+	/*
+	 * Trying to free up some memory - i.e. reuse some btree nodes - may
+	 * require initiating IO to flush the dirty part of the node. If we're
+	 * running under generic_make_request(), that IO will never finish and
+	 * we would deadlock. Returning -EAGAIN causes the cache lookup code to
+	 * punt to workqueue and retry.
+	 */
 	if (current->bio_list)
 		return ERR_PTR(-EAGAIN);
 

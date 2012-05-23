@@ -35,8 +35,11 @@ struct bkey {
 	uint64_t	ptr[];
 };
 
+/* Enough for a key with 6 pointers */
+#define BKEY_PAD		8
+
 #define BKEY_PADDED(key)					\
-	union { struct bkey key; uint64_t key ## _pad[8]; }
+	union { struct bkey key; uint64_t key ## _pad[BKEY_PAD]; }
 
 /* Version 1: Backing device
  * Version 2: Seed pointer into btree node checksum
@@ -442,6 +445,18 @@ struct cache_set {
 	/*
 	 * Lists of struct btrees; lru is the list for structs that have memory
 	 * allocated for actual btree node, freed is for structs that do not.
+	 *
+	 * We never free a struct btree, except on shutdown - we just put it on
+	 * the btree_cache_freed list and reuse it later. This simplifies the
+	 * code, and it doesn't cost us much memory as the memory usage is
+	 * dominated by buffers that hold the actual btree node data and those
+	 * can be freed - and the number of struct btrees allocated is
+	 * effectively bounded.
+	 *
+	 * btree_cache_freeable effectively is a small cache - we use it because
+	 * high order page allocations can be rather expensive, and it's quite
+	 * common to delete and allocate btree nodes in quick succession. It
+	 * should never grow past ~2-3 nodes in practice.
 	 */
 	struct list_head	btree_cache;
 	struct list_head	btree_cache_freeable;
@@ -586,6 +601,10 @@ struct bbio {
 	union {
 		struct bkey	key;
 		uint64_t	_pad[3];
+		/*
+		 * We only need pad = 3 here because we only ever carry around a
+		 * single pointer - i.e. the pointer we're doing io to/from.
+		 */
 	};
 	struct bio		bio;
 };

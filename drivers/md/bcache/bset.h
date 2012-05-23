@@ -188,13 +188,28 @@ struct bkey_float {
 	unsigned	mantissa:BKEY_MANTISSA_BITS;
 } __packed;
 
+/*
+ * BSET_CACHELINE was originally intended to match the hardware cacheline size -
+ * it used to be 64, but I realized the lookup code would touch slightly less
+ * memory if it was 128.
+ *
+ * It definites the number of bytes (in struct bset) per struct bkey_float in
+ * the auxiliar search tree - when we're done searching the bset_float tree we
+ * have this many bytes left that we do a linear search over.
+ *
+ * Since (after level 5) every level of the bset_tree is on a new cacheline,
+ * we're touching one fewer cacheline in the bset tree in exchange for one more
+ * cacheline in the linear search - but the linear search might stop before it
+ * gets to the second cacheline.
+ */
+
 #define BSET_CACHELINE		128
 #define BSET_CACHELINE_BITS	ilog2(BSET_CACHELINE)
 
 #define bset_tree_space(b)	(btree_data_space(b) >> BSET_CACHELINE_BITS)
 
 #define bset_tree_bytes(b)	(bset_tree_space(b) * sizeof(struct bkey_float))
-#define bset_prev_bytes(b)	(bset_tree_bytes(b) >> 2)
+#define bset_prev_bytes(b)	(bset_tree_space(b) * sizeof(uint8_t))
 
 void bset_init_next(struct btree *);
 
@@ -203,8 +218,12 @@ void bset_fix_lookup_table(struct btree *, struct bkey *);
 
 struct bkey *__bset_search(struct btree *, struct bset_tree *,
 			   const struct bkey *);
-#define bset_search(b, t, search)				\
-	((search) ? __bset_search(b, t, search) : (t)->data->start)
+
+static inline struct bkey *bset_search(struct btree *b, struct bset_tree *t,
+				       const struct bkey *search)
+{
+	return search ? __bset_search(b, t, search) : t->data->start;
+}
 
 bool bkey_try_merge(struct btree *, struct bkey *, struct bkey *);
 void btree_sort_lazy(struct btree *);

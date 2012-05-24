@@ -74,7 +74,7 @@
  *
  * For a closure to wait on an arbitrary event, we need to introduce waitlists:
  *
- * closure_list_t list;
+ * struct closure_waitlist list;
  * closure_wait_event(list, cl, condition);
  * closure_wake_up(wait_list);
  *
@@ -175,7 +175,83 @@
 struct closure;
 typedef void (closure_fn) (struct closure *);
 
-typedef struct llist_head	closure_list_t;
+struct closure_waitlist {
+	struct llist_head	list;
+};
+
+enum closure_type {
+	TYPE_closure				= 0,
+	TYPE_closure_with_waitlist		= 1,
+	TYPE_closure_with_timer			= 2,
+	TYPE_closure_with_waitlist_and_timer	= 3,
+	MAX_CLOSURE_TYPE			= 3,
+};
+
+enum closure_state_bits {
+	CLOSURE_REMAINING_END	= 20,
+	CLOSURE_BLOCKING_GUARD	= 20,
+	CLOSURE_BLOCKING_BIT	= 21,
+	CLOSURE_WAITING_GUARD	= 22,
+	CLOSURE_WAITING_BIT	= 23,
+	CLOSURE_SLEEPING_GUARD	= 24,
+	CLOSURE_SLEEPING_BIT	= 25,
+	CLOSURE_TIMER_GUARD	= 26,
+	CLOSURE_TIMER_BIT	= 27,
+	CLOSURE_RUNNING_GUARD	= 28,
+	CLOSURE_RUNNING_BIT	= 29,
+	CLOSURE_STACK_GUARD	= 30,
+	CLOSURE_STACK_BIT	= 31,
+};
+
+enum closure_state {
+	/*
+	 * CLOSURE_BLOCKING: Causes closure_wait_event() to block, instead of
+	 * waiting asynchronously
+	 *
+	 * CLOSURE_WAITING: Set iff the closure is on a waitlist. Must be set by
+	 * the thread that owns the closure, and cleared by the thread that's
+	 * waking up the closure.
+	 *
+	 * CLOSURE_SLEEPING: Must be set before a thread uses a closure to sleep
+	 * - indicates that cl->task is valid and closure_put() may wake it up.
+	 * Only set or cleared by the thread that owns the closure.
+	 *
+	 * CLOSURE_TIMER: Analagous to CLOSURE_WAITING, indicates that a closure
+	 * has an outstanding timer. Must be set by the thread that owns the
+	 * closure, and cleared by the timer function when the timer goes off.
+	 *
+	 * The rest are for debugging and don't affect behaviour:
+	 *
+	 * CLOSURE_RUNNING: Set when a closure is running (i.e. by
+	 * closure_init() and when closure_put() runs then next function), and
+	 * must be cleared before remaining hits 0. Primarily to help guard
+	 * against incorrect usage and accidentally transferring references.
+	 * continue_at() and closure_return() clear it for you, if you're doing
+	 * something unusual you can use closure_set_dead() which also helps
+	 * annotate where references are being transferred.
+	 *
+	 * CLOSURE_STACK: Sanity check - remaining should never hit 0 on a
+	 * closure with this flag set
+	 */
+
+	CLOSURE_BLOCKING	= (1 << CLOSURE_BLOCKING_BIT),
+	CLOSURE_WAITING		= (1 << CLOSURE_WAITING_BIT),
+	CLOSURE_SLEEPING	= (1 << CLOSURE_SLEEPING_BIT),
+	CLOSURE_TIMER		= (1 << CLOSURE_TIMER_BIT),
+	CLOSURE_RUNNING		= (1 << CLOSURE_RUNNING_BIT),
+	CLOSURE_STACK		= (1 << CLOSURE_STACK_BIT),
+};
+
+#define CLOSURE_GUARD_MASK					\
+	((1 << CLOSURE_BLOCKING_GUARD)|				\
+	 (1 << CLOSURE_WAITING_GUARD)|				\
+	 (1 << CLOSURE_SLEEPING_GUARD)|				\
+	 (1 << CLOSURE_TIMER_GUARD)|				\
+	 (1 << CLOSURE_RUNNING_GUARD)|				\
+	 (1 << CLOSURE_STACK_GUARD))
+
+#define CLOSURE_REMAINING_MASK		((1 << CLOSURE_REMAINING_END) - 1)
+#define CLOSURE_REMAINING_INITIALIZER	(1|CLOSURE_RUNNING)
 
 struct closure {
 	union {
@@ -190,54 +266,9 @@ struct closure {
 
 	struct closure		*parent;
 
-#define CLOSURE_REMAINING_MASK	(~(~0 << 20))
-#define CLOSURE_GUARD_MASK					\
-	((1 << 20)|(1 << 22)|(1 << 24)|(1 << 26)|(1 << 28)|(1 << 30))
-
-	/*
-	 * CLOSURE_RUNNING: Set when a closure is running (i.e. by
-	 * closure_init() and when closure_put() runs then next function), and
-	 * must be cleared before remaining hits 0. Primarily to help guard
-	 * against incorrect usage and accidently transferring references.
-	 * continue_at() and closure_return() clear it for you, if you're doing
-	 * something unusual you can use closure_set_dead() which also helps
-	 * annotate where references are being transferred.
-	 *
-	 * CLOSURE_BLOCKING: Causes closure_wait_event() to block, instead of
-	 * waiting asynchronously
-	 *
-	 * CLOSURE_STACK: Sanity check - remaining should never hit 0 on a
-	 * closure with this flag set
-	 *
-	 * CLOSURE_WAITING: Set iff the closure is on a waitlist. Must be set by
-	 * the thread that owns the closure, and cleared by the thread that's
-	 * waking up the closure.
-	 *
-	 * CLOSURE_SLEEPING: Must be set before a thread uses a closure to sleep
-	 * - indicates that cl->task is valid and closure_put() may wake it up.
-	 * Only set or cleared by the thread that owns the closure.
-	 *
-	 * CLOSURE_TIMER: Analagous to CLOSURE_WAITING, indicates that a closure
-	 * has an outstanding timer. Must be set by the thread that owns the
-	 * closure, and cleared by the timer function when the timer goes off.
-	 */
-
-#define	CLOSURE_RUNNING		(1 << 21)
-#define	CLOSURE_BLOCKING	(1 << 23)
-#define CLOSURE_STACK		(1 << 25)
-#define	CLOSURE_WAITING		(1 << 27)
-#define	CLOSURE_SLEEPING	(1 << 29)
-#define	CLOSURE_TIMER		(1 << 31)
 	atomic_t		remaining;
 
-#define CLOSURE_REMAINING_INITIALIZER (1|CLOSURE_RUNNING)
-
-#define TYPE_closure			0U
-#define TYPE_closure_with_waitlist	1U
-#define TYPE_closure_with_timer		2U
-#define TYPE_closure_with_waitlist_and_timer 3U
-#define MAX_CLOSURE_TYPE		3U
-	unsigned		type;
+	enum closure_type	type;
 
 #ifdef CONFIG_DEBUG_CLOSURES
 #define CLOSURE_MAGIC_DEAD	0xc054dead
@@ -251,46 +282,46 @@ struct closure {
 };
 
 struct closure_with_waitlist {
-	struct closure	cl;
-	closure_list_t	wait;
+	struct closure		cl;
+	struct closure_waitlist	wait;
 };
 
 struct closure_with_timer {
-	struct closure	cl;
-	struct timer_list timer;
+	struct closure		cl;
+	struct timer_list	timer;
 };
 
 struct closure_with_waitlist_and_timer {
-	struct closure	cl;
-	closure_list_t	wait;
-	struct timer_list timer;
+	struct closure		cl;
+	struct closure_waitlist	wait;
+	struct timer_list	timer;
 };
 
 extern unsigned invalid_closure_type(void);
 
-#define __CL_TYPE(cl, _t)						\
+#define __CLOSURE_TYPE(cl, _t)						\
 	  __builtin_types_compatible_p(typeof(cl), struct _t)		\
 		? TYPE_ ## _t :						\
 
 #define __closure_type(cl)						\
 (									\
-	__CL_TYPE(cl, closure)						\
-	__CL_TYPE(cl, closure_with_waitlist)				\
-	__CL_TYPE(cl, closure_with_timer)				\
-	__CL_TYPE(cl, closure_with_waitlist_and_timer)			\
+	__CLOSURE_TYPE(cl, closure)					\
+	__CLOSURE_TYPE(cl, closure_with_waitlist)			\
+	__CLOSURE_TYPE(cl, closure_with_timer)				\
+	__CLOSURE_TYPE(cl, closure_with_waitlist_and_timer)		\
 	invalid_closure_type()						\
 )
 
 void closure_sub(struct closure *cl, int v);
 void closure_put(struct closure *cl);
 void closure_queue(struct closure *cl);
-void __closure_wake_up(closure_list_t *list);
-bool closure_wait(closure_list_t *list, struct closure *cl);
+void __closure_wake_up(struct closure_waitlist *list);
+bool closure_wait(struct closure_waitlist *list, struct closure *cl);
 void closure_sync(struct closure *cl);
 
 bool closure_trylock(struct closure *cl, struct closure *parent);
 void __closure_lock(struct closure *cl, struct closure *parent,
-		    closure_list_t *wait_list);
+		    struct closure_waitlist *wait_list);
 
 void do_closure_timer_init(struct closure *cl);
 bool __closure_sleep(struct closure *cl, unsigned long delay,
@@ -356,11 +387,10 @@ static inline void do_closure_init(struct closure *cl, struct closure *parent,
 	case TYPE_closure_with_timer:
 	case TYPE_closure_with_waitlist_and_timer:
 		do_closure_timer_init(cl);
+	default:
+		break;
 	}
 
-#if defined(CONFIG_LOCKDEP) || defined(CONFIG_DEBUG_OBJECTS_WORK)
-	INIT_WORK(&cl->work, NULL);
-#endif
 	cl->parent = parent;
 	if (parent)
 		closure_get(parent);
@@ -370,6 +400,8 @@ static inline void do_closure_init(struct closure *cl, struct closure *parent,
 		atomic_set(&cl->remaining, CLOSURE_REMAINING_INITIALIZER);
 	} else
 		atomic_set(&cl->remaining, -1);
+
+	closure_set_ip(cl);
 }
 
 /*
@@ -383,11 +415,10 @@ static inline void do_closure_init(struct closure *cl, struct closure *parent,
 	(struct closure *) cl;					\
 })
 
-#define closure_init_type(cl, parent, running, memset)		\
+#define closure_init_type(cl, parent, running)			\
 do {								\
 	struct closure *_cl = __to_internal_closure(cl);	\
 	_cl->type = __closure_type(*(cl));			\
-	closure_set_ip(_cl);					\
 	do_closure_init(_cl, parent, running);			\
 } while (0)
 
@@ -397,7 +428,7 @@ do {								\
  * May be used instead of closure_init() when memory has already been zeroed.
  */
 #define __closure_init(cl, parent)				\
-	closure_init_type(cl, parent, true, false)
+	closure_init_type(cl, parent, true)
 
 /**
  * closure_init() - Initialize a closure, setting the refcount to 1
@@ -406,7 +437,10 @@ do {								\
  *		lifetime; may be NULL.
  */
 #define closure_init(cl, parent)				\
-	closure_init_type(cl, parent, true, true)
+do {								\
+	memset((cl), 0, sizeof(*(cl)));				\
+	__closure_init(cl, parent);				\
+} while (0)
 
 static inline void closure_init_stack(struct closure *cl)
 {
@@ -423,7 +457,10 @@ static inline void closure_init_stack(struct closure *cl)
  * until after a closure_lock() or closure_trylock().
  */
 #define closure_init_unlocked(cl)				\
-	closure_init_type(cl, NULL, false, true)
+do {								\
+	memset((cl), 0, sizeof(*(cl)));				\
+	closure_init_type(cl, NULL, false);			\
+} while (0)
 
 /**
  * closure_lock() - lock and initialize a closure.
@@ -513,14 +550,14 @@ static inline void clear_closure_blocking(struct closure *cl)
 /**
  * closure_wake_up() - wake up all closures on a wait list.
  */
-static inline void closure_wake_up(closure_list_t *list)
+static inline void closure_wake_up(struct closure_waitlist *list)
 {
 	smp_mb();
 	__closure_wake_up(list);
 }
 
 /*
- * Wait on an event, synchronously or asynchronously - analagous to wait_event()
+ * Wait on an event, synchronously or asynchronously - analogous to wait_event()
  * but for closures.
  *
  * The loop is oddly structured so as to avoid a race; we must check the
@@ -542,23 +579,30 @@ static inline void closure_wake_up(closure_list_t *list)
  */
 #define __closure_wait_event(list, cl, condition, _block)		\
 ({									\
-	__label__ out;							\
 	bool block = _block;						\
 	typeof(condition) ret;						\
 									\
-	while (!(ret = (condition))) {					\
+	while (1) {							\
+		ret = (condition);					\
+		if (ret) {						\
+			__closure_wake_up(list);			\
+			if (block)					\
+				closure_sync(cl);			\
+									\
+			break;						\
+		}							\
+									\
 		if (block)						\
 			__closure_start_sleep(cl);			\
+									\
 		if (!closure_wait(list, cl)) {				\
 			if (!block)					\
-				goto out;				\
+				break;					\
+									\
 			schedule();					\
 		}							\
 	}								\
-	__closure_wake_up(list);					\
-	if (block)							\
-		closure_sync(cl);					\
-out:									\
+									\
 	ret;								\
 })
 

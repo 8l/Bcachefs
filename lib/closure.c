@@ -13,27 +13,25 @@ void closure_queue(struct closure *cl)
 {
 	struct workqueue_struct *wq = cl->wq;
 	if (wq) {
-		cl->work.data = (atomic_long_t) WORK_DATA_INIT();
-		INIT_LIST_HEAD(&cl->work.entry);
+		INIT_WORK(&cl->work, cl->work.func);
 		BUG_ON(!queue_work(wq, &cl->work));
 	} else
 		cl->fn(cl);
 }
 EXPORT_SYMBOL_GPL(closure_queue);
 
-static void closure_wake_up_after_xchg(struct llist_node *);
-
 #define CL_FIELD(type, field)					\
 	case TYPE_ ## type:					\
 	return &container_of(cl, struct type, cl)->field
 
-static closure_list_t *closure_waitlist(struct closure *cl)
+static struct closure_waitlist *closure_waitlist(struct closure *cl)
 {
 	switch (cl->type) {
 		CL_FIELD(closure_with_waitlist, wait);
 		CL_FIELD(closure_with_waitlist_and_timer, wait);
+	default:
+		return NULL;
 	}
-	return NULL;
 }
 
 static struct timer_list *closure_timer(struct closure *cl)
@@ -41,27 +39,24 @@ static struct timer_list *closure_timer(struct closure *cl)
 	switch (cl->type) {
 		CL_FIELD(closure_with_timer, timer);
 		CL_FIELD(closure_with_waitlist_and_timer, timer);
+	default:
+		return NULL;
 	}
-	return NULL;
 }
 
 static void closure_put_after_sub(struct closure *cl, int r)
 {
+	int rem = r & CLOSURE_REMAINING_MASK;
+
 	BUG_ON(r & CLOSURE_GUARD_MASK);
 	/* CLOSURE_BLOCK is the only flag that's allowed when r hits 0 */
-	BUG_ON((r & CLOSURE_REMAINING_MASK) == 0 &&
-	       (r & ~CLOSURE_BLOCKING));
+	BUG_ON(!rem && (r & ~CLOSURE_BLOCKING));
 
 	/* Must deliver precisely one wakeup */
-	if ((r & CLOSURE_REMAINING_MASK) == 1 &&
-	    (r & CLOSURE_SLEEPING)) {
-		smp_mb__after_atomic_dec();
+	if (rem == 1 && (r & CLOSURE_SLEEPING))
 		wake_up_process(cl->task);
-	}
 
-	if ((r & CLOSURE_REMAINING_MASK) == 0) {
-		smp_mb__after_atomic_dec();
-
+	if (!rem) {
 		if (cl->fn) {
 			/* CLOSURE_BLOCKING might be set - clear it */
 			atomic_set(&cl->remaining,
@@ -69,12 +64,10 @@ static void closure_put_after_sub(struct closure *cl, int r)
 			closure_queue(cl);
 		} else {
 			struct closure *parent = cl->parent;
-			closure_list_t *wait = closure_waitlist(cl);
+			struct closure_waitlist *wait = closure_waitlist(cl);
 
 			closure_debug_destroy(cl);
 
-			smp_wmb();
-			/* mb between last use of closure and unlocking it */
 			atomic_set(&cl->remaining, -1);
 
 			if (wait)
@@ -106,15 +99,15 @@ static void set_waiting(struct closure *cl, unsigned long f)
 #endif
 }
 
-/*
- * Broken up because closure_put() has to do the xchg() and grab the wait list
- * before unlocking the closure, but the wakeup has to come after unlocking the
- * closure.
- */
-static void closure_wake_up_after_xchg(struct llist_node *list)
+void __closure_wake_up(struct closure_waitlist *wait_list)
 {
+	struct llist_node *list;
 	struct closure *cl;
 	struct llist_node *reverse = NULL;
+
+	list = llist_del_all(&wait_list->list);
+
+	/* We first reverse the list to preserve FIFO ordering and fairness */
 
 	while (list) {
 		struct llist_node *t = list;
@@ -124,6 +117,8 @@ static void closure_wake_up_after_xchg(struct llist_node *list)
 		reverse = t;
 	}
 
+	/* Then do the wakeups */
+
 	while (reverse) {
 		cl = container_of(reverse, struct closure, list);
 		reverse = llist_next(reverse);
@@ -132,21 +127,16 @@ static void closure_wake_up_after_xchg(struct llist_node *list)
 		closure_sub(cl, CLOSURE_WAITING + 1);
 	}
 }
-
-void __closure_wake_up(closure_list_t *list)
-{
-	closure_wake_up_after_xchg(llist_del_all(list));
-}
 EXPORT_SYMBOL_GPL(__closure_wake_up);
 
-bool closure_wait(closure_list_t *list, struct closure *cl)
+bool closure_wait(struct closure_waitlist *list, struct closure *cl)
 {
 	if (atomic_read(&cl->remaining) & CLOSURE_WAITING)
 		return false;
 
 	set_waiting(cl, _RET_IP_);
 	atomic_add(CLOSURE_WAITING + 1, &cl->remaining);
-	llist_add(&cl->list, list);
+	llist_add(&cl->list, &list->list);
 
 	return true;
 }
@@ -200,7 +190,7 @@ bool closure_trylock(struct closure *cl, struct closure *parent)
 EXPORT_SYMBOL_GPL(closure_trylock);
 
 void __closure_lock(struct closure *cl, struct closure *parent,
-		    closure_list_t *wait_list)
+		    struct closure_waitlist *wait_list)
 {
 	struct closure wait;
 	closure_init_stack(&wait);
@@ -308,23 +298,14 @@ static int debug_seq_show(struct seq_file *f, void *data)
 			   cl, (void *) cl->ip, cl->fn, cl->parent,
 			   r & CLOSURE_REMAINING_MASK);
 
-		if (test_bit(WORK_STRUCT_PENDING, work_data_bits(&cl->work)))
-			seq_printf(f, "Q");
-
-		if (r & CLOSURE_RUNNING)
-			seq_printf(f, "R");
-
-		if (r & CLOSURE_BLOCKING)
-			seq_printf(f, "B");
-
-		if (r & CLOSURE_STACK)
-			seq_printf(f, "S");
-
-		if (r & CLOSURE_SLEEPING)
-			seq_printf(f, "Sl");
-
-		if (r & CLOSURE_TIMER)
-			seq_printf(f, "T");
+		seq_printf(f, "%s%s%s%s%s%s\n",
+			   test_bit(WORK_STRUCT_PENDING,
+				    work_data_bits(&cl->work)) ? "Q" : "",
+			   r & CLOSURE_RUNNING	? "R" : "",
+			   r & CLOSURE_BLOCKING	? "B" : "",
+			   r & CLOSURE_STACK	? "S" : "",
+			   r & CLOSURE_SLEEPING	? "Sl" : "",
+			   r & CLOSURE_TIMER	? "T" : "");
 
 		if (r & CLOSURE_WAITING)
 			seq_printf(f, " W %pF\n",

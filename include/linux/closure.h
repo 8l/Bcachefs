@@ -180,11 +180,11 @@ struct closure_waitlist {
 };
 
 enum closure_type {
-	TYPE_closure				= 0,
-	TYPE_closure_with_waitlist		= 1,
-	TYPE_closure_with_timer			= 2,
-	TYPE_closure_with_waitlist_and_timer	= 3,
-	MAX_CLOSURE_TYPE			= 3,
+	CLOSURE_TYPE_closure				= 0,
+	CLOSURE_TYPE_closure_with_waitlist		= 1,
+	CLOSURE_TYPE_closure_with_timer			= 2,
+	CLOSURE_TYPE_closure_with_waitlist_and_timer	= 3,
+	CLOSURE_TYPE_MAX				= 3,
 };
 
 enum closure_state_bits {
@@ -301,7 +301,7 @@ extern unsigned invalid_closure_type(void);
 
 #define __CLOSURE_TYPE(cl, _t)						\
 	  __builtin_types_compatible_p(typeof(cl), struct _t)		\
-		? TYPE_ ## _t :						\
+		? CLOSURE_TYPE_ ## _t :					\
 
 #define __closure_type(cl)						\
 (									\
@@ -384,8 +384,8 @@ static inline void do_closure_init(struct closure *cl, struct closure *parent,
 				   bool running)
 {
 	switch (cl->type) {
-	case TYPE_closure_with_timer:
-	case TYPE_closure_with_waitlist_and_timer:
+	case CLOSURE_TYPE_closure_with_timer:
+	case CLOSURE_TYPE_closure_with_waitlist_and_timer:
 		do_closure_timer_init(cl);
 	default:
 		break;
@@ -411,7 +411,7 @@ static inline void do_closure_init(struct closure *cl, struct closure *parent,
  */
 #define __to_internal_closure(cl)				\
 ({								\
-	BUILD_BUG_ON(__closure_type(*cl) > MAX_CLOSURE_TYPE);	\
+	BUILD_BUG_ON(__closure_type(*cl) > CLOSURE_TYPE_MAX);	\
 	(struct closure *) cl;					\
 })
 

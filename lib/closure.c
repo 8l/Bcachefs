@@ -21,7 +21,7 @@ void closure_queue(struct closure *cl)
 EXPORT_SYMBOL_GPL(closure_queue);
 
 #define CL_FIELD(type, field)					\
-	case TYPE_ ## type:					\
+	case CLOSURE_TYPE_ ## type:				\
 	return &container_of(cl, struct type, cl)->field
 
 static struct closure_waitlist *closure_waitlist(struct closure *cl)

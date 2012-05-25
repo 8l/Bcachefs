@@ -20,15 +20,13 @@ void closure_queue(struct closure *cl)
 }
 EXPORT_SYMBOL_GPL(closure_queue);
 
-#define CL_FIELD(type, field)					\
-	case CLOSURE_TYPE_ ## type:				\
-	return &container_of(cl, struct type, cl)->field
-
 static struct closure_waitlist *closure_waitlist(struct closure *cl)
 {
 	switch (cl->type) {
-		CL_FIELD(closure_with_waitlist, wait);
-		CL_FIELD(closure_with_waitlist_and_timer, wait);
+	case CLOSURE_TYPE_closure_with_waitlist:
+		return &container_of(cl, struct closure_with_waitlist, cl)->wait;
+	case CLOSURE_TYPE_closure_with_waitlist_and_timer:
+		return &container_of(cl, struct closure_with_waitlist_and_timer, cl)->wait;
 	default:
 		return NULL;
 	}
@@ -37,8 +35,10 @@ static struct closure_waitlist *closure_waitlist(struct closure *cl)
 static struct timer_list *closure_timer(struct closure *cl)
 {
 	switch (cl->type) {
-		CL_FIELD(closure_with_timer, timer);
-		CL_FIELD(closure_with_waitlist_and_timer, timer);
+	case CLOSURE_TYPE_closure_with_timer:
+		return &container_of(cl, struct closure_with_timer, cl)->timer;
+	case CLOSURE_TYPE_closure_with_waitlist_and_timer:
+		return &container_of(cl, struct closure_with_waitlist_and_timer, cl)->timer;
 	default:
 		return NULL;
 	}

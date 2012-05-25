@@ -644,13 +644,13 @@ static inline void set_closure_fn(struct closure *cl, closure_fn *fn,
 	smp_mb__before_atomic_dec();
 }
 
-#define continue_at(_cl, _fn, _wq, ...)					\
+#define continue_at(_cl, _fn, _wq)					\
 do {									\
 	BUG_ON(!(_cl) || object_is_on_stack(_cl));			\
 	closure_set_ip(_cl);						\
 	set_closure_fn(_cl, _fn, _wq);					\
 	closure_sub(_cl, CLOSURE_RUNNING + 1);				\
-	return __VA_ARGS__;						\
+	return;								\
 } while (0)
 
 #define closure_return(_cl)	continue_at((_cl), NULL, NULL)

@@ -513,8 +513,10 @@ STORE(__cache_set)
 		bcache_queue_gc(c);
 
 	if (attr == &sysfs_prune_cache) {
-		unsigned long v = strtoul_or_return(buf);
-		c->shrink.shrink(&c->shrink, v, NULL);
+		struct shrink_control sc;
+		sc.gfp_mask = GFP_KERNEL;
+		sc.nr_to_scan = strtoul_or_return(buf);
+		c->shrink.shrink(&c->shrink, &sc);
 	}
 
 	sysfs_strtoul(congested_read_threshold_us,

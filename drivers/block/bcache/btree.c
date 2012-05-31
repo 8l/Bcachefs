@@ -538,6 +538,7 @@ static struct btree *mca_bucket_alloc(struct cache_set *c,
 		return NULL;
 
 	init_rwsem(&b->lock);
+	lockdep_set_novalidate_class(&b->lock);
 	INIT_LIST_HEAD(&b->list);
 	INIT_DELAYED_WORK(&b->work, btree_write_work);
 	b->c = c;
@@ -1116,10 +1117,7 @@ static struct btree *btree_gc_alloc(struct btree *b, struct bkey *k,
 		b->prio_blocked++;
 
 		btree_free(n, op);
-		__up_write(&n->lock);
-
-		b->lock.writer_task = NULL;
-		rwsem_release(&b->lock.dep_map, 1, _THIS_IP_);
+		up_write(&n->lock);
 	}
 
 	return b;
@@ -1219,7 +1217,7 @@ static void btree_gc_coalesce(struct btree *b, struct btree_op *op,
 	}
 
 	btree_free(r->b, op);
-	__up_write(&r->b->lock);
+	up_write(&r->b->lock);
 
 	pr_debug("coalesced %u nodes", nodes);
 
@@ -1245,7 +1243,7 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 			btree_write(r, true, NULL);
 		}
 
-		__up_write(&r->lock);
+		up_write(&r->lock);
 	}
 
 	int ret = 0, stale;
@@ -1260,16 +1258,6 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 			ret = PTR_ERR(r->b);
 			break;
 		}
-
-		/*
-		 * Fake out lockdep, because I'm a terrible person: it's just
-		 * not possible to express our lock ordering to lockdep, because
-		 * lockdep works at most in terms of a small fixed number of
-		 * subclasses, and we're just iterating through all of them in a
-		 * fixed order.
-		 */
-		r->b->lock.writer_task = NULL;
-		rwsem_release(&r->b->lock.dep_map, 1, _THIS_IP_);
 
 		r->keys	= 0;
 		stale = btree_gc_mark(r->b, &r->keys, gc);

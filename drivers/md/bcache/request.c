@@ -653,9 +653,6 @@ static void __do_bio_hook(struct search *s)
 	struct bio *bio = &s->bio.bio;
 	memcpy(bio, s->orig_bio, sizeof(struct bio));
 
-#ifdef CONFIG_DISKMON
-	bio->bi_flowid		= NULL;
-#endif
 	bio->bi_end_io		= request_endio;
 	bio->bi_private		= &s->cl;
 	bio->bi_destructor	= NULL;

@@ -63,6 +63,8 @@
  * in either lru or fifo order.
  */
 
+#define MAX_IN_FLIGHT_DISCARDS		8
+
 static void do_discard(struct cache *);
 
 /* Bucket heap / gen */
@@ -191,10 +193,12 @@ static void do_discard(struct cache *c)
 	struct request_queue *q = bdev_get_queue(c->bdev);
 	int s = q->limits.logical_block_size;
 
+	lockdep_assert_held(&c->set->bucket_lock);
+
 	while (c->discard &&
 	       !atomic_read(&c->set->closing) &&
 	       !list_empty(&c->discards) &&
-	       fifo_free(&c->free) >= 8) {
+	       fifo_free(&c->free) >= MAX_IN_FLIGHT_DISCARDS) {
 		struct discard *d = list_first_entry(&c->discards,
 						     struct discard, list);
 
@@ -244,7 +248,7 @@ void free_discards(struct cache *ca)
 
 int alloc_discards(struct cache *ca)
 {
-	for (int i = 0; i < 8; i++) {
+	for (int i = 0; i < MAX_IN_FLIGHT_DISCARDS; i++) {
 		struct discard *d = kzalloc(sizeof(*d), GFP_KERNEL);
 		if (!d)
 			return -ENOMEM;
@@ -443,13 +447,12 @@ void free_some_buckets(struct cache *c)
 	 * do we know that refcount is nonzero?
 	 */
 
-	do_discard(c);
-
-	while (!fifo_full(&c->free) &&
-	       (fifo_used(&c->free) <= 8 ||
-		!c->discard) &&
-	       (r = pop_freed(c)) != -1)
-		fifo_push(&c->free, r);
+	if (c->discard)
+		do_discard(c);
+	else
+		while (!fifo_full(&c->free) &&
+		       (r = pop_freed(c)) != -1)
+			fifo_push(&c->free, r);
 
 	while (c->prio_alloc != prio_buckets(c) &&
 	       fifo_pop(&c->free, r)) {

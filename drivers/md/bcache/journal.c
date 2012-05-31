@@ -258,9 +258,9 @@ void bcache_journal_mark(struct cache_set *c, struct list_head *list)
 				struct bucket *g = PTR_BUCKET(c, k, j);
 				atomic_inc(&g->pin);
 
-				if (g->prio == btree_prio &&
+				if (g->prio == BTREE_PRIO &&
 				    !ptr_stale(c, k, j))
-					g->prio = initial_prio;
+					g->prio = INITIAL_PRIO;
 			}
 
 			__btree_mark_key(c, 0, k);

@@ -136,13 +136,13 @@ bool ptr_bad(struct btree *b, const struct bkey *k)
 
 			if (b->level) {
 				if (KEY_DIRTY(k) ||
-				    g->prio != btree_prio ||
+				    g->prio != BTREE_PRIO ||
 				    (b->c->gc_mark_valid &&
 				     g->mark != GC_MARK_BTREE))
 					goto bug;
 
 			} else {
-				if (g->prio == btree_prio)
+				if (g->prio == BTREE_PRIO)
 					goto bug;
 
 				if (KEY_DIRTY(k) &&

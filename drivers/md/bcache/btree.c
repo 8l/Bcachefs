@@ -963,7 +963,7 @@ struct btree *bcache_btree_alloc(struct cache_set *c, int level,
 
 	mutex_lock(&c->bucket_lock);
 retry:
-	if (__pop_bucket_set(c, btree_prio, &k.key, 1, cl))
+	if (__pop_bucket_set(c, BTREE_PRIO, &k.key, 1, cl))
 		goto err;
 
 	SET_KEY_SIZE(&k.key, c->btree_pages * PAGE_SECTORS);
@@ -1364,7 +1364,7 @@ size_t btree_gc_finish(struct cache_set *c)
 	set_gc_sectors(c);
 	c->gc_mark_valid = 1;
 	c->need_gc	= 0;
-	c->min_prio	= initial_prio;
+	c->min_prio	= INITIAL_PRIO;
 
 	if (c->root)
 		for (unsigned i = 0; i < KEY_PTRS(&c->root->key); i++)
@@ -1532,9 +1532,9 @@ static int btree_check_recurse(struct btree *b, struct btree_op *op,
 				g->gen = PTR_GEN(k, i);
 
 				if (b->level)
-					g->prio = btree_prio;
-				else if (g->prio == btree_prio)
-					g->prio = initial_prio;
+					g->prio = BTREE_PRIO;
+				else if (g->prio == BTREE_PRIO)
+					g->prio = INITIAL_PRIO;
 			}
 		}
 
@@ -2112,7 +2112,7 @@ void bcache_btree_set_root(struct btree *b)
 	BUG_ON(!current_is_writer(&b->c->root->lock));
 
 	for (unsigned i = 0; i < KEY_PTRS(&b->key); i++)
-		BUG_ON(PTR_BUCKET(b->c, &b->key, i)->prio != btree_prio);
+		BUG_ON(PTR_BUCKET(b->c, &b->key, i)->prio != BTREE_PRIO);
 
 	mutex_lock(&b->c->bucket_lock);
 	list_del_init(&b->list);
@@ -2172,7 +2172,7 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 	/* XXX: figure out best pointer - for multiple cache devices */
 	ptr = 0;
 
-	PTR_BUCKET(b->c, k, ptr)->prio = initial_prio;
+	PTR_BUCKET(b->c, k, ptr)->prio = INITIAL_PRIO;
 
 	while (!op->lookup_done &&
 	       KEY_DEV(k) == s->op.d->id &&

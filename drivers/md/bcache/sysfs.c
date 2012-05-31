@@ -677,20 +677,20 @@ SHOW(__cache)
 		unused = c->sb.nbuckets - n;
 
 		while (cached < p + n &&
-		       *cached == btree_prio)
+		       *cached == BTREE_PRIO)
 			cached++;
 
 		btree = cached - p;
 		n -= btree;
 
 		for (i = 0; i < n; i++)
-			sum += initial_prio - cached[i];
+			sum += INITIAL_PRIO - cached[i];
 
 		if (n)
 			do_div(sum, n);
 
 		for (i = 0; i < nq; i++)
-			q[i] = initial_prio - cached[n * (i + 1) / (nq + 1)];
+			q[i] = INITIAL_PRIO - cached[n * (i + 1) / (nq + 1)];
 
 		vfree(p);
 

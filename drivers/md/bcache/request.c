@@ -386,7 +386,7 @@ found:
 			spin_unlock(&c->data_bucket_lock);
 			k = &alloc.key;
 
-			if (pop_bucket_set(c, initial_prio, k, 1, w))
+			if (pop_bucket_set(c, INITIAL_PRIO, k, 1, w))
 				return NULL;
 
 			goto again;

@@ -105,7 +105,7 @@ void rescale_priorities(struct cache_set *c, int sectors)
 	for_each_cache(ca, c)
 		for_each_bucket(b, ca)
 			if (b->prio &&
-			    b->prio != btree_prio &&
+			    b->prio != BTREE_PRIO &&
 			    !atomic_read(&b->pin)) {
 				b->prio--;
 				c->min_prio = min(c->min_prio, b->prio);
@@ -296,7 +296,7 @@ static bool can_invalidate_bucket(struct cache *c, struct bucket *b)
 static void invalidate_one_bucket(struct cache *c, struct bucket *b)
 {
 	inc_gen(c, b);
-	b->prio = initial_prio;
+	b->prio = INITIAL_PRIO;
 	atomic_inc(&b->pin);
 	fifo_push(&c->free_inc, b - c->buckets);
 }
@@ -496,7 +496,7 @@ static long pop_bucket(struct cache *c, uint16_t priority, struct closure *cl)
 again:
 	free_some_buckets(c);
 
-	if ((priority == btree_prio || fifo_used(&c->free) > 8) &&
+	if ((priority == BTREE_PRIO || fifo_used(&c->free) > 8) &&
 	    fifo_pop(&c->free, r)) {
 		struct bucket *b = c->buckets + r;
 #ifdef CONFIG_BCACHE_EDEBUG
@@ -516,7 +516,7 @@ again:
 		BUG_ON(atomic_read(&b->pin) != 1);
 
 		b->prio = priority;
-		b->mark = priority == btree_prio
+		b->mark = priority == BTREE_PRIO
 			? GC_MARK_BTREE
 			: c->sb.bucket_size;
 		return r;

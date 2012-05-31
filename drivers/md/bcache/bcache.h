@@ -638,8 +638,8 @@ static inline unsigned local_clock_us(void)
 
 #define MAX_BSETS		4
 
-#define btree_prio		USHRT_MAX
-#define initial_prio		32768
+#define BTREE_PRIO		USHRT_MAX
+#define INITIAL_PRIO		32768
 
 #define btree_bytes(c)		((c)->btree_pages * PAGE_SIZE)
 #define btree_blocks(b)							\

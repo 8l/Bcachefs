@@ -717,15 +717,41 @@ PTR_FIELD(PTR_GEN,		0,  8)
 #define PTR(gen, offset, dev)						\
 	((((uint64_t) dev) << 51) | ((uint64_t) offset) << 8 | gen)
 
-#define sector_to_bucket(c, s)	((long) ((s) >> (c)->bucket_bits))
-#define bucket_to_sector(c, b)	(((sector_t) (b)) << (c)->bucket_bits)
-#define bucket_remainder(c, b)	((b) & ((c)->sb.bucket_size - 1))
+static inline size_t sector_to_bucket(struct cache_set *c, sector_t s)
+{
+	return s >> c->bucket_bits;
+}
 
-#define PTR_CACHE(c, k, n)	((c)->cache[PTR_DEV(k, n)])
-#define PTR_BUCKET_NR(c, k, n)	sector_to_bucket(c, PTR_OFFSET(k, n))
+static inline sector_t bucket_to_sector(struct cache_set *c, size_t b)
+{
+	return ((sector_t) b) << c->bucket_bits;
+}
 
-#define PTR_BUCKET(c, k, n)						\
-	(PTR_CACHE(c, k, n)->buckets + PTR_BUCKET_NR(c, k, n))
+static inline sector_t bucket_remainder(struct cache_set *c, sector_t s)
+{
+	return s & (c->sb.bucket_size - 1);
+}
+
+static inline struct cache *PTR_CACHE(struct cache_set *c,
+				      const struct bkey *k,
+				      unsigned ptr)
+{
+	return c->cache[PTR_DEV(k, ptr)];
+}
+
+static inline size_t PTR_BUCKET_NR(struct cache_set *c,
+				   const struct bkey *k,
+				   unsigned ptr)
+{
+	return sector_to_bucket(c, PTR_OFFSET(k, ptr));
+}
+
+static inline struct bucket *PTR_BUCKET(struct cache_set *c,
+					const struct bkey *k,
+					unsigned ptr)
+{
+	return PTR_CACHE(c, k, ptr)->buckets + PTR_BUCKET_NR(c, k, ptr);
+}
 
 /* Btree key macros */
 

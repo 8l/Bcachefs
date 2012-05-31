@@ -606,18 +606,6 @@ void bcache_btree_insert_async(struct closure *cl)
 
 /* Common code for the make_request functions */
 
-static void __bio_complete(struct search *s)
-{
-	if (s->orig_bio) {
-		if (s->error)
-			clear_bit(BIO_UPTODATE, &s->orig_bio->bi_flags);
-
-		trace_bcache_request_end(&s->op, s->orig_bio);
-		bio_endio(s->orig_bio, s->error);
-		s->orig_bio = NULL;
-	}
-}
-
 static void request_endio(struct bio *bio, int error)
 {
 	struct closure *cl = bio->bi_private;
@@ -656,6 +644,18 @@ void cache_read_endio(struct bio *bio, int error)
 	bcache_endio(s->op.d->c, bio, error, "reading from cache");
 }
 
+static void bio_complete(struct search *s)
+{
+	if (s->orig_bio) {
+		if (s->error)
+			clear_bit(BIO_UPTODATE, &s->orig_bio->bi_flags);
+
+		trace_bcache_request_end(&s->op, s->orig_bio);
+		bio_endio(s->orig_bio, s->error);
+		s->orig_bio = NULL;
+	}
+}
+
 static void do_bio_hook(struct search *s)
 {
 	struct bio *bio = &s->bio.bio;
@@ -665,6 +665,21 @@ static void do_bio_hook(struct search *s)
 	bio->bi_private		= &s->cl;
 	bio->bi_destructor	= NULL;
 	atomic_set(&bio->bi_cnt, 3);
+}
+
+static void search_free(struct closure *cl)
+{
+	struct search *s = container_of(cl, struct search, cl);
+	bio_complete(s);
+
+	if (s->cache_bio)
+		bio_put(s->cache_bio);
+
+	if (s->unaligned_bvec)
+		mempool_free(s->bio.bio.bi_io_vec, s->op.d->unaligned_bvec);
+
+	closure_debug_destroy(cl);
+	mempool_free(s, s->op.d->c->search);
 }
 
 static struct search *search_alloc(struct bio *bio, struct bcache_device *d)
@@ -679,8 +694,8 @@ static struct search *search_alloc(struct bio *bio, struct bcache_device *d)
 	s->op.lock		= -1;
 	s->task			= current;
 	s->orig_bio		= bio;
-	s->write		= bio->bi_rw & REQ_WRITE;
-	s->op.flush_journal	= bio->bi_rw & REQ_FLUSH;
+	s->write		= (bio->bi_rw & REQ_WRITE) != 0;
+	s->op.flush_journal	= (bio->bi_rw & REQ_FLUSH) != 0;
 	s->recoverable		= 1;
 	do_bio_hook(s);
 
@@ -715,16 +730,7 @@ static void cached_dev_bio_complete(struct closure *cl)
 	struct search *s = container_of(cl, struct search, cl);
 	struct cached_dev *dc = container_of(s->op.d, struct cached_dev, disk);
 
-	if (s->cache_bio)
-		bio_put(s->cache_bio);
-
-	if (s->unaligned_bvec)
-		mempool_free(s->bio.bio.bi_io_vec, dc->disk.unaligned_bvec);
-
-	__bio_complete(s);
-
-	closure_debug_destroy(&s->cl);
-	mempool_free(s, dc->disk.c->search);
+	search_free(cl);
 	cached_dev_put(dc);
 }
 
@@ -851,7 +857,7 @@ static void request_read_done(struct closure *cl)
 	if (verify(d, &s->bio.bio) && s->recoverable)
 		data_verify(s);
 
-	__bio_complete(s);
+	bio_complete(s);
 
 	if (s->cache_bio && !atomic_read(&s->op.d->c->closing)) {
 		s->op.type = BTREE_REPLACE;
@@ -952,13 +958,18 @@ static void request_read(struct cached_dev *d, struct search *s)
 {
 	struct closure *cl = &s->cl;
 
-	check_should_skip(d, s);
+	/*
+	 * For the read we're going to issue - should figure out a better way to
+	 * do this
+	 */
+	closure_get(cl);
 
-	set_closure_fn(cl, request_read_done_bh, NULL);
-	closure_set_stopped(cl);
+	check_should_skip(d, s);
 
 	__closure_init(&s->op.cl, cl);
 	btree_read_async(&s->op.cl);
+
+	continue_at(cl, request_read_done_bh, NULL);
 }
 
 /* Process writes */
@@ -1343,30 +1354,6 @@ void cached_dev_request_init(struct cached_dev *d)
 
 /* Flash backed devices */
 
-static void flash_dev_bio_complete(struct closure *cl)
-{
-	struct search *s = container_of(cl, struct search, cl);
-	struct bcache_device *d = s->op.d;
-
-	__bio_complete(s);
-
-	if (s->cache_bio) {
-		int i;
-		struct bio_vec *bv;
-
-		if (!s->write)
-			__bio_for_each_segment(bv, s->cache_bio, i, 0)
-				__free_page(bv->bv_page);
-		bio_put(s->cache_bio);
-	}
-
-	if (s->unaligned_bvec)
-		mempool_free(s->bio.bio.bi_io_vec, d->unaligned_bvec);
-
-	closure_debug_destroy(&s->cl);
-	mempool_free(s, d->c->search);
-}
-
 static int flash_dev_cache_miss(struct btree *b, struct search *s,
 				struct bio *bio, unsigned sectors)
 {
@@ -1403,8 +1390,11 @@ static void flash_dev_read(struct search *s)
 {
 	struct closure *cl = &s->cl;
 
-	set_closure_fn(cl, flash_dev_bio_complete, NULL);
-	closure_set_stopped(cl);
+	/*
+	 * For the read we're going to issue - should figure out a better way to
+	 * do this
+	 */
+	closure_get(cl);
 
 	__closure_init(&s->op.cl, cl);
 	btree_read_async(&s->op.cl);
@@ -1415,21 +1405,12 @@ static void flash_dev_write(struct search *s)
 	struct closure *cl = &s->cl;
 	struct bio *bio = &s->bio.bio;
 
-	if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
-		s->cache_bio	= s->orig_bio;
-		s->skip		= true;
-
-		closure_get(cl);
-		bio_get(s->cache_bio);
-		bio_endio(bio, 0);
-	} else {
-		s->writeback	= true;
-		s->cache_bio	= bio;
-	}
+	s->skip		= (bio->bi_rw & (1 << BIO_RW_DISCARD)) != 0;
+	s->writeback	= true;
+	s->cache_bio	= bio;
 
 	__closure_init(&s->op.cl, cl);
 	bio_insert(&s->op.cl);
-	continue_at(cl, flash_dev_bio_complete, NULL);
 }
 
 static void flash_dev_req_nodata(struct search *s)
@@ -1444,8 +1425,6 @@ static void flash_dev_req_nodata(struct search *s)
 
 	if (s->op.flush_journal)
 		bcache_journal_meta(s->op.d->c, cl);
-
-	continue_at(cl, flash_dev_bio_complete, NULL);
 }
 
 static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
@@ -1459,6 +1438,8 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 	(!bio_has_data(bio)	? flash_dev_req_nodata :
 	 bio->bi_rw & REQ_WRITE ? flash_dev_write :
 				  flash_dev_read)(s);
+
+	continue_at(&s->cl, search_free, NULL);
 }
 
 static int flash_dev_ioctl(struct bcache_device *d, fmode_t mode,

@@ -72,11 +72,11 @@ uint8_t inc_gen(struct cache *c, struct bucket *b)
 	uint8_t ret = ++b->gen;
 
 	c->set->need_gc = max(c->set->need_gc, bucket_gc_gen(b));
-	BUG_ON(c->set->need_gc > 97);
+	WARN_ON_ONCE(c->set->need_gc > BUCKET_GC_GEN_MAX);
 
 	if (CACHE_SYNC(&c->set->sb)) {
 		c->need_save_prio = max(c->need_save_prio, bucket_disk_gen(b));
-		BUG_ON(c->need_save_prio > 96);
+		WARN_ON_ONCE(c->need_save_prio > BUCKET_DISK_GEN_MAX);
 	}
 
 	return ret;
@@ -259,6 +259,12 @@ int alloc_discards(struct cache *ca)
 
 /* Allocation */
 
+static inline bool can_inc_bucket_gen(struct bucket *b)
+{
+	return bucket_gc_gen(b) < BUCKET_GC_GEN_MAX &&
+		bucket_disk_gen(b) < BUCKET_DISK_GEN_MAX;
+}
+
 bool bucket_add_unused(struct cache *c, struct bucket *b)
 {
 	if (c->prio_alloc == prio_buckets(c) &&
@@ -267,8 +273,7 @@ bool bucket_add_unused(struct cache *c, struct bucket *b)
 
 	b->prio = 0;
 
-	if (bucket_gc_gen(b) < 96U &&
-	    bucket_disk_gen(b) < 64U &&
+	if (can_inc_bucket_gen(b) &&
 	    fifo_push(&c->unused, b - c->buckets)) {
 		atomic_inc(&b->pin);
 		return true;
@@ -281,8 +286,7 @@ static bool can_invalidate_bucket(struct cache *c, struct bucket *b)
 {
 	return b->mark >= 0 &&
 		!atomic_read(&b->pin) &&
-		bucket_gc_gen(b) < 96U &&
-		bucket_disk_gen(b) < 64U;
+		can_inc_bucket_gen(b);
 }
 
 static void invalidate_one_bucket(struct cache *c, struct bucket *b)

@@ -829,8 +829,26 @@ static inline bool cached_dev_get(struct cached_dev *d)
 	return true;
 }
 
-#define bucket_gc_gen(b)	((uint8_t) ((b)->gen - (b)->last_gc))
-#define bucket_disk_gen(b)	((uint8_t) ((b)->gen - (b)->disk_gen))
+/*
+ * bucket_gc_gen() returns the difference between the bucket's current gen and
+ * the oldest gen of any pointer into that bucket in the btree (last_gc).
+ *
+ * bucket_disk_gen() returns the difference between the current gen and the gen
+ * on disk; they're both used to make sure gens don't wrap around.
+ */
+
+static inline uint8_t bucket_gc_gen(struct bucket *b)
+{
+	return b->gen - b->last_gc;
+}
+
+static inline uint8_t bucket_disk_gen(struct bucket *b)
+{
+	return b->gen - b->disk_gen;
+}
+
+#define BUCKET_GC_GEN_MAX	96U
+#define BUCKET_DISK_GEN_MAX	64U
 
 #define kobj_attribute_write(n, fn)					\
 	static struct kobj_attribute ksysfs_##n = __ATTR(n, S_IWUSR, NULL, fn)

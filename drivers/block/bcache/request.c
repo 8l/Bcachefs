@@ -1225,7 +1225,7 @@ skip:
 	s->skip = true;
 }
 
-static int cached_dev_make_request(struct request_queue *q, struct bio *bio)
+static void cached_dev_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct search *s;
 	struct bcache_device *d = bio->bi_bdev->bd_disk->private_data;
@@ -1243,8 +1243,6 @@ static int cached_dev_make_request(struct request_queue *q, struct bio *bio)
 					  request_read)(dc, s);
 	} else
 		bio_passthrough(dc, bio);
-
-	return 0;
 }
 
 static int cached_dev_ioctl(struct bcache_device *d, fmode_t mode,
@@ -1252,23 +1250,6 @@ static int cached_dev_ioctl(struct bcache_device *d, fmode_t mode,
 {
 	struct cached_dev *dc = container_of(d, struct cached_dev, disk);
 	return __blkdev_driver_ioctl(dc->bdev, mode, cmd, arg);
-}
-
-static void cached_dev_unplug(struct request_queue *q)
-{
-	struct bcache_device *d = q->queuedata;
-	struct cached_dev *dc = container_of(d, struct cached_dev, disk);
-
-	blk_unplug(bdev_get_queue(dc->bdev));
-
-	if (cached_dev_get(dc)) {
-		struct cache *c;
-
-		for_each_cache(c, d->c)
-			blk_unplug(bdev_get_queue(c->bdev));
-
-		cached_dev_put(dc);
-	}
 }
 
 static int cached_dev_congested(void *data, int bits)
@@ -1300,7 +1281,6 @@ void cached_dev_request_init(struct cached_dev *d)
 	struct gendisk *g = d->disk.disk;
 
 	g->queue->make_request_fn		= cached_dev_make_request;
-	g->queue->unplug_fn			= cached_dev_unplug;
 	g->queue->backing_dev_info.congested_fn = cached_dev_congested;
 	d->disk.cache_miss			= cached_dev_cache_miss;
 	d->disk.ioctl				= cached_dev_ioctl;
@@ -1412,7 +1392,7 @@ static void flash_dev_req_nodata(struct search *s)
 	continue_at(&s->cl, flash_dev_bio_complete, NULL);
 }
 
-static int flash_dev_make_request(struct request_queue *q, struct bio *bio)
+static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct search *s;
 	struct bcache_device *d = bio->bi_bdev->bd_disk->private_data;
@@ -1423,23 +1403,12 @@ static int flash_dev_make_request(struct request_queue *q, struct bio *bio)
 	(!bio_has_data(bio)	? flash_dev_req_nodata :
 	 bio->bi_rw & REQ_WRITE ? flash_dev_write :
 				  flash_dev_read)(s);
-
-	return 0;
 }
 
 static int flash_dev_ioctl(struct bcache_device *d, fmode_t mode,
 			   unsigned int cmd, unsigned long arg)
 {
 	return -ENOTTY;
-}
-
-static void flash_dev_unplug(struct request_queue *q)
-{
-	struct bcache_device *d = q->queuedata;
-	struct cache *ca;
-
-	for_each_cache(ca, d->c)
-		blk_unplug(bdev_get_queue(ca->bdev));
 }
 
 static int flash_dev_congested(void *data, int bits)
@@ -1462,7 +1431,6 @@ void flash_dev_request_init(struct bcache_device *d)
 	struct gendisk *g = d->disk;
 
 	g->queue->make_request_fn		= flash_dev_make_request;
-	g->queue->unplug_fn			= flash_dev_unplug;
 	g->queue->backing_dev_info.congested_fn = flash_dev_congested;
 	d->cache_miss				= flash_dev_cache_miss;
 	d->ioctl				= flash_dev_ioctl;

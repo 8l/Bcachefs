@@ -54,6 +54,8 @@ struct bkey {
 /* SB_JOURNAL_BUCKETS must be divisible by BITS_PER_LONG */
 #define MAX_CACHES_PER_SET	8
 
+#define BDEV_DATA_START		16	/* sectors */
+
 struct cache_sb {
 	uint64_t		csum;
 	uint64_t		offset;	/* sector where this sb was written */

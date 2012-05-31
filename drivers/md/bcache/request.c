@@ -1275,7 +1275,7 @@ static void cached_dev_make_request(struct request_queue *q, struct bio *bio)
 	struct cached_dev *dc = container_of(d, struct cached_dev, disk);
 
 	bio->bi_bdev = dc->bdev;
-	bio->bi_sector += 16;
+	bio->bi_sector += BDEV_DATA_START;
 
 	if (cached_dev_get(dc)) {
 		s = do_bio_hook(bio, d);

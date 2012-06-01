@@ -674,7 +674,6 @@ static struct search *search_alloc(struct bio *bio, struct bcache_device *d)
 	memset(s, 0, offsetof(struct search, op.keys));
 
 	__closure_init(&s->cl, NULL);
-	__closure_init(&s->op.cl, &s->cl);
 
 	s->op.d			= d;
 	s->op.lock		= -1;
@@ -951,11 +950,14 @@ out_submit:
 
 static void request_read(struct cached_dev *d, struct search *s)
 {
+	struct closure *cl = &s->cl;
+
 	check_should_skip(d, s);
 
-	set_closure_fn(&s->cl, request_read_done_bh, NULL);
-	closure_set_stopped(&s->cl);
+	set_closure_fn(cl, request_read_done_bh, NULL);
+	closure_set_stopped(cl);
 
+	__closure_init(&s->op.cl, cl);
 	btree_read_async(&s->op.cl);
 }
 
@@ -983,14 +985,14 @@ static bool should_writeback(struct cached_dev *d, struct bio *bio)
 
 static void request_write_resubmit(struct closure *cl)
 {
-	struct btree_op *op = container_of(cl, struct btree_op, cl);
-	struct search *s = container_of(op, struct search, op);
+	struct search *s = container_of(cl, struct search, cl);
 	struct bio *bio = &s->bio.bio;
 
-	closure_bio_submit(bio, &s->cl, op->d->c->bio_split);
+	closure_bio_submit(bio, cl, s->op.d->c->bio_split);
 
+	__closure_init(&s->op.cl, cl);
 	bio_insert(&s->op.cl);
-	continue_at(&s->cl, cached_dev_write_complete, NULL);
+	continue_at(cl, cached_dev_write_complete, NULL);
 }
 
 static void request_write(struct cached_dev *d, struct search *s)
@@ -1041,15 +1043,14 @@ skip:		s->cache_bio = s->orig_bio;
 		trace_bcache_writethrough(s->orig_bio);
 submit:
 		if (closure_bio_submit(bio, cl, s->op.d->c->bio_split))
-			continue_at(&s->op.cl,
-				    request_write_resubmit,
-				    bcache_wq);
+			continue_at(cl, request_write_resubmit, bcache_wq);
 	} else {
 		s->cache_bio = bio;
 		trace_bcache_writeback(s->orig_bio);
 		bcache_writeback_add(d, bio_sectors(bio));
 	}
 out:
+	__closure_init(&s->op.cl, cl);
 	bio_insert(&s->op.cl);
 	continue_at(cl, cached_dev_write_complete, NULL);
 }
@@ -1069,9 +1070,6 @@ static void request_nodata(struct cached_dev *d, struct search *s)
 
 	closure_get(cl);
 	generic_make_request(bio);
-
-	closure_set_stopped(&s->op.cl);
-	closure_put(&s->op.cl);
 
 	continue_at(cl, cached_dev_bio_complete, NULL);
 }
@@ -1403,9 +1401,12 @@ static int flash_dev_cache_miss(struct btree *b, struct search *s,
 
 static void flash_dev_read(struct search *s)
 {
-	set_closure_fn(&s->cl, flash_dev_bio_complete, NULL);
-	closure_set_stopped(&s->cl);
+	struct closure *cl = &s->cl;
 
+	set_closure_fn(cl, flash_dev_bio_complete, NULL);
+	closure_set_stopped(cl);
+
+	__closure_init(&s->op.cl, cl);
 	btree_read_async(&s->op.cl);
 }
 
@@ -1426,8 +1427,9 @@ static void flash_dev_write(struct search *s)
 		s->cache_bio	= bio;
 	}
 
+	__closure_init(&s->op.cl, cl);
 	bio_insert(&s->op.cl);
-	continue_at(&s->cl, flash_dev_bio_complete, NULL);
+	continue_at(cl, flash_dev_bio_complete, NULL);
 }
 
 static void flash_dev_req_nodata(struct search *s)
@@ -1446,10 +1448,7 @@ static void flash_dev_req_nodata(struct search *s)
 	closure_get(cl);
 	generic_make_request(bio);
 
-	closure_set_stopped(&s->op.cl);
-	closure_put(&s->op.cl);
-
-	continue_at(&s->cl, flash_dev_bio_complete, NULL);
+	continue_at(cl, flash_dev_bio_complete, NULL);
 }
 
 static void flash_dev_make_request(struct request_queue *q, struct bio *bio)

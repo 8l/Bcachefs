@@ -1445,9 +1445,6 @@ static void flash_dev_req_nodata(struct search *s)
 	if (s->op.flush_journal)
 		bcache_journal_meta(s->op.d->c, cl);
 
-	closure_get(cl);
-	generic_make_request(bio);
-
 	continue_at(cl, flash_dev_bio_complete, NULL);
 }
 

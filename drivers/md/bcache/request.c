@@ -17,15 +17,6 @@
 #define CUTOFF_WRITEBACK	50
 #define CUTOFF_WRITEBACK_SYNC	75
 
-struct bio_passthrough {
-	struct closure		cl;
-	struct cached_dev	*d;
-	struct bio		*bio;
-	bio_end_io_t		*bi_end_io;
-	void			*bi_private;
-};
-
-struct kmem_cache *bch_passthrough_cache;
 struct kmem_cache *bch_search_cache;
 
 static void check_should_skip(struct cached_dev *, struct search *);
@@ -1076,89 +1067,6 @@ static void request_nodata(struct cached_dev *d, struct search *s)
 	continue_at(cl, cached_dev_bio_complete, NULL);
 }
 
-/* Split bios in passthrough mode */
-
-static void bio_passthrough_done(struct closure *cl)
-{
-	struct bio_passthrough *s = container_of(cl, struct bio_passthrough,
-						 cl);
-
-	s->bio->bi_end_io	= s->bi_end_io;
-	s->bio->bi_private	= s->bi_private;
-	bio_endio(s->bio, 0);
-
-	closure_debug_destroy(&s->cl);
-	mempool_free(s, s->d->bio_passthrough);
-}
-
-static void bio_passthrough_endio(struct bio *bio, int error)
-{
-	struct closure *cl = bio->bi_private;
-	struct bio_passthrough *s = container_of(cl, struct bio_passthrough,
-						 cl);
-
-	if (error)
-		clear_bit(BIO_UPTODATE, &s->bio->bi_flags);
-
-	bio_put(bio);
-	closure_put(cl);
-}
-
-static void bio_passthrough_submit(struct closure *cl)
-{
-	struct bio_passthrough *s = container_of(cl, struct bio_passthrough,
-						 cl);
-	struct bio *bio = s->bio, *n;
-
-	do {
-		n = bch_bio_split_get(bio, bio_max_sectors(bio), &s->d->disk);
-		if (!n)
-			continue_at(cl, bio_passthrough_submit, bcache_wq);
-
-		if (n == bio) {
-			set_closure_fn(cl, bio_passthrough_done, NULL);
-			closure_set_stopped(cl);
-		}
-
-		trace_bcache_passthrough(n);
-		generic_make_request(n);
-	} while (n != bio);
-}
-
-static void bio_passthrough(struct cached_dev *d, struct bio *bio)
-{
-	struct bio_passthrough *s;
-
-	if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
-		if (!blk_queue_discard(bdev_get_queue(d->bdev)))
-			bio_endio(bio, 0);
-		else
-			generic_make_request(bio);
-
-		return;
-	}
-
-	if (!bio_has_data(bio) ||
-	    bio->bi_size <= bio_max_sectors(bio) << 9) {
-		generic_make_request(bio);
-		return;
-	}
-
-	s = mempool_alloc(d->bio_passthrough, GFP_NOIO);
-
-	closure_init(&s->cl, NULL);
-	s->d		= d;
-	s->bio		= bio;
-	s->bi_end_io	= bio->bi_end_io;
-	s->bi_private	= bio->bi_private;
-
-	bio_get(bio);
-	bio->bi_end_io	= bio_passthrough_endio;
-	bio->bi_private	= &s->cl;
-
-	bio_passthrough_submit(&s->cl);
-}
-
 /* Cached devices - read & write stuff */
 
 int bch_get_congested(struct cache_set *c)
@@ -1299,7 +1207,7 @@ static void cached_dev_make_request(struct request_queue *q, struct bio *bio)
 		else
 			request_read(dc, s);
 	} else
-		bio_passthrough(dc, bio);
+		generic_make_request(bio);
 }
 
 static int cached_dev_ioctl(struct bcache_device *d, fmode_t mode,
@@ -1469,24 +1377,19 @@ void bch_request_exit(void)
 #ifdef CONFIG_CGROUP_BCACHE
 	cgroup_unload_subsys(&bcache_subsys);
 #endif
-	if (bch_passthrough_cache)
-		kmem_cache_destroy(bch_passthrough_cache);
 	if (bch_search_cache)
 		kmem_cache_destroy(bch_search_cache);
 }
 
 int __init bch_request_init(void)
 {
-	if (!(bch_search_cache = KMEM_CACHE(search, 0)) ||
-	    !(bch_passthrough_cache = KMEM_CACHE(bio_passthrough, 0)))
-		goto err;
+	bch_search_cache = KMEM_CACHE(search, 0);
+	if (!bch_search_cache)
+		return -ENOMEM;
 
 #ifdef CONFIG_CGROUP_BCACHE
 	cgroup_load_subsys(&bcache_subsys);
 	init_bch_cgroup(&bcache_default_cgroup);
 #endif
 	return 0;
-err:
-	bch_request_exit();
-	return -ENOMEM;
 }

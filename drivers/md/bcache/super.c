@@ -1034,9 +1034,6 @@ static void cached_dev_free(struct closure *cl)
 
 	mutex_unlock(&register_lock);
 
-	if (d->bio_passthrough)
-		mempool_destroy(d->bio_passthrough);
-
 	if (!IS_ERR_OR_NULL(d->bdev)) {
 		blk_sync_queue(bdev_get_queue(d->bdev));
 		blkdev_put(d->bdev, FMODE_READ|FMODE_WRITE|FMODE_EXCL);
@@ -1072,7 +1069,8 @@ static int cached_dev_init(struct cached_dev *d, unsigned block_size)
 	cached_dev_kobject_init(d);
 	bch_cache_accounting_init(&d->accounting, &d->disk.cl);
 
-	if (bcache_device_init(&d->disk, block_size))
+	err = bcache_device_init(&d->disk, block_size);
+	if (err)
 		goto err;
 
 	spin_lock_init(&d->io_lock);
@@ -1092,12 +1090,6 @@ static int cached_dev_init(struct cached_dev *d, unsigned block_size)
 	}
 
 	bch_writeback_init_cached_dev(d);
-
-	err = -ENOMEM;
-	d->bio_passthrough = mempool_create_slab_pool(32, bch_passthrough_cache);
-	if (!d->bio_passthrough)
-		goto err;
-
 	return 0;
 err:
 	bcache_device_stop(&d->disk);

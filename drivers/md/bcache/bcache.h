@@ -254,8 +254,6 @@ struct cached_dev {
 	 */
 	atomic_t		running;
 
-	mempool_t		*bio_passthrough;
-
 	/*
 	 * Writes take a shared lock from start to finish; scanning for dirty
 	 * data to refill the rb tree requires an exclusive lock.

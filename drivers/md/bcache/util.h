@@ -581,25 +581,13 @@ static inline unsigned fract_exp_two(unsigned x, unsigned fract_bits)
 
 #define bio_end(bio)	((bio)->bi_sector + bio_sectors(bio))
 
-void bio_reset(struct bio *bio);
 void bio_map(struct bio *bio, void *base);
 
-struct bio *bio_split_front(struct bio *, int,
-			    gfp_t, struct bio_set *);
-
 int bio_submit_split(struct bio *bio, atomic_t *i, struct bio_set *bs);
-unsigned __bio_max_sectors(struct bio *bio, struct block_device *bdev,
-			   sector_t sector);
-
 int bio_alloc_pages(struct bio *bio, gfp_t gfp);
 
 #define bio_alloc_pages(...)						\
 	(dynamic_fault() ? -ENOMEM	: bio_alloc_pages(__VA_ARGS__))
-
-static inline unsigned bio_max_sectors(struct bio *bio)
-{
-	return __bio_max_sectors(bio, bio->bi_bdev, bio->bi_sector);
-}
 
 static inline sector_t bdev_sectors(struct block_device *bdev)
 {

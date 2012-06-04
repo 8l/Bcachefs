@@ -26,7 +26,7 @@ struct bio *bch_bbio_alloc(struct cache_set *c)
 
 struct bio *__bch_bio_split_get(struct bio *bio, int len, struct bio_set *bs)
 {
-	struct bio *ret = bio_split_front(bio, len, GFP_NOIO, bs);
+	struct bio *ret = bio_split(bio, len, GFP_NOIO, bs);
 
 	if (ret && ret != bio) {
 		closure_get(ret->bi_private);

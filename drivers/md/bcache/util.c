@@ -201,20 +201,6 @@ static void check_bio(struct bio *bio)
 
 #endif
 
-void bio_reset(struct bio *bio)
-{
-	struct bio_vec *bv = bio->bi_io_vec;
-	unsigned max_vecs = bio->bi_max_vecs;
-	bio_destructor_t *destructor = bio->bi_destructor;
-
-	bio_init(bio);
-	atomic_set(&bio->bi_cnt, 2);
-	bio->bi_max_vecs	= max_vecs;
-	bio->bi_io_vec		= bv;
-	bio->bi_destructor	= destructor;
-}
-EXPORT_SYMBOL_GPL(bio_reset);
-
 void bio_map(struct bio *bio, void *base)
 {
 	size_t size = bio->bi_size;
@@ -263,119 +249,12 @@ int bio_alloc_pages(struct bio *bio, gfp_t gfp)
 }
 EXPORT_SYMBOL_GPL(bio_alloc_pages);
 
-struct bio *bio_split_front(struct bio *bio, int sectors,
-			    gfp_t gfp, struct bio_set *bs)
-{
-	unsigned idx, vcnt = 0, nbytes = sectors << 9;
-	struct bio_vec *bv;
-	struct bio *ret = NULL;
-
-	if (current->bio_list)
-		gfp &= ~__GFP_WAIT;
-
-	BUG_ON(sectors <= 0);
-
-	if (nbytes >= bio->bi_size)
-		return bio;
-
-	bio_for_each_segment(bv, bio, idx) {
-		vcnt = idx - bio->bi_idx;
-
-		if (!nbytes) {
-			ret = bio_alloc_bioset(gfp, 0, bs);
-			if (!ret)
-				return NULL;
-
-			ret->bi_io_vec = bio_iovec(bio);
-			ret->bi_flags |= 1 << BIO_CLONED;
-			break;
-		} else if (nbytes < bv->bv_len) {
-			ret = bio_alloc_bioset(gfp, ++vcnt, bs);
-			if (!ret)
-				return NULL;
-
-			memcpy(ret->bi_io_vec, bio_iovec(bio),
-			       sizeof(struct bio_vec) * vcnt);
-
-			ret->bi_io_vec[vcnt - 1].bv_len = nbytes;
-			bv->bv_offset	+= nbytes;
-			bv->bv_len	-= nbytes;
-			break;
-		}
-
-		nbytes -= bv->bv_len;
-	}
-
-	ret->bi_bdev	= bio->bi_bdev;
-	ret->bi_sector	= bio->bi_sector;
-	ret->bi_size	= sectors << 9;
-	ret->bi_rw	= bio->bi_rw;
-	ret->bi_vcnt	= vcnt;
-	ret->bi_max_vecs = vcnt;
-	ret->bi_end_io	= bio->bi_end_io;
-	ret->bi_private	= bio->bi_private;
-
-	if (ret && ret != bio && bs) {
-		ret->bi_flags |= 1 << BIO_HAS_POOL;
-		ret->bi_destructor = (void *) bs;
-	}
-
-	bio->bi_sector	+= sectors;
-	bio->bi_size	-= sectors << 9;
-	bio->bi_idx	 = idx;
-
-	return ret;
-}
-EXPORT_SYMBOL_GPL(bio_split_front);
-
-unsigned __bio_max_sectors(struct bio *bio, struct block_device *bdev,
-			   sector_t sector)
-{
-	unsigned ret = bio_sectors(bio);
-	struct request_queue *q = bdev_get_queue(bdev);
-	struct bio_vec *end = bio_iovec(bio) +
-		min_t(int, bio_segments(bio), queue_max_segments(q));
-
-	struct bvec_merge_data bvm = {
-		.bi_bdev	= bdev,
-		.bi_sector	= sector,
-		.bi_size	= 0,
-		.bi_rw		= bio->bi_rw,
-	};
-
-	if (bio_segments(bio) > queue_max_segments(q) ||
-	    q->merge_bvec_fn) {
-		ret = 0;
-
-		for (struct bio_vec *bv = bio_iovec(bio); bv < end; bv++) {
-			if (bv ==  bio_iovec(bio) + queue_max_segments(q))
-				break;
-
-			if (q->merge_bvec_fn &&
-			    q->merge_bvec_fn(q, &bvm, bv) < (int) bv->bv_len)
-				break;
-
-			ret		+= bv->bv_len >> 9;
-			bvm.bi_size	+= bv->bv_len;
-		}
-	}
-
-	ret = min(ret, queue_max_sectors(q));
-
-	WARN_ON(!ret);
-	ret = max_t(int, ret, bio_iovec(bio)->bv_len >> 9);
-
-	return ret;
-}
-EXPORT_SYMBOL_GPL(__bio_max_sectors);
-
 int bio_submit_split(struct bio *bio, atomic_t *i, struct bio_set *bs)
 {
 	struct bio *n;
 
 	do {
-		n = bio_split_front(bio, bio_max_sectors(bio),
-				    GFP_NOIO, bs);
+		n = bio_split(bio, bio_max_sectors(bio), GFP_NOIO, bs);
 		if (!n)
 			return -ENOMEM;
 		else if (n != bio)

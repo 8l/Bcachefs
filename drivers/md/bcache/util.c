@@ -248,25 +248,6 @@ int bio_alloc_pages(struct bio *bio, gfp_t gfp)
 }
 EXPORT_SYMBOL_GPL(bio_alloc_pages);
 
-int bio_submit_split(struct bio *bio, atomic_t *i, struct bio_set *bs)
-{
-	struct bio *n;
-
-	do {
-		n = bio_split(bio, bio_max_sectors(bio), GFP_NOIO, bs);
-		if (!n)
-			return -ENOMEM;
-		else if (n != bio)
-			atomic_inc(i);
-
-		check_bio(n);
-		generic_make_request(n);
-	} while (n != bio);
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(bio_submit_split);
-
 /*
  * Portions Copyright (c) 1996-2001, PostgreSQL Global Development Group (Any
  * use permitted, subject to terms of PostgreSQL license; see.)

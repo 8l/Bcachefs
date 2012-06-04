@@ -51,7 +51,7 @@ reread:		left = ca->sb.bucket_size - offset;
 		bio->bi_private = &op->cl;
 		bio_map(bio, data);
 
-		closure_bio_submit(bio, &op->cl, ca->set->bio_split);
+		closure_bio_submit(bio, &op->cl);
 		closure_sync(&op->cl);
 
 		/* This function could be simpler now since we no longer write
@@ -552,7 +552,7 @@ static void journal_write_unlocked(struct closure *cl)
 	spin_unlock(&c->journal.lock);
 
 	while ((bio = bio_list_pop(&list)))
-		closure_bio_submit(bio, cl, c->bio_split);
+		closure_bio_submit(bio, cl);
 
 	continue_at(cl, journal_write_done, NULL);
 }

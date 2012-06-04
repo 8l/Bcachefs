@@ -784,7 +784,7 @@ static void request_read_error(struct closure *cl)
 		/* XXX: invalidate cache */
 
 		trace_bcache_read_retry(&s->bio.bio);
-		closure_bio_submit(&s->bio.bio, &s->cl, s->op.c->bio_split);
+		closure_bio_submit(&s->bio.bio, &s->cl);
 	}
 
 	continue_at(cl, cached_dev_read_complete, NULL);
@@ -994,18 +994,6 @@ static bool should_writeback(struct cached_dev *d, struct bio *bio)
 		d->disk.c->gc_stats.in_use < threshold;
 }
 
-static void request_write_resubmit(struct closure *cl)
-{
-	struct search *s = container_of(cl, struct search, cl);
-	struct bio *bio = &s->bio.bio;
-
-	closure_bio_submit(bio, cl, s->op.c->bio_split);
-
-	__closure_init(&s->op.cl, cl);
-	bio_insert(&s->op.cl);
-	continue_at(cl, cached_dev_write_complete, NULL);
-}
-
 static void request_write(struct cached_dev *d, struct search *s)
 {
 	struct closure *cl = &s->cl;
@@ -1057,8 +1045,7 @@ skip:		s->op.cache_bio = s->orig_bio;
 		__bio_clone(s->op.cache_bio, bio);
 		trace_bcache_writethrough(s->orig_bio);
 submit:
-		if (closure_bio_submit(bio, cl, s->op.c->bio_split))
-			continue_at(cl, request_write_resubmit, bcache_wq);
+		closure_bio_submit(bio, cl);
 	} else {
 		s->op.cache_bio = bio;
 		trace_bcache_writeback(s->orig_bio);

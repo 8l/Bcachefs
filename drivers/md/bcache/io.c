@@ -55,41 +55,6 @@ void bch_submit_bbio(struct bio *bio, struct cache_set *c,
 	__bch_submit_bbio(bio, c);
 }
 
-int bch_submit_bbio_split(struct bio *bio, struct cache_set *c,
-		      struct bkey *k, unsigned ptr)
-{
-	struct closure *cl = bio->bi_private;
-	struct bbio *b;
-	struct bio *n;
-	unsigned sectors_done = 0;
-
-	closure_get(cl);
-
-	bio->bi_sector	= PTR_OFFSET(k, ptr);
-	bio->bi_bdev	= PTR_CACHE(c, k, ptr)->bdev;
-
-	do {
-		n = bch_bio_split_get(bio, bio_max_sectors(bio), c);
-		if (!n) {
-			closure_put(cl);
-			return -ENOMEM;
-		}
-
-		b = container_of(n, struct bbio, bio);
-
-		bch_bkey_copy_single_ptr(&b->key, k, ptr);
-		SET_KEY_SIZE(&b->key, KEY_SIZE(k) - sectors_done);
-		SET_PTR_OFFSET(&b->key, 0, PTR_OFFSET(k, ptr) + sectors_done);
-
-		sectors_done += bio_sectors(n);
-
-		b->submit_time_us = local_clock_us();
-		generic_make_request(n);
-	} while (n != bio);
-
-	return 0;
-}
-
 /* IO errors */
 
 void bch_count_io_errors(struct cache *c, int error, const char *m)

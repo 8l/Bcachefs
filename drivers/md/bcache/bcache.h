@@ -911,8 +911,6 @@ struct bio *__bch_bio_split_get(struct bio *, int, struct bio_set *);
 
 void __bch_submit_bbio(struct bio *, struct cache_set *);
 void bch_submit_bbio(struct bio *, struct cache_set *, struct bkey *, unsigned);
-int bch_submit_bbio_split(struct bio *, struct cache_set *,
-		      struct bkey *, unsigned);
 
 struct bch_cgroup;
 struct cgroup;

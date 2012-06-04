@@ -583,7 +583,6 @@ static inline unsigned fract_exp_two(unsigned x, unsigned fract_bits)
 
 void bio_map(struct bio *bio, void *base);
 
-int bio_submit_split(struct bio *bio, atomic_t *i, struct bio_set *bs);
 int bio_alloc_pages(struct bio *bio, gfp_t gfp);
 
 #define bio_alloc_pages(...)						\
@@ -616,20 +615,10 @@ do {									\
 #define set_wait(j)	do {} while (0)
 #endif
 
-#define closure_bio_submit_put(bio, cl, bs)				\
-	bio_submit_split(bio, &(__to_internal_closure(cl))->remaining, bs)
-
-static inline int closure_bio_submit(struct bio *bio, struct closure *cl,
-				     struct bio_set *bs)
+static inline void closure_bio_submit(struct bio *bio, struct closure *cl)
 {
-	int ret;
-
 	closure_get(cl);
-	ret = closure_bio_submit_put(bio, cl, bs);
-	if (ret)
-		closure_put(cl);
-
-	return ret;
+	generic_make_request(bio);
 }
 
 uint64_t crc64_update(uint64_t, const void *, size_t);

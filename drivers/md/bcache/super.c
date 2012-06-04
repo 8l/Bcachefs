@@ -379,7 +379,8 @@ static void uuid_io(struct cache_set *c, unsigned long rw,
 		bio->bi_private = cl;
 		bio_map(bio, c->uuids);
 
-		bch_submit_bbio_split(bio, c, k, i);
+		closure_get(cl);
+		bch_submit_bbio(bio, c, k, i);
 
 		if (!(rw & WRITE))
 			break;
@@ -537,7 +538,7 @@ static void prio_io(struct cache *c, uint64_t bucket, unsigned long rw)
 	bio->bi_private = c;
 	bio_map(bio, c->disk_buckets);
 
-	closure_bio_submit(bio, &c->prio, c->set ? c->set->bio_split : NULL);
+	closure_bio_submit(bio, &c->prio);
 }
 
 #define buckets_free(c)	"free %zu, free_inc %zu, unused %zu",		\

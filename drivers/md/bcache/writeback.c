@@ -262,7 +262,7 @@ static void write_dirty(struct closure *cl)
 	io->bio.bi_end_io	= dirty_endio;
 
 	trace_bcache_write_dirty(&io->bio);
-	closure_bio_submit(&io->bio, cl, io->d->disk.bio_split);
+	closure_bio_submit(&io->bio, cl);
 
 	continue_at(cl, write_dirty_finish, dirty_wq);
 }
@@ -331,8 +331,7 @@ static void read_dirty(struct cached_dev *dc)
 		closure_set_stopped(&io->cl);
 
 		trace_bcache_read_dirty(&io->bio);
-		closure_bio_submit_put(&io->bio, &io->cl,
-				       dc->disk.bio_split);
+		submit_bio(0, &io->bio);
 
 		delay = writeback_delay(dc, KEY_SIZE(&w->key));
 

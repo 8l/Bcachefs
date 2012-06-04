@@ -230,7 +230,7 @@ void bch_data_verify(struct search *s)
 	check->bi_private	= cl;
 	check->bi_end_io	= data_verify_endio;
 
-	closure_bio_submit(check, cl, s->d->bio_split);
+	closure_bio_submit(check, cl);
 	closure_sync(cl);
 
 	bio_for_each_segment(bv, s->orig_bio, i) {

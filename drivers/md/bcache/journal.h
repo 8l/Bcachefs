@@ -57,14 +57,14 @@ struct journal_write {
 #define JSET_BITS		3
 
 	struct cache_set	*c;
-	closure_list_t		wait;
+	struct closure_waitlist	wait;
 	bool			need_write;
 };
 
 struct journal {
 	spinlock_t		lock;
 	/* used when waiting because the journal was full */
-	closure_list_t		wait;
+	struct closure_waitlist	wait;
 	struct closure_with_timer io;
 
 	unsigned		blocks_free;

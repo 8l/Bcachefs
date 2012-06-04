@@ -508,7 +508,7 @@ struct cache_set {
 	 * btree_root() macro releases the lock when it returns.
 	 */
 	struct closure		*try_harder;
-	closure_list_t		try_wait;
+	struct closure_waitlist	try_wait;
 	uint64_t		try_harder_start;
 
 	/*
@@ -522,7 +522,7 @@ struct cache_set {
 	 * written.
 	 */
 	atomic_t		prio_blocked;
-	closure_list_t		bucket_wait;
+	struct closure_waitlist	bucket_wait;
 
 	/*
 	 * For any bio we don't skip we subtract the number of sectors from

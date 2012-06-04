@@ -767,13 +767,75 @@ out:
 	return b;
 }
 
+static struct btree *cannibalize_bucket(struct cache_set *c, struct bkey *k,
+					int level, struct closure *cl)
+{
+	int ret = -ENOMEM;
+	struct btree *i;
+
+	if (!cl)
+		return ERR_PTR(-ENOMEM);
+
+	/*
+	 * Trying to free up some memory - i.e. reuse some btree nodes - may
+	 * require initiating IO to flush the dirty part of the node. If we're
+	 * running under generic_make_request(), that IO will never finish and
+	 * we would deadlock. Returning -EAGAIN causes the cache lookup code to
+	 * punt to workqueue and retry.
+	 */
+	if (current->bio_list)
+		return ERR_PTR(-EAGAIN);
+
+	if (c->try_harder && c->try_harder != cl) {
+		closure_wait_event_async(&c->try_wait, cl, !c->try_harder);
+		return ERR_PTR(-EAGAIN);
+	}
+
+	/* XXX: tracepoint */
+	c->try_harder = cl;
+	c->try_harder_start = local_clock();
+retry:
+	list_for_each_entry_reverse(i, &c->btree_cache, list) {
+		int r = mca_reap(i, cl, btree_order(k));
+		if (!r)
+			return i;
+		if (r != -ENOMEM)
+			ret = r;
+	}
+
+	if (ret == -EAGAIN &&
+	    closure_blocking(cl)) {
+		mutex_unlock(&c->bucket_lock);
+		closure_sync(cl);
+		mutex_lock(&c->bucket_lock);
+		goto retry;
+	}
+
+	return ERR_PTR(ret);
+}
+
+/*
+ * We can only have one thread cannibalizing other cached btree nodes at a time,
+ * or we'll deadlock. We use an open coded mutex to ensure that, which a
+ * cannibalize_bucket() will take. This means every time we unlock the root of
+ * the btree, we need to release this lock if we have it held.
+ */
+void bcache_cannibalize_unlock(struct cache_set *c, struct closure *cl)
+{
+	if (c->try_harder == cl) {
+		time_stats_update(&c->try_harder_time, c->try_harder_start);
+		c->try_harder = NULL;
+		__closure_wake_up(&c->try_wait);
+	}
+}
+
 static struct btree *alloc_bucket(struct cache_set *c, struct bkey *k,
 				  int level, struct closure *cl)
 {
-	struct btree *b, *i;
+	struct btree *b;
 
 	lockdep_assert_held(&c->bucket_lock);
-retry:
+
 	if (find_bucket(c, k))
 		return NULL;
 
@@ -821,46 +883,9 @@ err:
 	if (b)
 		rw_unlock(true, b);
 
-	/*
-	 * Trying to free up some memory - i.e. reuse some btree nodes - may
-	 * require initiating IO to flush the dirty part of the node. If we're
-	 * running under generic_make_request(), that IO will never finish and
-	 * we would deadlock. Returning -EAGAIN causes the cache lookup code to
-	 * punt to workqueue and retry.
-	 */
-	if (current->bio_list)
-		return ERR_PTR(-EAGAIN);
-
-	if (!cl)
-		return ERR_PTR(-ENOMEM);
-
-	if (c->try_harder && c->try_harder != cl) {
-		closure_wait_event_async(&c->try_wait, cl, !c->try_harder);
-		return ERR_PTR(-EAGAIN);
-	}
-
-	/* XXX: tracepoint */
-	c->try_harder = cl;
-	c->try_harder_start = local_clock();
-	b = ERR_PTR(-ENOMEM);
-
-	list_for_each_entry_reverse(i, &c->btree_cache, list) {
-		int e = mca_reap(i, cl, btree_order(k));
-		if (e == -EAGAIN)
-			b = ERR_PTR(-EAGAIN);
-		if (!e) {
-			b = i;
-			goto out;
-		}
-	}
-
-	if (b == ERR_PTR(-EAGAIN) &&
-	    closure_blocking(cl)) {
-		mutex_unlock(&c->bucket_lock);
-		closure_sync(cl);
-		mutex_lock(&c->bucket_lock);
-		goto retry;
-	}
+	b = cannibalize_bucket(c, k, level, cl);
+	if (!IS_ERR(b))
+		goto out;
 
 	return b;
 }

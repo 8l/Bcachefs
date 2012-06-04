@@ -248,14 +248,9 @@ static inline void rw_unlock(bool w, struct btree *b)
 		    _w == insert_lock(op, _b))				\
 			_r = btree_ ## f(_b, op, ##__VA_ARGS__);	\
 		rw_unlock(_w, _b);					\
+		bcache_cannibalize_unlock(c, &(op)->cl);		\
 	} while (_r == -EINTR);						\
 									\
-	if ((c)->try_harder == &(op)->cl) {				\
-		time_stats_update(&(c)->try_harder_time,		\
-				  (c)->try_harder_start);		\
-		(c)->try_harder = NULL;					\
-		__closure_wake_up(&(c)->try_wait);			\
-	}								\
 	_r;								\
 })
 
@@ -272,6 +267,7 @@ void btree_read_done(struct closure *);
 void btree_read(struct btree *);
 void btree_write(struct btree *b, bool now, struct btree_op *op);
 
+void bcache_cannibalize_unlock(struct cache_set *, struct closure *);
 void bcache_btree_set_root(struct btree *);
 struct btree *bcache_btree_alloc(struct cache_set *, int, struct closure *);
 struct btree *get_bucket(struct cache_set *, struct bkey *,

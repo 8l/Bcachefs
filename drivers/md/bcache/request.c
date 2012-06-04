@@ -1019,23 +1019,22 @@ skip:		s->op.cache_bio = s->orig_bio;
 		bio_get(s->op.cache_bio);
 		trace_bcache_write_skip(s->orig_bio);
 
-		goto submit;
+		closure_bio_submit(bio, cl);
+		goto out;
 	}
 
 	if (should_writeback(d, s->orig_bio))
 		s->writeback = true;
 
 	if (!s->writeback) {
-		s->op.cache_bio = bio_alloc_bioset(GFP_NOIO, bio_segments(bio),
+		s->op.cache_bio = bio_clone_bioset(bio, GFP_NOIO,
 						   d->disk.bio_split);
 		if (!s->op.cache_bio) {
 			s->op.skip = true;
 			goto skip;
 		}
 
-		__bio_clone(s->op.cache_bio, bio);
 		trace_bcache_writethrough(s->orig_bio);
-submit:
 		closure_bio_submit(bio, cl);
 	} else {
 		s->op.cache_bio = bio;

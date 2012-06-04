@@ -907,7 +907,6 @@ void bch_count_io_errors(struct cache *, int, const char *);
 void bch_bbio_endio(struct cache_set *, struct bio *, int, const char *);
 void bch_bbio_free(struct bio *, struct cache_set *);
 struct bio *bch_bbio_alloc(struct cache_set *);
-struct bio *bch_bbio_kmalloc(gfp_t, int);
 struct bio *__bch_bio_split_get(struct bio *, int, struct bio_set *);
 
 void __bch_submit_bbio(struct bio *, struct cache_set *);

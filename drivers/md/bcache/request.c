@@ -662,7 +662,6 @@ static void do_bio_hook(struct search *s)
 
 	bio->bi_end_io		= request_endio;
 	bio->bi_private		= &s->cl;
-	bio->bi_destructor	= NULL;
 	atomic_set(&bio->bi_cnt, 3);
 }
 
@@ -918,8 +917,9 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 		reada = min(d->readahead >> 9, sectors - bio_sectors(n));
 
 	s->cache_bio_sectors = bio_sectors(n) + reada;
-	s->op.cache_bio = bch_bbio_kmalloc(GFP_NOIO,
-			DIV_ROUND_UP(s->cache_bio_sectors, PAGE_SECTORS));
+	s->op.cache_bio = bio_alloc_bioset(GFP_NOWAIT,
+			DIV_ROUND_UP(s->cache_bio_sectors, PAGE_SECTORS),
+			d->disk.bio_split);
 
 	if (!s->op.cache_bio)
 		goto out_submit;
@@ -1048,7 +1048,8 @@ skip:		s->op.cache_bio = s->orig_bio;
 		s->writeback = true;
 
 	if (!s->writeback) {
-		s->op.cache_bio = bch_bbio_kmalloc(GFP_NOIO, bio->bi_max_vecs);
+		s->op.cache_bio = bio_alloc_bioset(GFP_NOIO, bio_segments(bio),
+						   d->disk.bio_split);
 		if (!s->op.cache_bio) {
 			s->op.skip = true;
 			goto skip;

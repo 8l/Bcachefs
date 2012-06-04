@@ -263,25 +263,15 @@ int bio_alloc_pages(struct bio *bio, gfp_t gfp)
 }
 EXPORT_SYMBOL_GPL(bio_alloc_pages);
 
-struct bio *bio_split_front(struct bio *bio, int sectors, bio_alloc_fn *_alloc,
+struct bio *bio_split_front(struct bio *bio, int sectors,
 			    gfp_t gfp, struct bio_set *bs)
 {
 	unsigned idx, vcnt = 0, nbytes = sectors << 9;
 	struct bio_vec *bv;
 	struct bio *ret = NULL;
 
-	struct bio *alloc(int n)
-	{
-		if (bs)
-			return bio_alloc_bioset(gfp, n, bs);
-		else if (_alloc)
-			return _alloc(gfp, n);
-		else
-			return bio_kmalloc(gfp, n);
-	}
-
 	if (current->bio_list)
-		bs = NULL;
+		gfp &= ~__GFP_WAIT;
 
 	BUG_ON(sectors <= 0);
 
@@ -292,7 +282,7 @@ struct bio *bio_split_front(struct bio *bio, int sectors, bio_alloc_fn *_alloc,
 		vcnt = idx - bio->bi_idx;
 
 		if (!nbytes) {
-			ret = alloc(0);
+			ret = bio_alloc_bioset(gfp, 0, bs);
 			if (!ret)
 				return NULL;
 
@@ -300,7 +290,7 @@ struct bio *bio_split_front(struct bio *bio, int sectors, bio_alloc_fn *_alloc,
 			ret->bi_flags |= 1 << BIO_CLONED;
 			break;
 		} else if (nbytes < bv->bv_len) {
-			ret = alloc(++vcnt);
+			ret = bio_alloc_bioset(gfp, ++vcnt, bs);
 			if (!ret)
 				return NULL;
 
@@ -385,7 +375,7 @@ int bio_submit_split(struct bio *bio, atomic_t *i, struct bio_set *bs)
 
 	do {
 		n = bio_split_front(bio, bio_max_sectors(bio),
-				    NULL, GFP_NOIO, bs);
+				    GFP_NOIO, bs);
 		if (!n)
 			return -ENOMEM;
 		else if (n != bio)

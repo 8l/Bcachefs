@@ -517,7 +517,6 @@ static struct uuid_entry *uuid_find_empty(struct cache_set *c)
 static void prio_endio(struct bio *bio, int error)
 {
 	struct cache *c = bio->bi_private;
-	BUG_ON(c->prio_bio->bi_flags & (1 << BIO_HAS_POOL));
 	bch_count_io_errors(c, error, "writing priorities");
 
 	bio_put(bio);
@@ -1703,7 +1702,7 @@ static void cache_free(struct kobject *kobj)
 	if (c->prio_bio)
 		bio_put(c->prio_bio);
 	if (c->uuid_bio)
-		bio_put(c->uuid_bio);
+		kfree(container_of(c->uuid_bio, struct bbio, bio));
 
 	free_pages((unsigned long) c->disk_buckets, ilog2(bucket_pages(c)));
 	kfree(c->prio_buckets);
@@ -1733,6 +1732,7 @@ static int cache_alloc(struct cache_sb *sb, struct cache *c)
 {
 	size_t free;
 	struct bucket *b;
+	struct bbio *bbio;
 
 	if (!c)
 		return -ENOMEM;
@@ -1766,9 +1766,16 @@ static int cache_alloc(struct cache_sb *sb, struct cache *c)
 	    !(c->prio_buckets	= kzalloc(sizeof(uint64_t) * prio_buckets(c) *
 					  2, GFP_KERNEL)) ||
 	    !(c->disk_buckets	= alloc_bucket_pages(GFP_KERNEL, c)) ||
-	    !(c->uuid_bio	= bch_bbio_kmalloc(GFP_KERNEL, bucket_pages(c))) ||
+	    !(bbio		= kmalloc(sizeof(struct bbio) +
+					  sizeof(struct bio_vec) *
+					  bucket_pages(c), GFP_KERNEL)) ||
 	    !(c->prio_bio	= bio_kmalloc(GFP_KERNEL, bucket_pages(c))))
 		goto err;
+
+	c->uuid_bio = &bbio->bio;
+	bio_init(c->uuid_bio);
+	c->uuid_bio->bi_max_vecs = bucket_pages(c);
+	c->uuid_bio->bi_io_vec = c->uuid_bio->bi_inline_vecs;
 
 	c->prio_next = c->prio_buckets + prio_buckets(c);
 

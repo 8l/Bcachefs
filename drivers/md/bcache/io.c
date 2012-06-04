@@ -24,34 +24,9 @@ struct bio *bch_bbio_alloc(struct cache_set *c)
 	return bio;
 }
 
-static void bbio_destructor(struct bio *bio)
-{
-	struct bbio *b = container_of(bio, struct bbio, bio);
-	kfree(b);
-}
-
-struct bio *bch_bbio_kmalloc(gfp_t gfp, int vecs)
-{
-	struct bio *bio;
-	struct bbio *b;
-
-	b = kmalloc(sizeof(struct bbio) + sizeof(struct bio_vec) * vecs, gfp);
-	if (!b)
-		return NULL;
-
-	bio = &b->bio;
-	bio_init(bio);
-	bio->bi_flags		|= BIO_POOL_NONE << BIO_POOL_OFFSET;
-	bio->bi_max_vecs	 = vecs;
-	bio->bi_io_vec		 = bio->bi_inline_vecs;
-	bio->bi_destructor	 = bbio_destructor;
-
-	return bio;
-}
-
 struct bio *__bch_bio_split_get(struct bio *bio, int len, struct bio_set *bs)
 {
-	struct bio *ret = bio_split_front(bio, len, bch_bbio_kmalloc, GFP_NOIO, bs);
+	struct bio *ret = bio_split_front(bio, len, GFP_NOIO, bs);
 
 	if (ret && ret != bio) {
 		closure_get(ret->bi_private);

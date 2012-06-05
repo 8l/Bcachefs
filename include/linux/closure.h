@@ -655,4 +655,11 @@ do {									\
 
 #define closure_return(_cl)	continue_at((_cl), NULL, NULL)
 
+static inline void closure_call(closure_fn fn, struct closure *cl,
+				struct closure *parent)
+{
+	closure_init(cl, parent);
+	fn(cl);
+}
+
 #endif /* _LINUX_CLOSURE_H */

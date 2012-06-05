@@ -134,13 +134,15 @@ static uint64_t btree_csum_set(struct btree *b, struct bset *i)
 
 static void btree_bio_endio(struct bio *bio, int error)
 {
-	struct btree *b = container_of(bio->bi_private, struct btree, io.cl);
+	struct closure *cl = bio->bi_private;
+	struct btree *b = container_of(cl, struct btree, io.cl);
 
 	if (error)
 		set_btree_node_io_error(b);
 
-	bch_bbio_endio(b->c, bio, error, (bio->bi_rw & WRITE)
-		       ? "writing btree" : "reading btree");
+	bch_bbio_count_io_errors(b->c, bio, error, (bio->bi_rw & WRITE)
+				 ? "writing btree" : "reading btree");
+	closure_put(cl);
 }
 
 static void btree_bio_init(struct btree *b)
@@ -148,7 +150,6 @@ static void btree_bio_init(struct btree *b)
 	BUG_ON(b->bio);
 	b->bio = bch_bbio_alloc(b->c);
 
-	bio_get(b->bio);
 	b->bio->bi_end_io	= btree_bio_endio;
 	b->bio->bi_private	= &b->io.cl;
 }

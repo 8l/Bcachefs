@@ -262,8 +262,6 @@ void bch_btree_read(struct btree *b)
 
 	pr_debug("%s", pbtree(b));
 	trace_bcache_btree_read(b->bio);
-
-	closure_get(&b->io.cl);
 	bch_submit_bbio(b->bio, b->c, &b->key, 0);
 
 	continue_at(&b->io.cl, bch_btree_read_done, system_wq);
@@ -343,7 +341,6 @@ static void do_btree_write(struct btree *b)
 			       base + j * PAGE_SIZE, PAGE_SIZE);
 
 		trace_bcache_btree_write(b->bio);
-		closure_get(cl);
 		bch_submit_bbio(b->bio, b->c, &k.key, 0);
 
 		continue_at(cl, btree_write_done, NULL);
@@ -352,7 +349,6 @@ static void do_btree_write(struct btree *b)
 		bio_map(b->bio, i);
 
 		trace_bcache_btree_write(b->bio);
-		closure_get(cl);
 		bch_submit_bbio(b->bio, b->c, &k.key, 0);
 
 		closure_sync(cl);
@@ -2241,8 +2237,6 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 		n->bi_end_io = bch_cache_read_endio;
 
 		trace_bcache_cache_hit(n);
-
-		closure_get(&s->cl);
 		__bch_submit_bbio(n, b->c);
 	}
 

@@ -515,8 +515,6 @@ static void bio_insert_loop(struct closure *cl)
 		n->bi_rw |= REQ_WRITE;
 
 		trace_bcache_cache_insert(n, n->bi_sector, n->bi_bdev);
-
-		closure_get(cl);
 		bch_submit_bbio(n, op->c, k, 0);
 	} while (n != bio);
 
@@ -926,16 +924,14 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	bio_get(s->op.cache_bio);
 
 	trace_bcache_cache_miss(s->orig_bio);
-	closure_get(&s->cl);
-	generic_make_request(s->op.cache_bio);
+	closure_bio_submit(s->op.cache_bio, &s->cl);
 
 	return ret;
 out_put:
 	bio_put(s->op.cache_bio);
 	s->op.cache_bio = NULL;
 out_submit:
-	closure_get(&s->cl);
-	generic_make_request(miss);
+	closure_bio_submit(miss, &s->cl);
 	return ret;
 }
 
@@ -994,10 +990,8 @@ static void request_write(struct cached_dev *d, struct search *s)
 		s->op.cache_bio	= s->orig_bio;
 		bio_get(s->op.cache_bio);
 
-		if (blk_queue_discard(bdev_get_queue(d->bdev))) {
-			closure_get(cl);
-			generic_make_request(bio);
-		}
+		if (blk_queue_discard(bdev_get_queue(d->bdev)))
+			closure_bio_submit(bio, cl);
 
 		goto out;
 	}
@@ -1048,8 +1042,7 @@ static void request_nodata(struct cached_dev *d, struct search *s)
 	if (s->op.flush_journal)
 		bch_journal_meta(s->op.c, cl);
 
-	closure_get(cl);
-	generic_make_request(bio);
+	closure_bio_submit(bio, cl);
 
 	continue_at(cl, cached_dev_bio_complete, NULL);
 }

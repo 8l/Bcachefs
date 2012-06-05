@@ -379,7 +379,6 @@ static void uuid_io(struct cache_set *c, unsigned long rw,
 		bio->bi_private = cl;
 		bio_map(bio, c->uuids);
 
-		closure_get(cl);
 		bch_submit_bbio(bio, c, k, i);
 
 		if (!(rw & WRITE))

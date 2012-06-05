@@ -879,19 +879,19 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	int ret = 0;
 	unsigned reada;
 	struct cached_dev *d = container_of(s->d, struct cached_dev, disk);
-	struct bio *n;
+	struct bio *miss;
 
-	n = bch_bio_split_get(bio, sectors, s->d);
-	if (!n)
+	miss = bch_bio_split_get(bio, sectors, s->d);
+	if (!miss)
 		return -EAGAIN;
 
-	if (n == bio)
+	if (miss == bio)
 		s->op.lookup_done = true;
 
 	if (s->cache_miss || s->op.skip)
 		goto out_submit;
 
-	if (n != bio ||
+	if (miss != bio ||
 	    (bio->bi_rw & REQ_RAHEAD) ||
 	    (bio->bi_rw & REQ_META) ||
 	    s->op.c->gc_stats.in_use >= CUTOFF_CACHE_READA)
@@ -899,7 +899,7 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	else
 		reada = d->readahead >> 9;
 
-	s->cache_bio_sectors = bio_sectors(n) + reada;
+	s->cache_bio_sectors = bio_sectors(miss) + reada;
 	s->op.cache_bio = bio_alloc_bioset(GFP_NOWAIT,
 			DIV_ROUND_UP(s->cache_bio_sectors, PAGE_SECTORS),
 			d->disk.bio_split);
@@ -907,8 +907,8 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	if (!s->op.cache_bio)
 		goto out_submit;
 
-	s->op.cache_bio->bi_sector	= n->bi_sector;
-	s->op.cache_bio->bi_bdev	= n->bi_bdev;
+	s->op.cache_bio->bi_sector	= miss->bi_sector;
+	s->op.cache_bio->bi_bdev	= miss->bi_bdev;
 	s->op.cache_bio->bi_size	= s->cache_bio_sectors << 9;
 
 	s->op.cache_bio->bi_end_io	= request_endio;
@@ -923,7 +923,7 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	if (bio_alloc_pages(s->op.cache_bio, __GFP_NOWARN|GFP_NOIO))
 		goto out_put;
 
-	s->cache_miss = n;
+	s->cache_miss = miss;
 	bio_get(s->op.cache_bio);
 
 	trace_bcache_cache_miss(s->orig_bio);
@@ -934,7 +934,7 @@ out_put:
 	bio_put(s->op.cache_bio);
 	s->op.cache_bio = NULL;
 out_submit:
-	generic_make_request(n);
+	generic_make_request(miss);
 	return ret;
 }
 

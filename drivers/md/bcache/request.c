@@ -496,7 +496,7 @@ static void bio_insert_loop(struct closure *cl)
 
 		put_data_bucket(b, op->c, k, bio);
 
-		n = __bch_bio_split_get(bio, KEY_SIZE(k), split);
+		n = bio_split(bio, KEY_SIZE(k), GFP_NOIO, split);
 		if (!n) {
 			__bkey_put(op->c, k);
 			continue_at(cl, bio_insert_loop, bcache_wq);
@@ -514,10 +514,9 @@ static void bio_insert_loop(struct closure *cl)
 
 		n->bi_rw |= REQ_WRITE;
 
-		if (n == bio)
-			closure_get(cl);
-
 		trace_bcache_cache_insert(n, n->bi_sector, n->bi_bdev);
+
+		closure_get(cl);
 		bch_submit_bbio(n, op->c, k, 0);
 	} while (n != bio);
 
@@ -881,7 +880,7 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	struct cached_dev *d = container_of(s->d, struct cached_dev, disk);
 	struct bio *miss;
 
-	miss = bch_bio_split_get(bio, sectors, s->d);
+	miss = bio_split(bio, sectors, GFP_NOIO, s->d->bio_split);
 	if (!miss)
 		return -EAGAIN;
 
@@ -927,6 +926,7 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	bio_get(s->op.cache_bio);
 
 	trace_bcache_cache_miss(s->orig_bio);
+	closure_get(&s->cl);
 	generic_make_request(s->op.cache_bio);
 
 	return ret;
@@ -934,6 +934,7 @@ out_put:
 	bio_put(s->op.cache_bio);
 	s->op.cache_bio = NULL;
 out_submit:
+	closure_get(&s->cl);
 	generic_make_request(miss);
 	return ret;
 }
@@ -941,12 +942,6 @@ out_submit:
 static void request_read(struct cached_dev *d, struct search *s)
 {
 	struct closure *cl = &s->cl;
-
-	/*
-	 * For the read we're going to issue - should figure out a better way to
-	 * do this
-	 */
-	closure_get(cl);
 
 	check_should_skip(d, s);
 
@@ -1280,12 +1275,6 @@ static int flash_dev_cache_miss(struct btree *b, struct search *s,
 static void flash_dev_read(struct search *s)
 {
 	struct closure *cl = &s->cl;
-
-	/*
-	 * For the read we're going to issue - should figure out a better way to
-	 * do this
-	 */
-	closure_get(cl);
 
 	__closure_init(&s->op.cl, cl);
 	btree_read_async(&s->op.cl);

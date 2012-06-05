@@ -888,9 +888,6 @@ static inline uint8_t bucket_disk_gen(struct bucket *b)
 	static struct kobj_attribute ksysfs_##n =			\
 		__ATTR(n, S_IWUSR|S_IRUSR, show, store)
 
-#define bch_bio_split_get(bio, len, c)					\
-	__bch_bio_split_get(bio, len, (c)->bio_split)
-
 /* Forward declarations */
 
 void bch_writeback_queue(struct cached_dev *);
@@ -901,7 +898,6 @@ void bch_bbio_count_io_errors(struct cache_set *, struct bio *, int, const char 
 void bch_bbio_endio(struct cache_set *, struct bio *, int, const char *);
 void bch_bbio_free(struct bio *, struct cache_set *);
 struct bio *bch_bbio_alloc(struct cache_set *);
-struct bio *__bch_bio_split_get(struct bio *, int, struct bio_set *);
 
 void __bch_submit_bbio(struct bio *, struct cache_set *);
 void bch_submit_bbio(struct bio *, struct cache_set *, struct bkey *, unsigned);

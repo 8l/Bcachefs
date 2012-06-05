@@ -24,18 +24,6 @@ struct bio *bch_bbio_alloc(struct cache_set *c)
 	return bio;
 }
 
-struct bio *__bch_bio_split_get(struct bio *bio, int len, struct bio_set *bs)
-{
-	struct bio *ret = bio_split(bio, len, GFP_NOIO, bs);
-
-	if (ret && ret != bio) {
-		closure_get(ret->bi_private);
-		ret->bi_rw &= ~REQ_UNPLUG;
-	}
-
-	return ret;
-}
-
 void __bch_submit_bbio(struct bio *bio, struct cache_set *c)
 {
 	struct bbio *b = container_of(bio, struct bbio, bio);

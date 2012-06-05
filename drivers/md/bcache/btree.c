@@ -2215,7 +2215,7 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 		unsigned sectors = min_t(uint64_t, INT_MAX,
 					 k->key - bio->bi_sector);
 
-		n = bch_bio_split_get(bio, sectors, s->d);
+		n = bio_split(bio, sectors, GFP_NOIO, s->d->bio_split);
 		if (!n)
 			return -EAGAIN;
 
@@ -2241,6 +2241,8 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 		n->bi_end_io = bch_cache_read_endio;
 
 		trace_bcache_cache_hit(n);
+
+		closure_get(&s->cl);
 		__bch_submit_bbio(n, b->c);
 	}
 

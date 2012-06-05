@@ -1236,11 +1236,9 @@ void bch_cached_dev_request_init(struct cached_dev *d)
 static int flash_dev_cache_miss(struct btree *b, struct search *s,
 				struct bio *bio, unsigned sectors)
 {
-	sectors = min(sectors, bio_sectors(bio));
-
 	/* Zero fill bio */
 
-	while (sectors) {
+	while (bio->bi_idx != bio->bi_vcnt) {
 		struct bio_vec *bv = bio_iovec(bio);
 		unsigned j = min(bv->bv_len >> 9, sectors);
 
@@ -1251,6 +1249,9 @@ static int flash_dev_cache_miss(struct btree *b, struct search *s,
 		bv->bv_len	-= j << 9;
 		bv->bv_offset	+= j << 9;
 
+		if (bv->bv_len)
+			return 0;
+
 		bio->bi_sector	+= j;
 		bio->bi_size	-= j << 9;
 
@@ -1258,61 +1259,38 @@ static int flash_dev_cache_miss(struct btree *b, struct search *s,
 		sectors		-= j;
 	}
 
-	if (sectors >= bio_sectors(bio)) {
-		s->op.lookup_done = true;
-		bio_endio(bio, 0);
-	}
+	s->op.lookup_done = true;
+
 	return 0;
-}
-
-static void flash_dev_read(struct search *s)
-{
-	struct closure *cl = &s->cl;
-
-	__closure_init(&s->op.cl, cl);
-	btree_read_async(&s->op.cl);
-}
-
-static void flash_dev_write(struct search *s)
-{
-	struct closure *cl = &s->cl;
-	struct bio *bio = &s->bio.bio;
-
-	s->op.skip	= (bio->bi_rw & (1 << BIO_RW_DISCARD)) != 0;
-	s->writeback	= true;
-	s->op.cache_bio	= bio;
-
-	__closure_init(&s->op.cl, cl);
-	bio_insert(&s->op.cl);
-}
-
-static void flash_dev_req_nodata(struct search *s)
-{
-	struct closure *cl = &s->cl;
-	struct bio *bio = &s->bio.bio;
-
-	if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
-		flash_dev_write(s);
-		return;
-	}
-
-	if (s->op.flush_journal)
-		bch_journal_meta(s->op.c, cl);
 }
 
 static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct search *s;
+	struct closure *cl;
 	struct bcache_device *d = bio->bi_bdev->bd_disk->private_data;
 
 	s = search_alloc(bio, d);
+	cl = &s->cl;
+	bio = &s->bio.bio;
+
 	trace_bcache_request_start(s, bio);
 
-	(!bio_has_data(bio)	? flash_dev_req_nodata :
-	 bio->bi_rw & REQ_WRITE ? flash_dev_write :
-				  flash_dev_read)(s);
+	if (bio_has_data(bio) && !(bio->bi_rw & REQ_WRITE)) {
+		closure_call(btree_read_async, &s->op.cl, cl);
+	} else if (bio_has_data(bio) || (bio->bi_rw & REQ_DISCARD)) {
+		s->op.skip	= (bio->bi_rw & (1 << BIO_RW_DISCARD)) != 0;
+		s->writeback	= true;
+		s->op.cache_bio	= bio;
 
-	continue_at(&s->cl, search_free, NULL);
+		closure_call(bio_insert, &s->op.cl, cl);
+	} else {
+		/* No data - probably a cache flush */
+		if (s->op.flush_journal)
+			bch_journal_meta(s->op.c, cl);
+	}
+
+	continue_at(cl, search_free, NULL);
 }
 
 static int flash_dev_ioctl(struct bcache_device *d, fmode_t mode,

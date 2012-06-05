@@ -354,6 +354,7 @@ static void do_btree_write(struct btree *b)
 
 		continue_at(cl, btree_write_done, NULL);
 	} else {
+		b->bio->bi_vcnt = 0;
 		bio_map(b->bio, i);
 
 		trace_bcache_btree_write(b->bio);

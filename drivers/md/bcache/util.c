@@ -204,11 +204,10 @@ static void check_bio(struct bio *bio)
 void bio_map(struct bio *bio, void *base)
 {
 	size_t size = bio->bi_size;
-	struct bio_vec *bv = bio->bi_inline_vecs;
+	struct bio_vec *bv = bio->bi_io_vec;
 
 	BUG_ON(!bio->bi_size);
-	bio->bi_vcnt = 0;
-	bio->bi_io_vec = bv;
+	BUG_ON(bio->bi_vcnt);
 
 	bv->bv_offset = base ? ((unsigned long) base) % PAGE_SIZE : 0;
 	goto start;

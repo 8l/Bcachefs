@@ -108,10 +108,9 @@ void bch_count_io_errors(struct cache *c, int error, const char *m)
 	}
 }
 
-void bch_bbio_endio(struct cache_set *c, struct bio *bio,
-		    int error, const char *m)
+void bch_bbio_count_io_errors(struct cache_set *c, struct bio *bio,
+			      int error, const char *m)
 {
-	struct closure *cl = bio->bi_private;
 	struct bbio *b = container_of(bio, struct bbio, bio);
 	struct cache *ca = PTR_CACHE(c, &b->key, 0);
 
@@ -136,6 +135,14 @@ void bch_bbio_endio(struct cache_set *c, struct bio *bio,
 	}
 
 	bch_count_io_errors(ca, error, m);
+}
+
+void bch_bbio_endio(struct cache_set *c, struct bio *bio,
+		    int error, const char *m)
+{
+	struct closure *cl = bio->bi_private;
+
+	bch_bbio_count_io_errors(c, bio, error, m);
 	bio_put(bio);
 	closure_put(cl);
 }

@@ -353,10 +353,12 @@ static void bcache_write_super(struct cache_set *c)
 
 static void uuid_endio(struct bio *bio, int error)
 {
-	/* XXX: check for io errors */
-	bch_bbio_endio(container_of(bio->bi_private, struct cache_set,
-				    uuid_write),
-		       bio, error, "accessing uuids");
+	struct closure *cl = bio->bi_private;
+	struct cache_set *c = container_of(cl, struct cache_set, uuid_write.cl);
+
+	bch_bbio_count_io_errors(c, bio, error, "accessing uuids");
+	bch_bbio_free(bio, c);
+	closure_put(cl);
 }
 
 static void uuid_io(struct cache_set *c, unsigned long rw,
@@ -368,10 +370,8 @@ static void uuid_io(struct cache_set *c, unsigned long rw,
 	closure_lock(&c->uuid_write, parent);
 
 	for (unsigned i = 0; i < KEY_PTRS(k); i++) {
-		struct bio *bio = PTR_CACHE(c, k, i)->uuid_bio;
+		struct bio *bio = bch_bbio_alloc(c);
 
-		bio_reset(bio);
-		bio_get(bio);
 		bio->bi_rw	= REQ_SYNC|REQ_META|rw;
 		bio->bi_size	= KEY_SIZE(k) << 9;
 
@@ -1694,8 +1694,6 @@ static void cache_free(struct kobject *kobj)
 
 	if (c->prio_bio)
 		bio_put(c->prio_bio);
-	if (c->uuid_bio)
-		kfree(container_of(c->uuid_bio, struct bbio, bio));
 
 	free_pages((unsigned long) c->disk_buckets, ilog2(bucket_pages(c)));
 	kfree(c->prio_buckets);
@@ -1725,7 +1723,6 @@ static int cache_alloc(struct cache_sb *sb, struct cache *c)
 {
 	size_t free;
 	struct bucket *b;
-	struct bbio *bbio;
 
 	if (!c)
 		return -ENOMEM;
@@ -1759,16 +1756,8 @@ static int cache_alloc(struct cache_sb *sb, struct cache *c)
 	    !(c->prio_buckets	= kzalloc(sizeof(uint64_t) * prio_buckets(c) *
 					  2, GFP_KERNEL)) ||
 	    !(c->disk_buckets	= alloc_bucket_pages(GFP_KERNEL, c)) ||
-	    !(bbio		= kmalloc(sizeof(struct bbio) +
-					  sizeof(struct bio_vec) *
-					  bucket_pages(c), GFP_KERNEL)) ||
 	    !(c->prio_bio	= bio_kmalloc(GFP_KERNEL, bucket_pages(c))))
 		goto err;
-
-	c->uuid_bio = &bbio->bio;
-	bio_init(c->uuid_bio);
-	c->uuid_bio->bi_max_vecs = bucket_pages(c);
-	c->uuid_bio->bi_io_vec = c->uuid_bio->bi_inline_vecs;
 
 	c->prio_next = c->prio_buckets + prio_buckets(c);
 

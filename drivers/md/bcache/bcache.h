@@ -328,9 +328,6 @@ struct cache {
 	/* XXX: move to cache_set */
 	struct dentry		*debug;
 
-	/* XXX: replace with bios allocated from bio_meta mempool */
-	struct bio		*uuid_bio;
-
 	struct closure		prio;
 	/* XXX: replace with bios allocated from bio_meta mempool */
 	struct bio		*prio_bio;
@@ -902,6 +899,7 @@ void bch_writeback_queue(struct cached_dev *);
 void bch_writeback_add(struct cached_dev *, unsigned);
 
 void bch_count_io_errors(struct cache *, int, const char *);
+void bch_bbio_count_io_errors(struct cache_set *, struct bio *, int, const char *);
 void bch_bbio_endio(struct cache_set *, struct bio *, int, const char *);
 void bch_bbio_free(struct bio *, struct cache_set *);
 struct bio *bch_bbio_alloc(struct cache_set *);

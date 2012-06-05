@@ -638,22 +638,29 @@ static inline void closure_wake_up(struct closure_waitlist *list)
 static inline void set_closure_fn(struct closure *cl, closure_fn *fn,
 				  struct workqueue_struct *wq)
 {
+	BUG_ON(object_is_on_stack(cl));
+	closure_set_ip(cl);
 	cl->fn = fn;
 	cl->wq = wq;
 	/* between atomic_dec() in closure_put() */
 	smp_mb__before_atomic_dec();
 }
 
-#define continue_at(_cl, _fn, _wq, ...)					\
+#define continue_at(_cl, _fn, _wq)					\
 do {									\
-	BUG_ON(!(_cl) || object_is_on_stack(_cl));			\
-	closure_set_ip(_cl);						\
 	set_closure_fn(_cl, _fn, _wq);					\
 	closure_sub(_cl, CLOSURE_RUNNING + 1);				\
-	return __VA_ARGS__;						\
+	return;								\
 } while (0)
 
 #define closure_return(_cl)	continue_at((_cl), NULL, NULL)
+
+#define continue_at_nobarrier(_cl, _fn, _wq)				\
+do {									\
+	set_closure_fn(_cl, _fn, _wq);					\
+	closure_queue(cl);						\
+	return;								\
+} while (0)
 
 static inline void closure_call(closure_fn fn, struct closure *cl,
 				struct closure *parent)

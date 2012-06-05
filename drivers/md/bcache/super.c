@@ -356,7 +356,7 @@ static void uuid_endio(struct bio *bio, int error)
 	struct closure *cl = bio->bi_private;
 	struct cache_set *c = container_of(cl, struct cache_set, uuid_write.cl);
 
-	bch_bbio_count_io_errors(c, bio, error, "accessing uuids");
+	cache_set_err_on(error, c, "accessing uuids");
 	bch_bbio_free(bio, c);
 	closure_put(cl);
 }
@@ -519,16 +519,16 @@ static struct uuid_entry *uuid_find_empty(struct cache_set *c)
 static void prio_endio(struct bio *bio, int error)
 {
 	struct cache *c = bio->bi_private;
-	bch_count_io_errors(c, error, "writing priorities");
 
+	cache_set_err_on(error, c->set, "accessing priorities");
+	bch_bbio_free(bio, c->set);
 	closure_put(&c->prio);
 }
 
 static void prio_io(struct cache *c, uint64_t bucket, unsigned long rw)
 {
-	struct bio *bio = c->prio_bio;
+	struct bio *bio = bch_bbio_alloc(c->set);
 
-	bio_reset(bio);
 	bio->bi_sector	= bucket * c->sb.bucket_size;
 	bio->bi_bdev	= c->bdev;
 	bio->bi_rw	= REQ_SYNC|REQ_META|rw;
@@ -654,7 +654,7 @@ void bch_prio_write(struct cache *c)
 	continue_at(&c->prio, prio_write_bucket, system_wq);
 }
 
-static int prio_read(struct cache *c, uint64_t bucket)
+static void prio_read(struct cache *c, uint64_t bucket)
 {
 	struct prio_set *p = c->disk_buckets;
 	struct bucket_disk *d = p->data + prios_per_bucket(c), *end = d;
@@ -669,10 +669,6 @@ static int prio_read(struct cache *c, uint64_t bucket)
 
 			prio_io(c, bucket, READ_SYNC);
 			closure_sync(&c->prio);
-
-			/* XXX: doesn't get error handling right with splits */
-			if (!test_bit(BIO_UPTODATE, &c->prio_bio->bi_flags))
-				continue_at(&c->prio, NULL, NULL, -1);
 
 			if (p->csum != crc64(&p->magic, bucket_bytes(c) - 8))
 				printk(KERN_WARNING "bcache: "
@@ -690,7 +686,7 @@ static int prio_read(struct cache *c, uint64_t bucket)
 		b->gen = b->disk_gen = b->last_gc = b->gc_gen = d->gen;
 	}
 
-	continue_at(&c->prio, NULL, NULL, 0);
+	continue_at(&c->prio, NULL, NULL);
 }
 
 /* Bcache device */
@@ -1481,10 +1477,14 @@ static void run_cache_set(struct cache_set *c)
 		j = &list_entry(journal.prev, struct journal_replay, list)->j;
 
 		err = "IO error reading priorities";
-		for_each_cache(ca, c) {
-			if (prio_read(ca, j->prio_bucket[ca->sb.nr_this_dev]))
-				goto err;
-		}
+		for_each_cache(ca, c)
+			prio_read(ca, j->prio_bucket[ca->sb.nr_this_dev]);
+
+		/*
+		 * If prio_read() fails it'll call cache_set_error and we'll
+		 * tear everything down right away, but if we perhaps checked
+		 * sooner we could avoid journal replay.
+		 */
 
 		k = &j->btree_root;
 
@@ -1692,9 +1692,6 @@ static void cache_free(struct kobject *kobj)
 
 	bch_free_discards(c);
 
-	if (c->prio_bio)
-		bio_put(c->prio_bio);
-
 	free_pages((unsigned long) c->disk_buckets, ilog2(bucket_pages(c)));
 	kfree(c->prio_buckets);
 	vfree(c->buckets);
@@ -1755,8 +1752,7 @@ static int cache_alloc(struct cache_sb *sb, struct cache *c)
 					  c->sb.nbuckets)) ||
 	    !(c->prio_buckets	= kzalloc(sizeof(uint64_t) * prio_buckets(c) *
 					  2, GFP_KERNEL)) ||
-	    !(c->disk_buckets	= alloc_bucket_pages(GFP_KERNEL, c)) ||
-	    !(c->prio_bio	= bio_kmalloc(GFP_KERNEL, bucket_pages(c))))
+	    !(c->disk_buckets	= alloc_bucket_pages(GFP_KERNEL, c)))
 		goto err;
 
 	c->prio_next = c->prio_buckets + prio_buckets(c);

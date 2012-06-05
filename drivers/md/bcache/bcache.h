@@ -329,8 +329,6 @@ struct cache {
 	struct dentry		*debug;
 
 	struct closure		prio;
-	/* XXX: replace with bios allocated from bio_meta mempool */
-	struct bio		*prio_bio;
 	struct prio_set		*disk_buckets;
 
 	/*

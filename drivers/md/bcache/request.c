@@ -679,6 +679,7 @@ static struct search *search_alloc(struct bio *bio, struct bcache_device *d)
 	s->orig_bio		= bio;
 	s->write		= (bio->bi_rw & REQ_WRITE) != 0;
 	s->op.flush_journal	= (bio->bi_rw & REQ_FLUSH) != 0;
+	s->op.skip		= (bio->bi_rw & REQ_DISCARD) != 0;
 	s->recoverable		= 1;
 	do_bio_hook(s);
 
@@ -980,7 +981,7 @@ static void request_write(struct cached_dev *d, struct search *s)
 		s->writeback	= true;
 	}
 
-	if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
+	if (bio->bi_rw & REQ_DISCARD) {
 		if (blk_queue_discard(bdev_get_queue(d->bdev)))
 			closure_bio_submit(bio, cl);
 
@@ -1024,7 +1025,7 @@ static void request_nodata(struct cached_dev *d, struct search *s)
 	struct closure *cl = &s->cl;
 	struct bio *bio = &s->bio.bio;
 
-	if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
+	if (bio->bi_rw & REQ_DISCARD) {
 		request_write(d, s);
 		return;
 	}
@@ -1082,7 +1083,7 @@ static void check_should_skip(struct cached_dev *d, struct search *s)
 
 	if (atomic_read(&d->disk.detaching) ||
 	    c->gc_stats.in_use > CUTOFF_CACHE_ADD ||
-	    (bio->bi_rw & (1 << BIO_RW_DISCARD)))
+	    (bio->bi_rw & REQ_DISCARD))
 		goto skip;
 
 	if (mode == CACHE_MODE_NONE ||
@@ -1268,8 +1269,7 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 
 	if (bio_has_data(bio) && !(bio->bi_rw & REQ_WRITE)) {
 		closure_call(btree_read_async, &s->op.cl, cl);
-	} else if (bio_has_data(bio) || (bio->bi_rw & REQ_DISCARD)) {
-		s->op.skip	= (bio->bi_rw & (1 << BIO_RW_DISCARD)) != 0;
+	} else if (bio_has_data(bio) || s->op.skip) {
 		s->writeback	= true;
 		s->op.cache_bio	= bio;
 

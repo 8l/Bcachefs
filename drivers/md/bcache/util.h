@@ -10,36 +10,6 @@
 #include <linux/vmalloc.h>
 #include <linux/workqueue.h>
 
-#ifndef USHRT_MAX
-#define USHRT_MAX	((u16)(~0U))
-#define SHRT_MAX	((s16)(USHRT_MAX>>1))
-#endif
-
-#ifndef REQ_WRITE
-
-#define REQ_WRITE		WRITE
-#define REQ_UNPLUG		(1U << BIO_RW_UNPLUG)
-#define REQ_SYNC		((1U << BIO_RW_SYNCIO)|REQ_UNPLUG)
-#define REQ_META		(1U << BIO_RW_META)
-#define REQ_RAHEAD		(1U << BIO_RW_AHEAD)
-#define REQ_FLUSH		(1U << BIO_RW_BARRIER)
-
-#define console_lock()		acquire_console_sem()
-#define console_unlock()	release_console_sem()
-
-#define blkdev_put(...)		close_bdev_exclusive(__VA_ARGS__)
-#define blkdev_get_by_path(...)	open_bdev_exclusive(__VA_ARGS__)
-
-#else
-
-#define REQ_UNPLUG		0U
-#define BIO_RW_DISCARD		__REQ_DISCARD
-#define current_is_writer(x)	true
-
-#endif
-
-extern struct workqueue_struct *system_wq;
-
 #define PAGE_SECTORS		(PAGE_SIZE / 512)
 
 struct closure;

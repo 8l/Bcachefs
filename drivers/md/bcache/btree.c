@@ -2051,8 +2051,6 @@ static int bch_btree_insert_recurse(struct btree *b, struct btree_op *op,
 	}
 
 	if (!bch_keylist_empty(&op->keys)) {
-		BUG_ON(!current_is_writer(&b->lock));
-
 		if (should_split(b)) {
 			if (op->lock <= b->c->root->level) {
 				BUG_ON(b->level);
@@ -2138,7 +2136,6 @@ int bch_btree_insert(struct btree_op *op, struct cache_set *c)
 void bch_btree_set_root(struct btree *b)
 {
 	BUG_ON(!b->written);
-	BUG_ON(!current_is_writer(&b->c->root->lock));
 
 	for (unsigned i = 0; i < KEY_PTRS(&b->key); i++)
 		BUG_ON(PTR_BUCKET(b->c, &b->key, i)->prio != BTREE_PRIO);

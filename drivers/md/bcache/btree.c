@@ -2193,8 +2193,7 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 {
 	struct search *s = container_of(op, struct search, op);
 	struct bio *bio = &s->bio.bio;
-
-	unsigned sectors, ptr;
+	unsigned ptr;
 	struct bio *n;
 
 	int ret = submit_partial_cache_miss(b, op, k);
@@ -2210,13 +2209,10 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 	       KEY_DEV(k) == op->inode &&
 	       bio->bi_sector < k->key) {
 		struct bkey *bio_key;
-		struct block_device *bdev = PTR_CACHE(b->c, k, ptr)->bdev;
-
 		sector_t sector = PTR_OFFSET(k, ptr) +
 			(bio->bi_sector - KEY_START(k));
-
-		sectors = min_t(unsigned, k->key - bio->bi_sector,
-				__bio_max_sectors(bio, bdev, sector));
+		unsigned sectors = min_t(uint64_t, INT_MAX,
+					 k->key - bio->bi_sector);
 
 		n = bch_bio_split_get(bio, sectors, s->d);
 		if (!n)

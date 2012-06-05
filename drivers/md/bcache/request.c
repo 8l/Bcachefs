@@ -278,11 +278,6 @@ static void put_data_bucket(struct open_bucket *b, struct cache_set *c,
 {
 	unsigned split = min(bio_sectors(bio), b->sectors_free);
 
-	for (unsigned i = 0; i < KEY_PTRS(&b->key); i++)
-		split = min(split, __bio_max_sectors(bio,
-				      PTR_CACHE(c, &b->key, i)->bdev,
-				      PTR_OFFSET(&b->key, i)));
-
 	b->key.key += split;
 
 	bkey_copy(k, &b->key);
@@ -886,8 +881,6 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	struct cached_dev *d = container_of(s->d, struct cached_dev, disk);
 	struct bio *n;
 
-	sectors = min(sectors, bio_max_sectors(bio)),
-
 	n = bch_bio_split_get(bio, sectors, s->d);
 	if (!n)
 		return -EAGAIN;
@@ -904,7 +897,7 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	    s->op.c->gc_stats.in_use >= CUTOFF_CACHE_READA)
 		reada = 0;
 	else
-		reada = min(d->readahead >> 9, sectors - bio_sectors(n));
+		reada = d->readahead >> 9;
 
 	s->cache_bio_sectors = bio_sectors(n) + reada;
 	s->op.cache_bio = bio_alloc_bioset(GFP_NOWAIT,

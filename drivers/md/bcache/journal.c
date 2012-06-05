@@ -20,7 +20,6 @@
 static void journal_read_endio(struct bio *bio, int error)
 {
 	struct closure *cl = bio->bi_private;
-	bio_put(bio);
 	closure_put(cl);
 }
 
@@ -455,8 +454,6 @@ static void journal_write_endio(struct bio *bio, int error)
 	struct journal_write *w = bio->bi_private;
 
 	cache_set_err_on(error, w->c, "journal io error");
-
-	bio_put(bio);
 	closure_put(&w->c->journal.io.cl);
 }
 

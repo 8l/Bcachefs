@@ -809,7 +809,6 @@ static void request_read_done(struct closure *cl)
 		void *dst_ptr;
 
 		bio_reset(s->op.cache_bio);
-		atomic_set(&s->op.cache_bio->bi_cnt, 1);
 		s->op.cache_bio->bi_sector	= s->cache_miss->bi_sector;
 		s->op.cache_bio->bi_bdev	= s->cache_miss->bi_bdev;
 		s->op.cache_bio->bi_size	= s->cache_bio_sectors << 9;

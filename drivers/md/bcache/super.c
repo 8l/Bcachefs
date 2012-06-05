@@ -371,6 +371,7 @@ static void uuid_io(struct cache_set *c, unsigned long rw,
 		struct bio *bio = PTR_CACHE(c, k, i)->uuid_bio;
 
 		bio_reset(bio);
+		bio_get(bio);
 		bio->bi_rw	= REQ_SYNC|REQ_META|rw;
 		bio->bi_size	= KEY_SIZE(k) << 9;
 
@@ -519,7 +520,6 @@ static void prio_endio(struct bio *bio, int error)
 	struct cache *c = bio->bi_private;
 	bch_count_io_errors(c, error, "writing priorities");
 
-	bio_put(bio);
 	closure_put(&c->prio);
 }
 

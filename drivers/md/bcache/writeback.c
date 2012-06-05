@@ -25,7 +25,6 @@ static void dirty_init(struct keybuf_key *w)
 	struct bio *bio = &io->bio;
 
 	bio_init(bio);
-	bio_get(bio);
 	if (!io->d->writeback_percent)
 		bio_set_prio(bio, IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0));
 
@@ -247,7 +246,6 @@ static void dirty_endio(struct bio *bio, int error)
 	if (error)
 		SET_KEY_DIRTY(&w->key, false);
 
-	bio_put(bio);
 	closure_put(&io->cl);
 }
 

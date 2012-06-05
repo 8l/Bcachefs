@@ -843,8 +843,7 @@ static void request_read_done(struct closure *cl)
 
 	if (s->op.cache_bio && !atomic_read(&s->op.c->closing)) {
 		s->op.type = BTREE_REPLACE;
-		closure_init(&s->op.cl, &s->cl);
-		bio_insert(&s->op.cl);
+		closure_call(bio_insert, &s->op.cl, cl);
 	}
 
 	continue_at(cl, cached_dev_read_complete, NULL);
@@ -861,13 +860,11 @@ static void request_read_done_bh(struct closure *cl)
 	bch_mark_cache_accounting(s, !s->cache_miss, s->op.skip);
 
 	if (s->error)
-		set_closure_fn(cl, request_read_error, bcache_wq);
+		continue_at_nobarrier(cl, request_read_error, bcache_wq);
 	else if (s->op.cache_bio || verify(d, &s->bio.bio))
-		set_closure_fn(cl, request_read_done, bcache_wq);
+		continue_at_nobarrier(cl, request_read_done, bcache_wq);
 	else
-		set_closure_fn(cl, cached_dev_read_complete, NULL);
-
-	closure_queue(cl);
+		continue_at_nobarrier(cl, cached_dev_read_complete, NULL);
 }
 
 static int cached_dev_cache_miss(struct btree *b, struct search *s,
@@ -940,9 +937,7 @@ static void request_read(struct cached_dev *d, struct search *s)
 	struct closure *cl = &s->cl;
 
 	check_should_skip(d, s);
-
-	__closure_init(&s->op.cl, cl);
-	btree_read_async(&s->op.cl);
+	closure_call(btree_read_async, &s->op.cl, cl);
 
 	continue_at(cl, request_read_done_bh, NULL);
 }
@@ -986,24 +981,14 @@ static void request_write(struct cached_dev *d, struct search *s)
 	}
 
 	if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
-		s->op.skip	= true;
-		s->op.cache_bio	= s->orig_bio;
-		bio_get(s->op.cache_bio);
-
 		if (blk_queue_discard(bdev_get_queue(d->bdev)))
 			closure_bio_submit(bio, cl);
 
-		goto out;
+		goto skip;
 	}
 
-	if (s->op.skip) {
-skip:		s->op.cache_bio = s->orig_bio;
-		bio_get(s->op.cache_bio);
-		trace_bcache_write_skip(s->orig_bio);
-
-		closure_bio_submit(bio, cl);
-		goto out;
-	}
+	if (s->op.skip)
+		goto skip;
 
 	if (should_writeback(d, s->orig_bio))
 		s->writeback = true;
@@ -1011,10 +996,8 @@ skip:		s->op.cache_bio = s->orig_bio;
 	if (!s->writeback) {
 		s->op.cache_bio = bio_clone_bioset(bio, GFP_NOIO,
 						   d->disk.bio_split);
-		if (!s->op.cache_bio) {
-			s->op.skip = true;
+		if (!s->op.cache_bio)
 			goto skip;
-		}
 
 		trace_bcache_writethrough(s->orig_bio);
 		closure_bio_submit(bio, cl);
@@ -1024,9 +1007,16 @@ skip:		s->op.cache_bio = s->orig_bio;
 		bch_writeback_add(d, bio_sectors(bio));
 	}
 out:
-	__closure_init(&s->op.cl, cl);
-	bio_insert(&s->op.cl);
+	closure_call(bio_insert, &s->op.cl, cl);
 	continue_at(cl, cached_dev_write_complete, NULL);
+skip:
+	s->op.skip = true;
+	s->op.cache_bio = s->orig_bio;
+	bio_get(s->op.cache_bio);
+	trace_bcache_write_skip(s->orig_bio);
+
+	closure_bio_submit(bio, cl);
+	goto out;
 }
 
 static void request_nodata(struct cached_dev *d, struct search *s)

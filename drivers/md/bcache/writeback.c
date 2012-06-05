@@ -278,6 +278,16 @@ static void read_dirty_endio(struct bio *bio, int error)
 	dirty_endio(bio, error);
 }
 
+static void read_dirty_submit(struct closure *cl)
+{
+	struct dirty_io *io = container_of(cl, struct dirty_io, cl);
+
+	trace_bcache_read_dirty(&io->bio);
+	closure_bio_submit(&io->bio, cl);
+
+	continue_at(cl, write_dirty, dirty_wq);
+}
+
 static void read_dirty(struct cached_dev *dc)
 {
 	unsigned delay = writeback_delay(dc, 0);
@@ -326,12 +336,7 @@ static void read_dirty(struct cached_dev *dc)
 
 		pr_debug("%s", pkey(&w->key));
 
-		closure_init(&io->cl, NULL);
-		set_closure_fn(&io->cl, write_dirty, dirty_wq);
-		closure_set_stopped(&io->cl);
-
-		trace_bcache_read_dirty(&io->bio);
-		submit_bio(0, &io->bio);
+		closure_call(read_dirty_submit, &io->cl, NULL);
 
 		delay = writeback_delay(dc, KEY_SIZE(&w->key));
 

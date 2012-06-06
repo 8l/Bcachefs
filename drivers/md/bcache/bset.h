@@ -170,10 +170,8 @@ void bch_btree_iter_push(struct btree_iter *, struct bkey *, struct bkey *);
 struct bkey *__bch_btree_iter_init(struct btree *, struct btree_iter *,
 				   struct bkey *, struct bset_tree *);
 
+/* 32 bits total: */
 #define BKEY_MID_BITS		3
-#define BKEY_MID_MAX		(~(~0 << (BKEY_MID_BITS - 1)))
-#define BKEY_MID_MIN		(-1 - BKEY_MID_MAX)
-
 #define BKEY_EXPONENT_BITS	7
 #define BKEY_MANTISSA_BITS	22
 #define BKEY_MANTISSA_MASK	((1 << BKEY_MANTISSA_BITS) - 1)

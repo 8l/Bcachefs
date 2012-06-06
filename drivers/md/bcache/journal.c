@@ -252,7 +252,9 @@ void bch_journal_mark(struct cache_set *c, struct list_head *list)
 			atomic_set(i->pin, 1);
 		}
 
-		for (struct bkey *k = i->j.start; k < end(&i->j); k = next(k)) {
+		for (struct bkey *k = i->j.start;
+		     k < end(&i->j);
+		     k = bkey_next(k)) {
 			for (unsigned j = 0; j < KEY_PTRS(k); j++) {
 				struct bucket *g = PTR_BUCKET(c, k, j);
 				atomic_inc(&g->pin);
@@ -284,7 +286,9 @@ int bch_journal_replay(struct cache_set *s, struct list_head *list,
 				   "missing! (replaying %llu-%llu)\n",
 				   n, i->j.seq - 1, start, end);
 
-		for (struct bkey *k = i->j.start; k < end(&i->j); k = next(k)) {
+		for (struct bkey *k = i->j.start;
+		     k < end(&i->j);
+		     k = bkey_next(k)) {
 			pr_debug("%s", pkey(k));
 			bkey_copy(op->keys.top, k);
 			bch_keylist_push(&op->keys);

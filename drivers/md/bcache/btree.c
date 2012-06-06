@@ -1228,7 +1228,7 @@ static void btree_gc_coalesce(struct btree *b, struct btree_op *op,
 		} else
 			for (struct bkey *k = n2->start;
 			     k < end(n2);
-			     k = next(k)) {
+			     k = bkey_next(k)) {
 				if (__set_blocks(n1, n1->keys + keys +
 						 bkey_u64s(k), b->c) > blocks)
 					break;
@@ -1726,7 +1726,7 @@ static bool fix_overlapping_extents(struct btree *b,
 				BKEY_PADDED(key) temp;
 				bkey_copy(&temp.key, k);
 				shift_keys(b, k, &temp.key);
-				top = next(k);
+				top = bkey_next(k);
 			}
 
 			bch_cut_front(insert, top);
@@ -1804,7 +1804,7 @@ static bool btree_insert_key(struct btree *b, struct btree_op *op,
 
 		while (m != end(i) &&
 		       bkey_cmp(k, &START_KEY(m)) > 0)
-			prev = m, m = next(m);
+			prev = m, m = bkey_next(m);
 
 		if (key_merging_disabled(b->c))
 			goto insert;

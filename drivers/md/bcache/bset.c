@@ -60,8 +60,8 @@ struct bkey *bch_keylist_pop(struct keylist *l)
 	if (k == l->top)
 		return NULL;
 
-	while (next(k) != l->top)
-		k = next(k);
+	while (bkey_next(k) != l->top)
+		k = bkey_next(k);
 
 	return l->top = k;
 }
@@ -475,7 +475,7 @@ static void make_bfloat(struct bset_tree *t, unsigned j)
 		: tree_to_bkey(t, j >> (ffz(j) + 1));
 
 	BUG_ON(m < l || m > r);
-	BUG_ON(next(p) != m);
+	BUG_ON(bkey_next(p) != m);
 
 	if (KEY_DEV(l) != KEY_DEV(r))
 		f->exponent = fls64(KEY_DEV(r) ^ KEY_DEV(l)) + 64;
@@ -540,16 +540,16 @@ static void bset_build_written_tree(struct btree *b)
 	     j;
 	     j = inorder_next(j, t->size)) {
 		while (bkey_to_cacheline(t, k) != cacheline)
-			k = next(k);
+			k = bkey_next(k);
 
 		t->prev[j] = bkey_u64s(k);
-		k = next(k);
+		k = bkey_next(k);
 		cacheline++;
 		t->tree[j].m = bkey_to_cacheline_offset(k);
 	}
 
-	while (next(k) != end(t->data))
-		k = next(k);
+	while (bkey_next(k) != end(t->data))
+		k = bkey_next(k);
 
 	t->end = *k;
 
@@ -579,7 +579,7 @@ found_set:
 	if (k == t->data->start)
 		goto fix_left;
 
-	if (next(k) == end(t->data)) {
+	if (bkey_next(k) == end(t->data)) {
 		t->end = *k;
 		goto fix_right;
 	}
@@ -633,7 +633,7 @@ void bch_bset_fix_lookup_table(struct btree *b, struct bkey *k)
 			k = table_to_bkey(t, j - 1);
 
 			while (k < cacheline_to_bkey(t, j, 0))
-				k = next(k);
+				k = bkey_next(k);
 
 			t->prev[j] = bkey_to_cacheline_offset(k);
 		}
@@ -646,7 +646,7 @@ void bch_bset_fix_lookup_table(struct btree *b, struct bkey *k)
 
 	for (k = table_to_bkey(t, t->size - 1);
 	     k != end(t->data);
-	     k = next(k))
+	     k = bkey_next(k))
 		if (t->size == bkey_to_cacheline(t, k)) {
 			t->prev[t->size] = bkey_to_cacheline_offset(k);
 			t->size++;
@@ -814,7 +814,7 @@ struct bkey *__bch_bset_search(struct btree *b, struct bset_tree *t,
 
 	while (likely(i.l != i.r) &&
 	       bkey_cmp(i.l, search) <= 0)
-		i.l = next(i.l);
+		i.l = bkey_next(i.l);
 
 	return i.l;
 }
@@ -864,7 +864,7 @@ struct bkey *bch_btree_iter_next(struct btree_iter *iter)
 
 	if (!btree_iter_end(iter)) {
 		ret = iter->data->k;
-		iter->data->k = next(iter->data->k);
+		iter->data->k = bkey_next(iter->data->k);
 
 		if (iter->data->k > iter->data->end) {
 			__WARN();
@@ -907,7 +907,7 @@ static void btree_sort_fixup(struct btree_iter *iter)
 
 		for (k = i->k;
 		     k != i->end && bkey_cmp(top->k, &START_KEY(k)) > 0;
-		     k = next(k))
+		     k = bkey_next(k))
 			if (top->k > i->k)
 				__bch_cut_front(top->k, k);
 			else if (KEY_SIZE(k))
@@ -942,12 +942,12 @@ static void btree_mergesort(struct btree *b, struct bset *out,
 			bkey_copy(last, k);
 		} else if (b->level ||
 			   !bch_bkey_try_merge(b, last, k)) {
-			last = next(last);
+			last = bkey_next(last);
 			bkey_copy(last, k);
 		}
 	}
 
-	out->keys = last ? (uint64_t *) next(last) - out->d : 0;
+	out->keys = last ? (uint64_t *) bkey_next(last) - out->d : 0;
 
 	pr_debug("sorted %i keys", out->keys);
 	bch_check_key_order(b, out);

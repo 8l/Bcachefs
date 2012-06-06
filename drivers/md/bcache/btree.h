@@ -142,7 +142,7 @@ static inline struct bkey *bch_btree_iter_init(struct btree *b,
 #define bkey_filter(b, i, k, filter)					\
 ({									\
 	while (k < end(i) && filter(b, k))				\
-		k = next(k);						\
+		k = bkey_next(k);					\
 	k;								\
 })
 
@@ -155,7 +155,7 @@ static inline struct bkey *bch_btree_iter_init(struct btree *b,
 		for (k = _t->data->start;				\
 		     (k = bkey_filter(b, _t->data, k, filter))		\
 			< end(_t->data);				\
-		     k = next(k))
+		     k = bkey_next(k))
 
 #define for_each_key(b, k)	for_each_key_filter(b, k, all_keys)
 

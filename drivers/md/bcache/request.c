@@ -428,12 +428,12 @@ static void bio_insert_error(struct closure *cl)
 	struct bkey *src = op->keys.bottom, *dst = op->keys.bottom;
 
 	while (src != op->keys.top) {
-		struct bkey *n = next(src);
+		struct bkey *n = bkey_next(src);
 
 		SET_KEY_PTRS(src, 0);
 		bkey_copy(dst, src);
 
-		dst = next(dst);
+		dst = bkey_next(dst);
 		src = n;
 	}
 

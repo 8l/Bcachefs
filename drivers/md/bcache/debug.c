@@ -43,12 +43,14 @@ const char *bch_ptr_status(struct cache_set *c, const struct bkey *k)
 
 static bool skipped_backwards(struct btree *b, struct bkey *k)
 {
-	return bkey_cmp(k, (!b->level) ? &START_KEY(next(k)) : next(k)) > 0;
+	return bkey_cmp(k, (!b->level)
+			? &START_KEY(bkey_next(k))
+			: bkey_next(k)) > 0;
 }
 
 static void dump_bset(struct btree *b, struct bset *i)
 {
-	for (struct bkey *k = i->start; k < end(i); k = next(k)) {
+	for (struct bkey *k = i->start; k < end(i); k = bkey_next(k)) {
 		printk(KERN_ERR "block %zu key %zu/%i: %s", index(i, b),
 		       (uint64_t *) k - i->d, i->keys, pkey(k));
 
@@ -63,7 +65,7 @@ static void dump_bset(struct btree *b, struct bset *i)
 
 		printk(" %s\n", bch_ptr_status(b->c, k));
 
-		if (next(k) < end(i) &&
+		if (bkey_next(k) < end(i) &&
 		    skipped_backwards(b, k))
 			printk(KERN_ERR "Key skipped backwards\n");
 	}
@@ -275,7 +277,7 @@ void bch_check_key_order_msg(struct btree *b, struct bset *i, const char *m, ...
 	if (!i->keys)
 		return;
 
-	for (struct bkey *k = i->start; next(k) < end(i); k = next(k))
+	for (struct bkey *k = i->start; bkey_next(k) < end(i); k = bkey_next(k))
 		if (skipped_backwards(b, k)) {
 			va_list args;
 			va_start(args, m);
@@ -511,7 +513,7 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 			for (struct bkey *k = i->start,
 			     *j = fill->sets[0].data->start;
 			     k < end(i);
-			     k = next(k), j = next(j))
+			     k = bkey_next(k), j = bkey_next(j))
 				if (bkey_cmp(k, j) ||
 				    KEY_SIZE(k) != KEY_SIZE(j))
 					printk(KERN_ERR "key %zi differs: %s "

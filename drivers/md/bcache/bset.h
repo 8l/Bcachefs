@@ -75,7 +75,7 @@ static inline void bkey_copy_key(struct bkey *dest, const struct bkey *src)
 	dest->key = src->key;
 }
 
-static inline struct bkey *next(const struct bkey *k)
+static inline struct bkey *bkey_next(const struct bkey *k)
 {
 	uint64_t *d = (void *) k;
 	return (struct bkey *) (d + bkey_u64s(k));
@@ -102,7 +102,7 @@ static inline void bch_keylist_init(struct keylist *l)
 
 static inline void bch_keylist_push(struct keylist *l)
 {
-	l->top = next(l->top);
+	l->top = bkey_next(l->top);
 }
 
 static inline void bch_keylist_add(struct keylist *l, struct bkey *k)

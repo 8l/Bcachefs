@@ -166,6 +166,20 @@ DEFINE_EVENT(bcache_bio, bcache_read_dirty,
 	TP_ARGS(bio)
 );
 
+DEFINE_EVENT(bcache_bio, bcache_write_moving,
+
+	TP_PROTO(struct bio *bio),
+
+	TP_ARGS(bio)
+);
+
+DEFINE_EVENT(bcache_bio, bcache_read_moving,
+
+	TP_PROTO(struct bio *bio),
+
+	TP_ARGS(bio)
+);
+
 DEFINE_EVENT(bcache_bio, bcache_journal_write,
 
 	TP_PROTO(struct bio *bio),

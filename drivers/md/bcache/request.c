@@ -559,7 +559,7 @@ err:
 	}
 }
 
-static void bio_insert(struct closure *cl)
+void bch_bio_insert(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 
@@ -843,7 +843,7 @@ static void request_read_done(struct closure *cl)
 
 	if (s->op.cache_bio && !atomic_read(&s->op.c->closing)) {
 		s->op.type = BTREE_REPLACE;
-		closure_call(bio_insert, &s->op.cl, cl);
+		closure_call(bch_bio_insert, &s->op.cl, cl);
 	}
 
 	continue_at(cl, cached_dev_read_complete, NULL);
@@ -976,6 +976,8 @@ static void request_write(struct cached_dev *dc, struct search *s)
 	start = KEY(dc->disk.id, bio->bi_sector, 0);
 	end = KEY(dc->disk.id, bio_end(bio), 0);
 
+	bch_keybuf_check_overlapping(&s->op.c->moving_gc_keys, &start, &end);
+
 	check_should_skip(dc, s);
 	down_read_non_owner(&dc->writeback_lock);
 
@@ -1011,7 +1013,7 @@ static void request_write(struct cached_dev *dc, struct search *s)
 		bch_writeback_add(dc, bio_sectors(bio));
 	}
 out:
-	closure_call(bio_insert, &s->op.cl, cl);
+	closure_call(bch_bio_insert, &s->op.cl, cl);
 	continue_at(cl, cached_dev_write_complete, NULL);
 skip:
 	s->op.skip = true;
@@ -1273,10 +1275,14 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 	if (bio_has_data(bio) && !(bio->bi_rw & REQ_WRITE)) {
 		closure_call(btree_read_async, &s->op.cl, cl);
 	} else if (bio_has_data(bio) || s->op.skip) {
+		bch_keybuf_check_overlapping(&s->op.c->moving_gc_keys,
+					     &KEY(d->id, bio->bi_sector, 0),
+					     &KEY(d->id, bio_end(bio), 0));
+
 		s->writeback	= true;
 		s->op.cache_bio	= bio;
 
-		closure_call(bio_insert, &s->op.cl, cl);
+		closure_call(bch_bio_insert, &s->op.cl, cl);
 	} else {
 		/* No data - probably a cache flush */
 		if (s->op.flush_journal)

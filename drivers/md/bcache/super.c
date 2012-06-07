@@ -1406,6 +1406,7 @@ struct cache_set *bch_cache_set_alloc(struct cache_sb *sb)
 	closure_init_unlocked(&c->sb_write);
 	closure_init_unlocked(&c->uuid_write);
 	spin_lock_init(&c->btree_read_time_lock);
+	bch_moving_init_cache_set(c);
 
 	INIT_LIST_HEAD(&c->list);
 	INIT_LIST_HEAD(&c->cached_devs);

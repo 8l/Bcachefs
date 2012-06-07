@@ -103,7 +103,8 @@ static const char *op_type(struct btree_op *op)
 #define PTR_HASH(c, k)							\
 	(((k)->ptr[0] >> c->bucket_bits) | PTR_GEN(k, 0))
 
-static struct workqueue_struct *btree_gc_wq, *btree_io_wq;
+struct workqueue_struct *bch_gc_wq;
+static struct workqueue_struct *btree_io_wq;
 
 void bch_btree_op_init_stack(struct btree_op *op)
 {
@@ -1509,7 +1510,7 @@ static void btree_gc(struct closure *cl)
 		blktrace_msg_all(c, "Stopped gc");
 		printk(KERN_WARNING "bcache: gc failed!\n");
 
-		continue_at(cl, btree_gc, btree_gc_wq);
+		continue_at(cl, btree_gc, bch_gc_wq);
 	}
 
 	/* Possibly wait for new UUIDs or whatever to hit disk */
@@ -1530,13 +1531,13 @@ static void btree_gc(struct closure *cl)
 	trace_bcache_gc_end(c->sb.set_uuid);
 	closure_wake_up(&c->bucket_wait);
 
-	closure_return(cl);
+	continue_at(cl, bch_moving_gc, bch_gc_wq);
 }
 
 void bch_queue_gc(struct cache_set *c)
 {
 	if (closure_trylock(&c->gc.cl, &c->cl))
-		continue_at(&c->gc.cl, btree_gc, btree_gc_wq);
+		continue_at(&c->gc.cl, btree_gc, bch_gc_wq);
 }
 
 /* Initial partial gc */
@@ -2485,13 +2486,13 @@ void bch_btree_exit(void)
 {
 	if (btree_io_wq)
 		destroy_workqueue(btree_io_wq);
-	if (btree_gc_wq)
-		destroy_workqueue(btree_gc_wq);
+	if (bch_gc_wq)
+		destroy_workqueue(bch_gc_wq);
 }
 
 int __init bch_btree_init(void)
 {
-	if (!(btree_gc_wq = create_singlethread_workqueue("bch_btree_gc")) ||
+	if (!(bch_gc_wq = create_singlethread_workqueue("bch_btree_gc")) ||
 	    !(btree_io_wq = create_singlethread_workqueue("bch_btree_io")))
 		return -ENOMEM;
 

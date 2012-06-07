@@ -374,6 +374,7 @@ struct cache {
 	 * call prio_write() to keep gens from wrapping.
 	 */
 	uint8_t			need_save_prio;
+	unsigned		gc_move_threshold;
 
 	/*
 	 * If nonzero, we know we aren't going to find any buckets to invalidate
@@ -548,6 +549,12 @@ struct cache_set {
 	/* Counts how many sectors bio_insert has added to the cache */
 	atomic_t		sectors_to_gc;
 
+	struct closure		moving_gc;
+	struct closure_waitlist	moving_gc_wait;
+	struct keybuf		moving_gc_keys;
+	/* Number of moving GC bios in flight */
+	atomic_t		in_flight;
+
 	struct btree		*root;
 
 #ifdef CONFIG_BCACHE_DEBUG
@@ -606,6 +613,7 @@ struct cache_set {
 	unsigned		key_merging_disabled:1;
 	unsigned		gc_always_rewrite:1;
 	unsigned		shrinker_disabled:1;
+	unsigned		copy_gc_enabled:1;
 
 #define BUCKET_HASH_BITS	12
 	struct hlist_head	bucket_hash[1 << BUCKET_HASH_BITS];
@@ -942,7 +950,7 @@ bool bch_cache_set_error(struct cache_set *, const char *, ...);
 void bch_prio_write(struct cache *);
 void bch_write_bdev_super(struct cached_dev *, struct closure *);
 
-extern struct workqueue_struct *bcache_wq;
+extern struct workqueue_struct *bcache_wq, *bch_gc_wq;
 extern const char * const bch_cache_modes[];
 
 struct cache_set *bch_cache_set_alloc(struct cache_sb *);
@@ -951,6 +959,7 @@ int bch_alloc_discards(struct cache *);
 void bch_btree_cache_free(struct cache_set *);
 int bch_btree_cache_alloc(struct cache_set *);
 void bch_writeback_init_cached_dev(struct cached_dev *);
+void bch_moving_init_cache_set(struct cache_set *);
 
 void bch_debug_exit(void);
 int bch_debug_init(struct kobject *);

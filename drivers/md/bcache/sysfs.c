@@ -72,6 +72,7 @@ rw_attribute(gc_always_rewrite);
 rw_attribute(freelist_percent);
 rw_attribute(cache_replacement_policy);
 rw_attribute(btree_shrinker_disabled);
+rw_attribute(copy_gc_enabled);
 rw_attribute(size);
 
 static void unregister_fake(struct kobject *k)
@@ -121,7 +122,7 @@ SHOW(__cached_dev)
 			       "dirty:\t\t%s\n"
 			       "derivative:\t%s\n"
 			       "target:\t\t%s\n",
-			       dc->writeback_rate,
+			       dc->writeback_rate.rate,
 			       dc->writeback_rate_change,
 			       dirty, derivative, target);
 	}
@@ -468,6 +469,7 @@ lock_root:
 	sysfs_printf(key_merging_disabled,	"%i", c->key_merging_disabled);
 	sysfs_printf(gc_always_rewrite,		"%i", c->gc_always_rewrite);
 	sysfs_printf(btree_shrinker_disabled,	"%i", c->shrinker_disabled);
+	sysfs_printf(copy_gc_enabled,		"%i", c->copy_gc_enabled);
 
 	if (attr == &sysfs_bset_tree_stats)
 		return bch_bset_print_stats(c, buf);
@@ -540,6 +542,7 @@ STORE(__cache_set)
 	sysfs_strtoul(key_merging_disabled,	c->key_merging_disabled);
 	sysfs_strtoul(gc_always_rewrite,	c->gc_always_rewrite);
 	sysfs_strtoul(btree_shrinker_disabled,	c->shrinker_disabled);
+	sysfs_strtoul(copy_gc_enabled,		c->copy_gc_enabled);
 
 	return size;
 }
@@ -612,6 +615,7 @@ static void cache_set_kobject_init(struct cache_set *c)
 #endif
 		&sysfs_gc_always_rewrite,
 		&sysfs_btree_shrinker_disabled,
+		&sysfs_copy_gc_enabled,
 		NULL
 	};
 	KTYPE(cache_set_internal, unregister_fake);

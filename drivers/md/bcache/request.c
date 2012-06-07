@@ -21,12 +21,6 @@ struct kmem_cache *bch_search_cache;
 
 static void check_should_skip(struct cached_dev *, struct search *);
 
-static const char *search_type(struct search *s)
-{
-	return s->writeback ? "writeback"
-		: s->write ? "write" : "read";
-}
-
 /* Cgroup interface */
 
 #ifdef CONFIG_CGROUP_BCACHE
@@ -235,6 +229,7 @@ static void bio_invalidate(struct closure *cl)
 	}
 
 	op->bio_insert_done = true;
+	bio_put(bio);
 out:
 	continue_at(cl, bch_journal, bcache_wq);
 }
@@ -472,7 +467,6 @@ static void bio_insert_loop(struct closure *cl)
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 	struct search *s = container_of(op, struct search, op);
 	struct bio *bio = op->cache_bio, *n;
-	unsigned sectors = bio_sectors(bio);
 
 	if (op->skip)
 		return bio_invalidate(cl);
@@ -481,6 +475,9 @@ static void bio_insert_loop(struct closure *cl)
 		set_gc_sectors(op->c);
 		bch_queue_gc(op->c);
 	}
+
+	bio->bi_end_io	= bio_insert_endio;
+	bio->bi_private = cl;
 
 	do {
 		struct bkey *k;
@@ -522,60 +519,52 @@ static void bio_insert_loop(struct closure *cl)
 		pr_debug("%s", pkey(k));
 		bch_keylist_push(&op->keys);
 
-		n->bi_rw |= REQ_WRITE;
-
 		trace_bcache_cache_insert(n, n->bi_sector, n->bi_bdev);
+		n->bi_rw |= REQ_WRITE;
 		bch_submit_bbio(n, op->c, k, 0);
 	} while (n != bio);
 
 	op->bio_insert_done = true;
 	continue_at(cl, bch_journal, bcache_wq);
 err:
-	/* IO never happened, so bbio key isn't set up, so we can't call
-	 * bio_endio()
+	/* bch_alloc_sectors() blocks if s->writeback = true */
+	BUG_ON(s->writeback);
+
+	/*
+	 * But if it's not a writeback write we'd rather just bail out if
+	 * there aren't any buckets ready to write to - it might take awhile and
+	 * we might be starving btree writes for gc or something.
 	 */
-	bio_put(bio);
 
-	pr_debug("error for %s, %i/%i sectors done, bi_sector %llu",
-		 search_type(s), sectors - bio_sectors(bio), sectors,
-		 (uint64_t) bio->bi_sector);
-
-	if (s->writeback) {
-		/* This is dead code now, since we handle all memory allocation
-		 * failures and block if we don't have free buckets
+	if (s->write) {
+		/*
+		 * Writethrough write: We can't complete the write until we've
+		 * updated the index. But we don't want to delay the write while
+		 * we wait for buckets to be freed up, so just invalidate the
+		 * rest of the write.
 		 */
-		BUG();
-		/* Lookup in in_writeback rb tree, wait on appropriate
-		 * closure, then invalidate in btree and do normal
-		 * write
-		 */
-		op->bio_insert_done	= true;
-		s->error		= -ENOMEM;
-	} else if (s->write) {
-		op->skip		= true;
+		op->skip = true;
 		return bio_invalidate(cl);
-	} else
-		op->bio_insert_done	= true;
+	} else {
+		/*
+		 * From a cache miss, we can just insert the keys for the data
+		 * we have written or bail out if we didn't do anything.
+		 */
+		op->bio_insert_done = true;
 
-	if (!bch_keylist_empty(&op->keys))
-		continue_at(cl, bch_journal, bcache_wq);
-	else
-		closure_return(cl);
+		if (!bch_keylist_empty(&op->keys))
+			continue_at(cl, bch_journal, bcache_wq);
+		else
+			closure_return(cl);
+	}
 }
 
 static void bio_insert(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 
-	if (!op->skip) {
-		struct bio *bio = op->cache_bio;
-
-		bio->bi_end_io	= bio_insert_endio;
-		bio->bi_private = cl;
-		bio_get(bio);
-	}
-
 	bch_keylist_init(&op->keys);
+	bio_get(op->cache_bio);
 	bio_insert_loop(cl);
 }
 

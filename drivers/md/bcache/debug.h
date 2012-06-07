@@ -46,9 +46,9 @@ static inline void bch_data_verify(struct search *s) {};
 #endif
 
 #ifdef CONFIG_DEBUG_FS
-void bch_debug_init_cache(struct cache *);
+void bch_debug_init_cache_set(struct cache_set *);
 #else
-static inline void bch_debug_init_cache(struct cache *c) {}
+static inline void bch_debug_init_cache_set(struct cache_set *c) {}
 #endif
 
 #endif

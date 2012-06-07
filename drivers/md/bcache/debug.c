@@ -367,8 +367,7 @@ static int debug_seq_show(struct seq_file *f, void *data)
 {
 	static const char *tabs = "\t\t\t\t\t";
 	uint64_t last = 0, sectors = 0;
-	struct cache *ca = f->private;
-	struct cache_set *c = ca->set;
+	struct cache_set *c = f->private;
 
 	struct btree_op op;
 	bch_btree_op_init_stack(&op);
@@ -387,21 +386,21 @@ static int debug_seq_open(struct inode *inode, struct file *file)
 	return single_open(file, debug_seq_show, inode->i_private);
 }
 
-static const struct file_operations cache_debug_ops = {
+static const struct file_operations cache_set_debug_ops = {
 	.owner		= THIS_MODULE,
 	.open		= debug_seq_open,
 	.read		= seq_read,
 	.release	= single_release
 };
 
-void bch_debug_init_cache(struct cache *c)
+void bch_debug_init_cache_set(struct cache_set *c)
 {
 	if (!IS_ERR_OR_NULL(debug)) {
-		char b[BDEVNAME_SIZE];
-		bdevname(c->bdev, b);
+		char name[50];
+		snprintf(name, 50, "bcache-%pU", c->sb.set_uuid);
 
-		c->debug = debugfs_create_file(b, 0400, debug, c,
-					       &cache_debug_ops);
+		c->debug = debugfs_create_file(name, 0400, debug, c,
+					       &cache_set_debug_ops);
 	}
 }
 

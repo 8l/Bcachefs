@@ -325,9 +325,6 @@ struct cache {
 	struct kobject		kobj;
 	struct block_device	*bdev;
 
-	/* XXX: move to cache_set */
-	struct dentry		*debug;
-
 	struct closure		prio;
 	struct prio_set		*disk_buckets;
 
@@ -425,6 +422,7 @@ struct cache_set {
 	struct list_head	list;
 	struct kobject		kobj;
 	struct kobject		internal;
+	struct dentry		*debug;
 	struct cache_accounting accounting;
 
 	/*

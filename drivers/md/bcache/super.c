@@ -1275,6 +1275,9 @@ static void cache_set_free(struct closure *cl)
 	struct cache_set *c = container_of(cl, struct cache_set, cl);
 	struct cache *ca;
 
+	if (!IS_ERR_OR_NULL(c->debug))
+		debugfs_remove(c->debug);
+
 	bch_open_buckets_free(c);
 	bch_btree_cache_free(c);
 	bch_journal_free(c);
@@ -1649,6 +1652,8 @@ static const char *register_cache_set(struct cache *ca)
 	if (bch_cache_accounting_add_kobjs(&c->accounting, &c->kobj))
 		goto err;
 
+	bch_debug_init_cache_set(c);
+
 	list_add(&c->list, &cache_sets);
 found:
 	sprintf(buf, "cache%i", ca->sb.nr_this_dev);
@@ -1685,9 +1690,6 @@ static void cache_free(struct kobject *kobj)
 
 	if (c->set)
 		c->set->cache[c->sb.nr_this_dev] = NULL;
-
-	if (!IS_ERR_OR_NULL(c->debug))
-		debugfs_remove(c->debug);
 
 	bch_free_discards(c);
 
@@ -1792,8 +1794,6 @@ static const char *register_cache(struct cache_sb *sb, struct page *sb_page,
 	err = register_cache_set(c);
 	if (err)
 		goto err;
-
-	bch_debug_init_cache(c);
 
 	printk(KERN_DEBUG "bcache: registered cache device %s\n",
 	       bdevname(bdev, name));

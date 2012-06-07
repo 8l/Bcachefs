@@ -760,6 +760,18 @@ static inline struct bucket *PTR_BUCKET(struct cache_set *c,
 
 /* Btree key macros */
 
+static inline void bkey_init(struct bkey *k)
+{
+	/*
+	 * The high bit being set is a relic from when we used it to do binary
+	 * searches - it told you where a key started. It's not used anymore,
+	 * and can probably be safely dropped.
+	 */
+
+	k->header = 1ULL << 63;
+	k->key = 0;
+}
+
 #define KEY_HEADER(len, dev)						\
 	(((uint64_t) 1 << 63) | ((uint64_t) (len) << 20) | (dev))
 

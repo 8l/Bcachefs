@@ -273,44 +273,7 @@ int bch_open_buckets_alloc(struct cache_set *c)
 	return 0;
 }
 
-static void put_data_bucket(struct open_bucket *b, struct cache_set *c,
-			    struct bkey *k, struct bio *bio)
-{
-	unsigned split = min(bio_sectors(bio), b->sectors_free);
-
-	b->key.key += split;
-
-	bkey_copy(k, &b->key);
-	SET_KEY_SIZE(k, split);
-
-	b->sectors_free	-= split;
-
-	/* If we're closing this open bucket, get_data_bucket()'s refcount now
-	 * belongs to the key that's being inserted
-	 */
-	if (b->sectors_free < c->sb.block_size)
-		b->sectors_free = 0;
-	else
-		for (unsigned i = 0; i < KEY_PTRS(&b->key); i++)
-			atomic_inc(&PTR_BUCKET(c, &b->key, i)->pin);
-
-	for (unsigned i = 0; i < KEY_PTRS(&b->key); i++) {
-		atomic_long_add(split,
-				&PTR_CACHE(c, &b->key, i)->sectors_written);
-
-		SET_PTR_OFFSET(&b->key, i, PTR_OFFSET(&b->key, i) + split);
-	}
-
-	spin_unlock(&c->data_bucket_lock);
-}
-
-/**
- * get_data_bucket - pick out a bucket to write some data to, possibly
- * allocating a new one.
- *
- * @search: Device/offset (backing device) the IO is for
- * @s: Big state struct
- *
+/*
  * We keep multiple buckets open for writes, and try to segregate different
  * write streams for better cache utilization: first we look for a bucket where
  * the last write to it was sequential with the current write, and failing that
@@ -329,87 +292,130 @@ static void put_data_bucket(struct open_bucket *b, struct cache_set *c,
  * detecting sequential IO to segregate their data, but going off of the task
  * should be a sane heuristic.
  */
-static struct open_bucket *get_data_bucket(struct bkey *search,
-					   struct search *s)
+static struct open_bucket *pick_data_bucket(struct cache_set *c,
+					    const struct bkey *search,
+					    struct task_struct *task,
+					    struct bkey *alloc)
 {
-	struct closure cl, *w = NULL;
+	struct open_bucket *ret, *ret_task = NULL;
+
+	list_for_each_entry_reverse(ret, &c->data_buckets, list)
+		if (!bkey_cmp(&ret->key, search))
+			goto found;
+		else if (ret->last == task)
+			ret_task = ret;
+
+	ret = ret_task ?: list_first_entry(&c->data_buckets,
+					   struct open_bucket, list);
+found:
+	if (!ret->sectors_free && KEY_PTRS(alloc)) {
+		ret->sectors_free = c->sb.bucket_size;
+		bkey_copy(&ret->key, alloc);
+		bkey_init(alloc);
+	}
+
+	if (!ret->sectors_free)
+		ret = NULL;
+
+	return ret;
+}
+
+/*
+ * Allocates some space in the cache to write to, and k to point to the newly
+ * allocated space, and updates KEY_SIZE(k) and KEY_OFFSET(k) (to point to the
+ * end of the newly allocated space).
+ *
+ * May allocate fewer sectors than @sectors, KEY_SIZE(k) indicates how many
+ * sectors were actually allocated.
+ *
+ * If s->writeback is true, will not fail.
+ */
+static bool bch_alloc_sectors(struct bkey *k, unsigned sectors,
+			      struct search *s)
+{
 	struct cache_set *c = s->op.c;
-	struct open_bucket *l, *ret, *ret_task;
+	struct open_bucket *b;
 	BKEY_PADDED(key) alloc;
-	struct bkey *k = NULL;
+	struct closure cl, *w = NULL;
 
 	if (s->writeback) {
 		closure_init_stack(&cl);
 		w = &cl;
 	}
+
 	/*
 	 * We might have to allocate a new bucket, which we can't do with a
 	 * spinlock held. So if we have to allocate, we drop the lock, allocate
-	 * and then retry.
+	 * and then retry. KEY_PTRS() indicates whether alloc points to
+	 * allocated bucket(s).
 	 */
-again:
-	ret = ret_task = NULL;
 
+	bkey_init(&alloc.key);
 	spin_lock(&c->data_bucket_lock);
-	list_for_each_entry_reverse(l, &c->data_buckets, list) {
-		if (!bkey_cmp(&l->key, search)) {
-			ret = l;
-			goto found;
-		} else if (l->last == s->task) {
-			ret_task = l;
-		}
-	}
 
-	ret = ret_task ?: list_first_entry(&c->data_buckets,
-					   struct open_bucket, list);
-found:
-	if (!ret->sectors_free) {
-		if (!k) {
-			spin_unlock(&c->data_bucket_lock);
-			k = &alloc.key;
+	while (!(b = pick_data_bucket(c, k, s->task, &alloc.key))) {
+		spin_unlock(&c->data_bucket_lock);
 
-			/*
-			 * We don't segregate buckets for dirty and clean data -
-			 * so when we allocate it always mark it reclaimable
-			 * first, and then mark it dirty down below the first
-			 * time we use it for dirty data
-			 */
+		if (bch_pop_bucket_set(c, GC_MARK_RECLAIMABLE, s->op.write_prio,
+				       &alloc.key, 1, w))
+			return false;
 
-			if (bch_pop_bucket_set(c, GC_MARK_RECLAIMABLE,
-					       s->op.write_prio,
-					       k, 1, w))
-				return NULL;
-
-			goto again;
-		}
-
-		bkey_copy(&ret->key, k);
-		k = NULL;
-
-		ret->sectors_free = c->sb.bucket_size;
-	} else {
-		for (unsigned i = 0; i < KEY_PTRS(&ret->key); i++)
-			EBUG_ON(ptr_stale(c, &ret->key, i));
+		spin_lock(&c->data_bucket_lock);
 	}
 
 	/*
-	 * If we had to allocate and then retry, we might discover that we raced
-	 * and no longer need to allocate. Therefore, if we allocated a bucket
-	 * but didn't use it, drop the refcount pop_bucket_set() took:
+	 * If we had to allocate, we might race and not need to allocate the
+	 * second time we call find_data_bucket(). If we allocated a bucket but
+	 * didn't use it, drop the refcount pop_bucket_set() took:
 	 */
-	if (k)
-		__bkey_put(c, k);
+	if (KEY_PTRS(&alloc.key))
+		__bkey_put(c, &alloc.key);
 
-	if (w)
-		for (unsigned i = 0; i < KEY_PTRS(&ret->key); i++)
-			SET_GC_MARK(PTR_BUCKET(c, &ret->key, i), GC_MARK_DIRTY);
+	for (unsigned i = 0; i < KEY_PTRS(&b->key); i++)
+		EBUG_ON(ptr_stale(c, &b->key, i));
 
-	ret->last = s->task;
-	bkey_copy_key(&ret->key, search);
+	/* Set up the pointer to the space we're allocating: */
 
-	/* @ret is hot now, put it at the end of the queue */
-	list_move_tail(&ret->list, &c->data_buckets);
-	return ret;
+	for (unsigned i = 0; i < KEY_PTRS(&b->key); i++)
+		k->ptr[i] = b->key.ptr[i];
+
+	sectors = min(sectors, b->sectors_free);
+
+	k->key += sectors;
+	SET_KEY_SIZE(k, sectors);
+	SET_KEY_PTRS(k, KEY_PTRS(&b->key));
+
+	/*
+	 * Move b to the end of the lru, and keep track of what this bucket was
+	 * last used for:
+	 */
+	list_move_tail(&b->list, &c->data_buckets);
+	bkey_copy_key(&b->key, k);
+	b->last = s->task;
+
+	b->sectors_free	-= sectors;
+
+	for (unsigned i = 0; i < KEY_PTRS(&b->key); i++) {
+		SET_PTR_OFFSET(&b->key, i, PTR_OFFSET(&b->key, i) + sectors);
+
+		atomic_long_add(sectors,
+				&PTR_CACHE(c, &b->key, i)->sectors_written);
+	}
+
+	if (b->sectors_free < c->sb.block_size)
+		b->sectors_free = 0;
+
+	/*
+	 * k takes refcounts on the buckets it points to until it's inserted
+	 * into the btree, but if we're done with this bucket we just transfer
+	 * get_data_bucket()'s refcount.
+	 */
+	if (b->sectors_free)
+		for (unsigned i = 0; i < KEY_PTRS(&b->key); i++)
+			atomic_inc(&PTR_BUCKET(c, &b->key, i)->pin);
+
+	spin_unlock(&c->data_bucket_lock);
+	return true;
 }
 
 static void bio_insert_error(struct closure *cl)
@@ -477,7 +483,6 @@ static void bio_insert_loop(struct closure *cl)
 	}
 
 	do {
-		struct open_bucket *b;
 		struct bkey *k;
 		struct bio_set *split = s->d
 			? s->d->bio_split : op->c->bio_split;
@@ -489,12 +494,12 @@ static void bio_insert_loop(struct closure *cl)
 			continue_at(cl, bch_journal, bcache_wq);
 
 		k = op->keys.top;
+		bkey_init(k);
+		SET_KEY_DEV(k, op->inode);
+		k->key = bio->bi_sector;
 
-		b = get_data_bucket(&KEY(op->inode, bio->bi_sector, 0), s);
-		if (!b)
+		if (!bch_alloc_sectors(k, bio_sectors(bio), s))
 			goto err;
-
-		put_data_bucket(b, op->c, k, bio);
 
 		n = bio_split(bio, KEY_SIZE(k), GFP_NOIO, split);
 		if (!n) {
@@ -502,8 +507,13 @@ static void bio_insert_loop(struct closure *cl)
 			continue_at(cl, bio_insert_loop, bcache_wq);
 		}
 
-		if (s->writeback)
+		if (s->writeback) {
 			SET_KEY_DIRTY(k, true);
+
+			for (unsigned i = 0; i < KEY_PTRS(k); i++)
+				SET_GC_MARK(PTR_BUCKET(op->c, k, i),
+					    GC_MARK_DIRTY);
+		}
 
 		SET_KEY_CSUM(k, op->csum);
 		if (KEY_CSUM(k))

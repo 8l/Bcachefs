@@ -73,8 +73,9 @@ ssize_t snprint_string_list(char *buf, size_t size, const char * const list[],
 			    size_t selected)
 {
 	char *out = buf;
+	size_t i;
 
-	for (size_t i = 0; list[i]; i++)
+	for (i = 0; list[i]; i++)
 		out += snprintf(out, buf + size - out,
 				i == selected ? "[%s] " : "%s ", list[i]);
 

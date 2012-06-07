@@ -841,7 +841,9 @@ do {									\
 
 static inline void __bkey_put(struct cache_set *c, struct bkey *k)
 {
-	for (unsigned i = 0; i < KEY_PTRS(k); i++)
+	unsigned i;
+
+	for (i = 0; i < KEY_PTRS(k); i++)
 		atomic_dec_bug(&PTR_BUCKET(c, k, i)->pin);
 }
 

@@ -35,7 +35,7 @@ void bch_cache_read_endio(struct bio *, int);
 void bch_open_buckets_free(struct cache_set *);
 int bch_open_buckets_alloc(struct cache_set *);
 
-void bch_cached_dev_request_init(struct cached_dev *d);
+void bch_cached_dev_request_init(struct cached_dev *dc);
 void bch_flash_dev_request_init(struct bcache_device *d);
 
 extern struct kmem_cache *bch_search_cache, *bch_passthrough_cache;

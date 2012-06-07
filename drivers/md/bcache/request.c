@@ -172,23 +172,23 @@ struct cgroup_subsys bcache_subsys = {
 EXPORT_SYMBOL_GPL(bcache_subsys);
 #endif
 
-static unsigned cache_mode(struct cached_dev *d, struct bio *bio)
+static unsigned cache_mode(struct cached_dev *dc, struct bio *bio)
 {
 #ifdef CONFIG_CGROUP_BCACHE
 	int r = bio_to_cgroup(bio)->cache_mode;
 	if (r >= 0)
 		return r;
 #endif
-	return BDEV_CACHE_MODE(&d->sb);
+	return BDEV_CACHE_MODE(&dc->sb);
 }
 
-static bool verify(struct cached_dev *d, struct bio *bio)
+static bool verify(struct cached_dev *dc, struct bio *bio)
 {
 #ifdef CONFIG_CGROUP_BCACHE
 	if (bio_to_cgroup(bio)->verify)
 		return true;
 #endif
-	return d->verify;
+	return dc->verify;
 }
 
 static void bio_csum(struct bio *bio, struct bkey *k)
@@ -776,7 +776,7 @@ static void request_read_error(struct closure *cl)
 static void request_read_done(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
-	struct cached_dev *d = container_of(s->d, struct cached_dev, disk);
+	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 
 	/*
 	 * s->cache_bio != NULL implies that we had a cache miss; cache_bio now
@@ -836,7 +836,7 @@ static void request_read_done(struct closure *cl)
 		}
 	}
 
-	if (verify(d, &s->bio.bio) && s->recoverable)
+	if (verify(dc, &s->bio.bio) && s->recoverable)
 		bch_data_verify(s);
 
 	bio_complete(s);
@@ -852,7 +852,7 @@ static void request_read_done(struct closure *cl)
 static void request_read_done_bh(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
-	struct cached_dev *d = container_of(s->d, struct cached_dev, disk);
+	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 
 	if (s->cache_miss && s->op.insert_collision)
 		bch_mark_cache_miss_collision(s);
@@ -861,7 +861,7 @@ static void request_read_done_bh(struct closure *cl)
 
 	if (s->error)
 		continue_at_nobarrier(cl, request_read_error, bcache_wq);
-	else if (s->op.cache_bio || verify(d, &s->bio.bio))
+	else if (s->op.cache_bio || verify(dc, &s->bio.bio))
 		continue_at_nobarrier(cl, request_read_done, bcache_wq);
 	else
 		continue_at_nobarrier(cl, cached_dev_read_complete, NULL);
@@ -872,7 +872,7 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 {
 	int ret = 0;
 	unsigned reada;
-	struct cached_dev *d = container_of(s->d, struct cached_dev, disk);
+	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 	struct bio *miss;
 
 	miss = bio_split(bio, sectors, GFP_NOIO, s->d->bio_split);
@@ -891,12 +891,12 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	    s->op.c->gc_stats.in_use >= CUTOFF_CACHE_READA)
 		reada = 0;
 	else
-		reada = d->readahead >> 9;
+		reada = dc->readahead >> 9;
 
 	s->cache_bio_sectors = bio_sectors(miss) + reada;
 	s->op.cache_bio = bio_alloc_bioset(GFP_NOWAIT,
 			DIV_ROUND_UP(s->cache_bio_sectors, PAGE_SECTORS),
-			d->disk.bio_split);
+			dc->disk.bio_split);
 
 	if (!s->op.cache_bio)
 		goto out_submit;
@@ -932,11 +932,11 @@ out_submit:
 	return ret;
 }
 
-static void request_read(struct cached_dev *d, struct search *s)
+static void request_read(struct cached_dev *dc, struct search *s)
 {
 	struct closure *cl = &s->cl;
 
-	check_should_skip(d, s);
+	check_should_skip(dc, s);
 	closure_call(btree_read_async, &s->op.cl, cl);
 
 	continue_at(cl, request_read_done_bh, NULL);
@@ -953,18 +953,18 @@ static void cached_dev_write_complete(struct closure *cl)
 	cached_dev_bio_complete(cl);
 }
 
-static bool should_writeback(struct cached_dev *d, struct bio *bio)
+static bool should_writeback(struct cached_dev *dc, struct bio *bio)
 {
 	unsigned threshold = (bio->bi_rw & REQ_SYNC)
 		? CUTOFF_WRITEBACK_SYNC
 		: CUTOFF_WRITEBACK;
 
-	return !atomic_read(&d->disk.detaching) &&
-		cache_mode(d, bio) == CACHE_MODE_WRITEBACK &&
-		d->disk.c->gc_stats.in_use < threshold;
+	return !atomic_read(&dc->disk.detaching) &&
+		cache_mode(dc, bio) == CACHE_MODE_WRITEBACK &&
+		dc->disk.c->gc_stats.in_use < threshold;
 }
 
-static void request_write(struct cached_dev *d, struct search *s)
+static void request_write(struct cached_dev *dc, struct search *s)
 {
 	struct closure *cl = &s->cl;
 	struct bio *bio = &s->bio.bio;
@@ -972,8 +972,8 @@ static void request_write(struct cached_dev *d, struct search *s)
 	start = KEY(dc->disk.id, bio->bi_sector, 0);
 	end = KEY(dc->disk.id, bio_end(bio), 0);
 
-	check_should_skip(d, s);
-	down_read_non_owner(&d->writeback_lock);
+	check_should_skip(dc, s);
+	down_read_non_owner(&dc->writeback_lock);
 
 	if (bch_keybuf_check_overlapping(&dc->writeback_keys, &start, &end)) {
 		s->op.skip	= false;
@@ -981,7 +981,7 @@ static void request_write(struct cached_dev *d, struct search *s)
 	}
 
 	if (bio->bi_rw & REQ_DISCARD) {
-		if (blk_queue_discard(bdev_get_queue(d->bdev)))
+		if (blk_queue_discard(bdev_get_queue(dc->bdev)))
 			closure_bio_submit(bio, cl);
 
 		goto skip;
@@ -990,12 +990,12 @@ static void request_write(struct cached_dev *d, struct search *s)
 	if (s->op.skip)
 		goto skip;
 
-	if (should_writeback(d, s->orig_bio))
+	if (should_writeback(dc, s->orig_bio))
 		s->writeback = true;
 
 	if (!s->writeback) {
 		s->op.cache_bio = bio_clone_bioset(bio, GFP_NOIO,
-						   d->disk.bio_split);
+						   dc->disk.bio_split);
 		if (!s->op.cache_bio)
 			goto skip;
 
@@ -1004,7 +1004,7 @@ static void request_write(struct cached_dev *d, struct search *s)
 	} else {
 		s->op.cache_bio = bio;
 		trace_bcache_writeback(s->orig_bio);
-		bch_writeback_add(d, bio_sectors(bio));
+		bch_writeback_add(dc, bio_sectors(bio));
 	}
 out:
 	closure_call(bio_insert, &s->op.cl, cl);
@@ -1019,13 +1019,13 @@ skip:
 	goto out;
 }
 
-static void request_nodata(struct cached_dev *d, struct search *s)
+static void request_nodata(struct cached_dev *dc, struct search *s)
 {
 	struct closure *cl = &s->cl;
 	struct bio *bio = &s->bio.bio;
 
 	if (bio->bi_rw & REQ_DISCARD) {
-		request_write(d, s);
+		request_write(dc, s);
 		return;
 	}
 
@@ -1068,19 +1068,19 @@ static void add_sequential(struct task_struct *t)
 	t->sequential_io = 0;
 }
 
-static void check_should_skip(struct cached_dev *d, struct search *s)
+static void check_should_skip(struct cached_dev *dc, struct search *s)
 {
 	struct hlist_head *iohash(uint64_t k)
-	{ return &d->io_hash[hash_64(k, RECENT_IO_BITS)]; }
+	{ return &dc->io_hash[hash_64(k, RECENT_IO_BITS)]; }
 
 	struct cache_set *c = s->op.c;
 	struct bio *bio = &s->bio.bio;
 
 	long rand;
 	int cutoff = bch_get_congested(c);
-	unsigned mode = cache_mode(d, bio);
+	unsigned mode = cache_mode(dc, bio);
 
-	if (atomic_read(&d->disk.detaching) ||
+	if (atomic_read(&dc->disk.detaching) ||
 	    c->gc_stats.in_use > CUTOFF_CACHE_ADD ||
 	    (bio->bi_rw & REQ_DISCARD))
 		goto skip;
@@ -1097,7 +1097,7 @@ static void check_should_skip(struct cached_dev *d, struct search *s)
 	}
 
 	if (!cutoff) {
-		cutoff = d->sequential_cutoff >> 9;
+		cutoff = dc->sequential_cutoff >> 9;
 
 		if (!cutoff)
 			goto rescale;
@@ -1108,18 +1108,18 @@ static void check_should_skip(struct cached_dev *d, struct search *s)
 			goto rescale;
 	}
 
-	if (d->sequential_merge) {
+	if (dc->sequential_merge) {
 		struct hlist_node *cursor;
 		struct io *i;
 
-		spin_lock(&d->io_lock);
+		spin_lock(&dc->io_lock);
 
 		hlist_for_each_entry(i, cursor, iohash(bio->bi_sector), hash)
 			if (i->last == bio->bi_sector &&
 			    time_before(jiffies, i->jiffies))
 				goto found;
 
-		i = list_first_entry(&d->io_lru, struct io, lru);
+		i = list_first_entry(&dc->io_lru, struct io, lru);
 
 		add_sequential(s->task);
 		i->sequential = 0;
@@ -1133,9 +1133,9 @@ found:
 
 		hlist_del(&i->hash);
 		hlist_add_head(&i->hash, iohash(i->last));
-		list_move_tail(&i->lru, &d->io_lru);
+		list_move_tail(&i->lru, &dc->io_lru);
 
-		spin_unlock(&d->io_lock);
+		spin_unlock(&dc->io_lock);
 	} else {
 		s->task->sequential_io = bio->bi_size;
 
@@ -1211,14 +1211,14 @@ static int cached_dev_congested(void *data, int bits)
 	return ret;
 }
 
-void bch_cached_dev_request_init(struct cached_dev *d)
+void bch_cached_dev_request_init(struct cached_dev *dc)
 {
-	struct gendisk *g = d->disk.disk;
+	struct gendisk *g = dc->disk.disk;
 
 	g->queue->make_request_fn		= cached_dev_make_request;
 	g->queue->backing_dev_info.congested_fn = cached_dev_congested;
-	d->disk.cache_miss			= cached_dev_cache_miss;
-	d->disk.ioctl				= cached_dev_ioctl;
+	dc->disk.cache_miss			= cached_dev_cache_miss;
+	dc->disk.ioctl				= cached_dev_ioctl;
 }
 
 /* Flash backed devices */

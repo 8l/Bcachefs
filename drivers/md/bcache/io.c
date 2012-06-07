@@ -45,36 +45,36 @@ void bch_submit_bbio(struct bio *bio, struct cache_set *c,
 
 /* IO errors */
 
-void bch_count_io_errors(struct cache *c, int error, const char *m)
+void bch_count_io_errors(struct cache *ca, int error, const char *m)
 {
 	/*
 	 * The halflife of an error is:
 	 * log2(1/2)/log2(127/128) * refresh ~= 88 * refresh
 	 */
 
-	if (c->set->error_decay) {
-		unsigned count = atomic_inc_return(&c->io_count);
+	if (ca->set->error_decay) {
+		unsigned count = atomic_inc_return(&ca->io_count);
 
-		while (count > c->set->error_decay) {
+		while (count > ca->set->error_decay) {
 			unsigned errors;
 			unsigned old = count;
-			unsigned new = count - c->set->error_decay;
+			unsigned new = count - ca->set->error_decay;
 
 			/*
 			 * First we subtract refresh from count; each time we
 			 * succesfully do so, we rescale the errors once:
 			 */
 
-			count = atomic_cmpxchg(&c->io_count, old, new);
+			count = atomic_cmpxchg(&ca->io_count, old, new);
 
 			if (count == old) {
 				count = new;
 
-				errors = atomic_read(&c->io_errors);
+				errors = atomic_read(&ca->io_errors);
 				do {
 					old = errors;
 					new = ((uint64_t) errors * 127) / 128;
-					errors = atomic_cmpxchg(&c->io_errors,
+					errors = atomic_cmpxchg(&ca->io_errors,
 								old, new);
 				} while (old != errors);
 			}
@@ -84,15 +84,15 @@ void bch_count_io_errors(struct cache *c, int error, const char *m)
 	if (error) {
 		char buf[BDEVNAME_SIZE];
 		unsigned errors = atomic_add_return(1 << IO_ERROR_SHIFT,
-						    &c->io_errors);
+						    &ca->io_errors);
 		errors >>= IO_ERROR_SHIFT;
 
-		if (errors < c->set->error_limit)
+		if (errors < ca->set->error_limit)
 			err_printk("%s: IO error on %s, recovering\n",
-				   bdevname(c->bdev, buf), m);
+				   bdevname(ca->bdev, buf), m);
 		else
-			bch_cache_set_error(c->set, "%s: too many IO errors %s",
-					    bdevname(c->bdev, buf), m);
+			bch_cache_set_error(ca->set, "%s: too many IO errors %s",
+					    bdevname(ca->bdev, buf), m);
 	}
 }
 

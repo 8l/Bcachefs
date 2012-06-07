@@ -10,8 +10,8 @@ struct keyprint_hack {
 
 struct keyprint_hack bch_pkey(const struct bkey *k);
 struct keyprint_hack bch_pbtree(const struct btree *b);
-#define pkey(k)		(bch_pkey(k).s)
-#define pbtree(b)	(bch_pbtree(b).s)
+#define pkey(k)		(&bch_pkey(k).s[0])
+#define pbtree(b)	(&bch_pbtree(b).s[0])
 
 #ifdef CONFIG_BCACHE_EDEBUG
 

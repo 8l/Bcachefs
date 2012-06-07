@@ -8,7 +8,7 @@ static void read_dirty(struct cached_dev *);
 
 struct dirty_io {
 	struct closure		cl;
-	struct cached_dev	*d;
+	struct cached_dev	*dc;
 	struct bio		bio;
 };
 
@@ -25,7 +25,7 @@ static void dirty_init(struct keybuf_key *w)
 	struct bio *bio = &io->bio;
 
 	bio_init(bio);
-	if (!io->d->writeback_percent)
+	if (!io->dc->writeback_percent)
 		bio_set_prio(bio, IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0));
 
 	bio->bi_size		= KEY_SIZE(&w->key) << 9;
@@ -84,30 +84,30 @@ static void refill_dirty(struct work_struct *work)
 	read_dirty(dc);
 }
 
-void bch_writeback_queue(struct cached_dev *d)
+void bch_writeback_queue(struct cached_dev *dc)
 {
-	queue_delayed_work(dirty_wq, &d->refill_dirty, 0);
+	queue_delayed_work(dirty_wq, &dc->refill_dirty, 0);
 }
 
-void bch_writeback_add(struct cached_dev *d, unsigned sectors)
+void bch_writeback_add(struct cached_dev *dc, unsigned sectors)
 {
-	atomic_long_add(sectors, &d->disk.sectors_dirty);
+	atomic_long_add(sectors, &dc->disk.sectors_dirty);
 
-	if (!atomic_read(&d->has_dirty) &&
-	    !atomic_xchg(&d->has_dirty, 1)) {
-		if (BDEV_STATE(&d->sb) != BDEV_STATE_DIRTY) {
-			SET_BDEV_STATE(&d->sb, BDEV_STATE_DIRTY);
+	if (!atomic_read(&dc->has_dirty) &&
+	    !atomic_xchg(&dc->has_dirty, 1)) {
+		if (BDEV_STATE(&dc->sb) != BDEV_STATE_DIRTY) {
+			SET_BDEV_STATE(&dc->sb, BDEV_STATE_DIRTY);
 			/* XXX: should do this synchronously */
-			bch_write_bdev_super(d, NULL);
+			bch_write_bdev_super(dc, NULL);
 		}
 
-		atomic_inc(&d->count);
-		queue_delayed_work(dirty_wq, &d->refill_dirty,
-				   d->writeback_delay * HZ);
+		atomic_inc(&dc->count);
+		queue_delayed_work(dirty_wq, &dc->refill_dirty,
+				   dc->writeback_delay * HZ);
 
-		if (d->writeback_percent)
-			schedule_delayed_work(&d->writeback_rate_update,
-				      d->writeback_rate_update_seconds * HZ);
+		if (dc->writeback_percent)
+			schedule_delayed_work(&dc->writeback_rate_update,
+				      dc->writeback_rate_update_seconds * HZ);
 	}
 }
 
@@ -200,7 +200,7 @@ static void write_dirty_finish(struct closure *cl)
 {
 	struct dirty_io *io = container_of(cl, struct dirty_io, cl);
 	struct keybuf_key *w = io->bio.bi_private;
-	struct cached_dev *dc = io->d;
+	struct cached_dev *dc = io->dc;
 	struct bio_vec *bv = bio_iovec_idx(&io->bio, io->bio.bi_vcnt);
 
 	while (bv-- != io->bio.bi_io_vec)
@@ -259,7 +259,7 @@ static void write_dirty(struct closure *cl)
 	dirty_init(w);
 	io->bio.bi_rw		= WRITE;
 	io->bio.bi_sector	= KEY_START(&w->key);
-	io->bio.bi_bdev		= io->d->bdev;
+	io->bio.bi_bdev		= io->dc->bdev;
 	io->bio.bi_end_io	= dirty_endio;
 
 	trace_bcache_write_dirty(&io->bio);
@@ -273,7 +273,7 @@ static void read_dirty_endio(struct bio *bio, int error)
 	struct keybuf_key *w = bio->bi_private;
 	struct dirty_io *io = w->private;
 
-	bch_count_io_errors(PTR_CACHE(io->d->disk.c, &w->key, 0),
+	bch_count_io_errors(PTR_CACHE(io->dc->disk.c, &w->key, 0),
 			    error, "reading dirty data from cache");
 
 	dirty_endio(bio, error);
@@ -323,7 +323,7 @@ static void read_dirty(struct cached_dev *dc)
 			goto err;
 
 		w->private	= io;
-		io->d		= dc;
+		io->dc		= dc;
 
 		dirty_init(w);
 		io->bio.bi_sector	= PTR_OFFSET(&w->key, 0);
@@ -370,27 +370,27 @@ static void read_dirty_work(struct work_struct *work)
 	read_dirty(dc);
 }
 
-void bch_writeback_init_cached_dev(struct cached_dev *d)
+void bch_writeback_init_cached_dev(struct cached_dev *dc)
 {
-	INIT_DELAYED_WORK(&d->refill_dirty, refill_dirty);
-	INIT_DELAYED_WORK(&d->read_dirty, read_dirty_work);
-	init_rwsem(&d->writeback_lock);
+	INIT_DELAYED_WORK(&dc->refill_dirty, refill_dirty);
+	INIT_DELAYED_WORK(&dc->read_dirty, read_dirty_work);
+	init_rwsem(&dc->writeback_lock);
 
-	bch_keybuf_init(&d->writeback_keys, dirty_pred);
+	bch_keybuf_init(&dc->writeback_keys, dirty_pred);
 
-	d->writeback_metadata		= true;
-	d->writeback_running		= true;
-	d->writeback_delay		= 30;
-	d->writeback_rate		= 1024;
+	dc->writeback_metadata		= true;
+	dc->writeback_running		= true;
+	dc->writeback_delay		= 30;
+	dc->writeback_rate		= 1024;
 
-	d->writeback_rate_update_seconds = 30;
-	d->writeback_rate_d_term	= 16;
-	d->writeback_rate_p_term_inverse = 64;
-	d->writeback_rate_d_smooth	= 8;
+	dc->writeback_rate_update_seconds = 30;
+	dc->writeback_rate_d_term	= 16;
+	dc->writeback_rate_p_term_inverse = 64;
+	dc->writeback_rate_d_smooth	= 8;
 
-	INIT_DELAYED_WORK(&d->writeback_rate_update, update_writeback_rate);
-	schedule_delayed_work(&d->writeback_rate_update,
-			      d->writeback_rate_update_seconds * HZ);
+	INIT_DELAYED_WORK(&dc->writeback_rate_update, update_writeback_rate);
+	schedule_delayed_work(&dc->writeback_rate_update,
+			      dc->writeback_rate_update_seconds * HZ);
 }
 
 void bch_writeback_exit(void)

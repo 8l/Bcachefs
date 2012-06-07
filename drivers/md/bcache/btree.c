@@ -594,7 +594,7 @@ static int mca_reap(struct btree *b, struct closure *cl, unsigned min_order)
 }
 
 static int bch_shrink_buckets(struct shrinker *shrink,
-				 struct shrink_control *sc)
+			      struct shrink_control *sc)
 {
 	struct cache_set *c = container_of(shrink, struct cache_set, shrink);
 	struct btree *b, *t;
@@ -883,7 +883,7 @@ err:
 }
 
 struct btree *bch_get_bucket(struct cache_set *c, struct bkey *k,
-			 int level, struct btree_op *op)
+			     int level, struct btree_op *op)
 {
 	int i = 0;
 	bool write = level <= op->lock;

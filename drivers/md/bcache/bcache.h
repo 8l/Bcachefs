@@ -863,15 +863,15 @@ do {									\
 
 #define err_printk(...)	printk(KERN_ERR "bcache: " __VA_ARGS__)
 
-static inline void cached_dev_put(struct cached_dev *d)
+static inline void cached_dev_put(struct cached_dev *dc)
 {
-	if (atomic_dec_and_test(&d->count))
-		schedule_work(&d->detach);
+	if (atomic_dec_and_test(&dc->count))
+		schedule_work(&dc->detach);
 }
 
-static inline bool cached_dev_get(struct cached_dev *d)
+static inline bool cached_dev_get(struct cached_dev *dc)
 {
-	if (!atomic_inc_not_zero(&d->count))
+	if (!atomic_inc_not_zero(&dc->count))
 		return false;
 
 	/* Paired with the mb in cached_dev_attach */

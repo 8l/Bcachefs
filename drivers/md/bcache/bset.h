@@ -204,9 +204,7 @@ struct bkey_float {
  */
 
 #define BSET_CACHELINE		128
-#define BSET_CACHELINE_BITS	ilog2(BSET_CACHELINE)
-
-#define bset_tree_space(b)	(btree_data_space(b) >> BSET_CACHELINE_BITS)
+#define bset_tree_space(b)	(btree_data_space(b) / BSET_CACHELINE)
 
 #define bset_tree_bytes(b)	(bset_tree_space(b) * sizeof(struct bkey_float))
 #define bset_prev_bytes(b)	(bset_tree_space(b) * sizeof(uint8_t))

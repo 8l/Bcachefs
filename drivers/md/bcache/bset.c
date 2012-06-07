@@ -679,7 +679,6 @@ struct bset_search_iter {
 	struct bkey *l, *r;
 };
 
-__attribute__((optimize(3)))
 static struct bset_search_iter bset_search_write_set(struct btree *b,
 						     struct bset_tree *t,
 						     const struct bkey *search)
@@ -704,7 +703,6 @@ static struct bset_search_iter bset_search_write_set(struct btree *b,
 	};
 }
 
-__attribute__((optimize(3)))
 static struct bset_search_iter bset_search_tree(struct btree *b,
 						struct bset_tree *t,
 						const struct bkey *search)
@@ -767,7 +765,6 @@ static struct bset_search_iter bset_search_tree(struct btree *b,
 	return (struct bset_search_iter) {l, r};
 }
 
-__attribute__((optimize(3)))
 struct bkey *__bset_search(struct btree *b, struct bset_tree *t,
 			   const struct bkey *search)
 {

@@ -236,6 +236,7 @@ static void bio_invalidate(struct closure *cl)
 
 	while (bio_sectors(bio)) {
 		unsigned len = min(bio_sectors(bio), 1U << 14);
+
 		if (keylist_realloc(&s->op.keys, 0, s->op.d->c))
 			goto out;
 
@@ -321,13 +322,37 @@ static void put_data_bucket(struct open_bucket *b, struct cache_set *c,
 	spin_unlock(&c->data_bucket_lock);
 }
 
+/**
+ * get_data_bucket - pick out a bucket to write some data to, possibly
+ * allocating a new one.
+ *
+ * @search: Device/offset (backing device) the IO is for
+ * @s: Big state struct
+ *
+ * We keep multiple buckets open for writes, and try to segregate different
+ * write streams for better cache utilization: first we look for a bucket where
+ * the last write to it was sequential with the current write, and failing that
+ * we look for a bucket that was last used by the same task.
+ *
+ * The ideas is if you've got multiple tasks pulling data into the cache at the
+ * same time, you'll get better cache utilization if you try to segregate their
+ * data and preserve locality.
+ *
+ * For example, say you've starting Firefox at the same time you're copying a
+ * bunch of files. Firefox will likely end up being fairly hot and stay in the
+ * cache awhile, but the data you copied might not be; if you wrote all that
+ * data to the same buckets it'd get invalidated at the same time.
+ *
+ * Both of those tasks will be doing fairly random IO so we can't rely on
+ * detecting sequential IO to segregate their data, but going off of the task
+ * should be a sane heuristic.
+ */
 static struct open_bucket *get_data_bucket(struct bkey *search,
 					   struct search *s)
 {
 	struct closure cl, *w = NULL;
 	struct cache_set *c = s->op.d->c;
 	struct open_bucket *l, *ret, *ret_task;
-
 	BKEY_PADDED(key) alloc;
 	struct bkey *k = NULL;
 
@@ -335,16 +360,23 @@ static struct open_bucket *get_data_bucket(struct bkey *search,
 		closure_init_stack(&cl);
 		w = &cl;
 	}
+	/*
+	 * We might have to allocate a new bucket, which we can't do with a
+	 * spinlock held. So if we have to allocate, we drop the lock, allocate
+	 * and then retry.
+	 */
 again:
 	ret = ret_task = NULL;
 
 	spin_lock(&c->data_bucket_lock);
-	list_for_each_entry_reverse(l, &c->data_buckets, list)
+	list_for_each_entry_reverse(l, &c->data_buckets, list) {
 		if (!bkey_cmp(&l->key, search)) {
 			ret = l;
 			goto found;
-		} else if (l->last == s->task)
+		} else if (l->last == s->task) {
 			ret_task = l;
+		}
+	}
 
 	ret = ret_task ?: list_first_entry(&c->data_buckets,
 					   struct open_bucket, list);
@@ -364,10 +396,16 @@ found:
 		k = NULL;
 
 		ret->sectors_free = c->sb.bucket_size;
-	} else
+	} else {
 		for (unsigned i = 0; i < KEY_PTRS(&ret->key); i++)
 			EBUG_ON(ptr_stale(c, &ret->key, i));
+	}
 
+	/*
+	 * If we had to allocate and then retry, we might discover that we raced
+	 * and no longer need to allocate. Therefore, if we allocated a bucket
+	 * but didn't use it, drop the refcount pop_bucket_set() took:
+	 */
 	if (k)
 		__bkey_put(c, k);
 
@@ -378,6 +416,7 @@ found:
 	ret->last = s->task;
 	bkey_copy_key(&ret->key, search);
 
+	/* @ret is hot now, put it at the end of the queue */
 	list_move_tail(&ret->list, &c->data_buckets);
 	return ret;
 }
@@ -634,7 +673,7 @@ static struct search *do_bio_hook(struct bio *bio, struct bcache_device *d)
 
 	s->op.d			= d;
 	s->op.lock		= -1;
-	s->task			= get_current();
+	s->task			= current;
 	s->orig_bio		= bio;
 	s->write		= bio->bi_rw & REQ_WRITE;
 	s->op.flush_journal	= bio->bi_rw & REQ_FLUSH;
@@ -928,11 +967,13 @@ static void cached_dev_write_complete(struct closure *cl)
 
 static bool should_writeback(struct cached_dev *d, struct bio *bio)
 {
+	unsigned threshold = (bio->bi_rw & REQ_SYNC)
+		? CUTOFF_WRITEBACK_SYNC
+		: CUTOFF_WRITEBACK;
+
 	return !atomic_read(&d->disk.detaching) &&
 		cache_mode(d, bio) == CACHE_MODE_WRITEBACK &&
-		(d->disk.c->gc_stats.in_use < (bio->bi_rw & REQ_SYNC)
-		 ? CUTOFF_WRITEBACK_SYNC
-		 : CUTOFF_WRITEBACK);
+		d->disk.c->gc_stats.in_use < threshold;
 }
 
 static void request_write_resubmit(struct closure *cl)
@@ -1243,9 +1284,12 @@ static void cached_dev_make_request(struct request_queue *q, struct bio *bio)
 		s = do_bio_hook(bio, d);
 		trace_bcache_request_start(&s->op, bio);
 
-		(!bio_has_data(bio)	? request_nodata :
-		 bio->bi_rw & REQ_WRITE ? request_write :
-					  request_read)(dc, s);
+		if (!bio_has_data(bio))
+			request_nodata(dc, s);
+		else if (bio->bi_rw & REQ_WRITE)
+			request_write(dc, s);
+		else
+			request_read(dc, s);
 	} else
 		bio_passthrough(dc, bio);
 }

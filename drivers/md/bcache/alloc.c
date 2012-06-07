@@ -489,8 +489,7 @@ static long pop_bucket(struct cache *c, uint16_t priority, struct closure *cl)
 again:
 	free_some_buckets(c);
 
-	if ((priority == btree_prio ||
-	     fifo_used(&c->free) > 8) &&
+	if ((priority == btree_prio || fifo_used(&c->free) > 8) &&
 	    fifo_pop(&c->free, r)) {
 		struct bucket *b = c->buckets + r;
 #ifdef CONFIG_BCACHE_EDEBUG

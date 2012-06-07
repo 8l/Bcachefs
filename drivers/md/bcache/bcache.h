@@ -342,6 +342,25 @@ struct cache {
 	 */
 	atomic_t		prio_written;
 
+	/*
+	 * free: Buckets that are ready to be used
+	 *
+	 * free_inc: Incoming buckets - these are buckets that currently have
+	 * cached data in them, and we can't reuse them until after we write
+	 * their new gen to disk. After prio_write() finishes writing the new
+	 * gens/prios, they'll be moved to the free list (and possibly discarded
+	 * in the process)
+	 *
+	 * unused: GC found nothing pointing into these buckets (possibly
+	 * because all the data they contained was overwritten), so we only
+	 * need to discard them before they can be moved to the free list.
+	 */
+	DECLARE_FIFO(long, free);
+	DECLARE_FIFO(long, free_inc);
+	DECLARE_FIFO(long, unused);
+
+	size_t			fifo_last_bucket;
+
 	/* Allocation stuff: */
 	struct bucket		*buckets;
 
@@ -360,13 +379,14 @@ struct cache {
 	 */
 	unsigned		invalidate_needs_gc:1;
 
-	size_t			fifo_last_bucket;
-
-	DECLARE_FIFO(long, free);
-	DECLARE_FIFO(long, free_inc);
-	DECLARE_FIFO(long, unused);
-
 	bool			discard; /* Get rid of? */
+
+	/*
+	 * We preallocate structs for issuing discards to buckets, and keep them
+	 * on this list when they're not in use; do_discard() issues discards
+	 * whenever there's work to do and is called by free_some_buckets() and
+	 * when a discard finishes.
+	 */
 	struct list_head	discards;
 	struct page		*discard_page;
 
@@ -718,8 +738,13 @@ PTR_FIELD(PTR_GEN,		0,  8)
 #define MAX_KEY			KEY(~(~0 << 20), ((uint64_t) ~0) >> 1, 0)
 #define ZERO_KEY		KEY(0, 0, 0)
 
+/*
+ * This is used for various on disk data structures - cache_sb, prio_set, bset,
+ * jset: The checksum is _always_ the first 8 bytes of these structs
+ */
 #define csum_set(i)							\
-	crc64(((void *) (i)) + 8, ((void *) end(i)) - (((void *) (i)) + 8))
+	crc64(((void *) (i)) + sizeof(uint64_t),			\
+	      ((void *) end(i)) - (((void *) (i)) + sizeof(uint64_t)))
 
 /* Error handling macros */
 
@@ -797,6 +822,7 @@ static inline bool cached_dev_get(struct cached_dev *d)
 	if (!atomic_inc_not_zero(&d->count))
 		return false;
 
+	/* Paired with the mb in cached_dev_attach */
 	smp_mb__after_atomic_inc();
 	return true;
 }

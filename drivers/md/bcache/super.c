@@ -991,7 +991,10 @@ static int cached_dev_attach(struct cached_dev *d, struct cache_set *c)
 	calc_cached_dev_sectors(c);
 
 	smp_wmb();
-	/* d->c must be set before d->count != 0 */
+	/*
+	 * d->c must be set before d->count != 0 - paired with the mb in
+	 * cached_dev_get()
+	 */
 	atomic_set(&d->count, 1);
 
 	if (BDEV_STATE(&d->sb) == BDEV_STATE_DIRTY) {

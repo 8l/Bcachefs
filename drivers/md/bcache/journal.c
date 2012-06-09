@@ -475,7 +475,7 @@ static void journal_write_done(struct closure *cl)
 	__closure_wake_up(&w->wait);
 
 	if (c->journal_delay_ms)
-		closure_sleep(&j->io, msecs_to_jiffies(c->journal_delay_ms));
+		closure_delay(&j->io, msecs_to_jiffies(c->journal_delay_ms));
 
 	continue_at(cl, journal_write, system_wq);
 }

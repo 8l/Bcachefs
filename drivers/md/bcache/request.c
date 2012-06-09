@@ -890,8 +890,12 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	    (bio->bi_rw & REQ_META) ||
 	    s->op.c->gc_stats.in_use >= CUTOFF_CACHE_READA)
 		reada = 0;
-	else
+	else {
 		reada = dc->readahead >> 9;
+
+		if (bio_end(miss) + reada > bdev_sectors(miss->bi_bdev))
+			reada = bdev_sectors(miss->bi_bdev) - bio_end(miss);
+	}
 
 	s->cache_bio_sectors = bio_sectors(miss) + reada;
 	s->op.cache_bio = bio_alloc_bioset(GFP_NOWAIT,

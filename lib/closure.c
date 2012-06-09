@@ -207,7 +207,7 @@ void __closure_lock(struct closure *cl, struct closure *parent,
 }
 EXPORT_SYMBOL_GPL(__closure_lock);
 
-static void closure_sleep_timer_fn(unsigned long data)
+static void closure_delay_timer_fn(unsigned long data)
 {
 	struct closure *cl = (struct closure *) data;
 	closure_sub(cl, CLOSURE_TIMER + 1);
@@ -219,11 +219,11 @@ void do_closure_timer_init(struct closure *cl)
 
 	init_timer(timer);
 	timer->data	= (unsigned long) cl;
-	timer->function = closure_sleep_timer_fn;
+	timer->function = closure_delay_timer_fn;
 }
 EXPORT_SYMBOL_GPL(do_closure_timer_init);
 
-bool __closure_sleep(struct closure *cl, unsigned long delay,
+bool __closure_delay(struct closure *cl, unsigned long delay,
 		     struct timer_list *timer)
 {
 	if (atomic_read(&cl->remaining) & CLOSURE_TIMER)
@@ -237,7 +237,7 @@ bool __closure_sleep(struct closure *cl, unsigned long delay,
 	add_timer(timer);
 	return true;
 }
-EXPORT_SYMBOL_GPL(__closure_sleep);
+EXPORT_SYMBOL_GPL(__closure_delay);
 
 void __closure_flush(struct closure *cl, struct timer_list *timer)
 {

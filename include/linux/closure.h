@@ -160,7 +160,7 @@
  * enough:
  * struct closure_with_timer;
  *
- * This gives you access to closure_sleep(). It takes a refcount for a specified
+ * This gives you access to closure_delay(). It takes a refcount for a specified
  * number of jiffies - you could then call closure_sync() (for a slightly
  * convoluted version of msleep()) or continue_at() - which gives you the same
  * effect as using a delayed work item, except you can reuse the work_struct
@@ -306,7 +306,7 @@ void __closure_lock(struct closure *cl, struct closure *parent,
 		    struct closure_waitlist *wait_list);
 
 void do_closure_timer_init(struct closure *cl);
-bool __closure_sleep(struct closure *cl, unsigned long delay,
+bool __closure_delay(struct closure *cl, unsigned long delay,
 		     struct timer_list *timer);
 void __closure_flush(struct closure *cl, struct timer_list *timer);
 void __closure_flush_sync(struct closure *cl, struct timer_list *timer);
@@ -460,7 +460,7 @@ do {								\
 	__closure_lock(__to_internal_closure(cl), parent, &(cl)->wait)
 
 /**
- * closure_sleep() - asynchronous sleep
+ * closure_delay() - delay some number of jiffies
  * @cl:		the closure that will sleep
  * @delay:	the delay in jiffies
  *
@@ -468,8 +468,8 @@ do {								\
  * be used to have a function run after a delay with continue_at(), or
  * closure_sync() may be used for a convoluted version of msleep().
  */
-#define closure_sleep(cl, delay)				\
-	__closure_sleep(__to_internal_closure(cl), delay, &(cl)->timer)
+#define closure_delay(cl, delay)			\
+	__closure_delay(__to_internal_closure(cl), delay, &(cl)->timer)
 
 #define closure_flush(cl)				\
 	__closure_flush(__to_internal_closure(cl), &(cl)->timer)

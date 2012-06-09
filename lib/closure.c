@@ -44,20 +44,19 @@ static struct timer_list *closure_timer(struct closure *cl)
 	}
 }
 
-static void closure_put_after_sub(struct closure *cl, int r)
+static inline void closure_put_after_sub(struct closure *cl, int flags)
 {
-	int rem = r & CLOSURE_REMAINING_MASK;
+	int r = flags & CLOSURE_REMAINING_MASK;
 
-	BUG_ON(r & CLOSURE_GUARD_MASK);
-	/* CLOSURE_BLOCK is the only flag that's allowed when r hits 0 */
-	BUG_ON(!rem && (r & ~CLOSURE_BLOCKING));
+	BUG_ON(flags & CLOSURE_GUARD_MASK);
+	BUG_ON(!r && (flags & ~(CLOSURE_DESTRUCTOR|CLOSURE_BLOCKING)));
 
 	/* Must deliver precisely one wakeup */
-	if (rem == 1 && (r & CLOSURE_SLEEPING))
+	if (r == 1 && (flags & CLOSURE_SLEEPING))
 		wake_up_process(cl->task);
 
-	if (!rem) {
-		if (cl->fn) {
+	if (!r) {
+		if (cl->fn && !(flags & CLOSURE_DESTRUCTOR)) {
 			/* CLOSURE_BLOCKING might be set - clear it */
 			atomic_set(&cl->remaining,
 				   CLOSURE_REMAINING_INITIALIZER);
@@ -72,6 +71,9 @@ static void closure_put_after_sub(struct closure *cl, int r)
 
 			if (wait)
 				closure_wake_up(wait);
+
+			if (cl->fn)
+				cl->fn(cl);
 
 			if (parent)
 				closure_put(parent);

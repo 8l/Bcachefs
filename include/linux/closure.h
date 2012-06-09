@@ -187,22 +187,6 @@ enum closure_type {
 	MAX_CLOSURE_TYPE			= 3,
 };
 
-enum closure_state_bits {
-	CLOSURE_REMAINING_END	= 20,
-	CLOSURE_BLOCKING_GUARD	= 20,
-	CLOSURE_BLOCKING_BIT	= 21,
-	CLOSURE_WAITING_GUARD	= 22,
-	CLOSURE_WAITING_BIT	= 23,
-	CLOSURE_SLEEPING_GUARD	= 24,
-	CLOSURE_SLEEPING_BIT	= 25,
-	CLOSURE_TIMER_GUARD	= 26,
-	CLOSURE_TIMER_BIT	= 27,
-	CLOSURE_RUNNING_GUARD	= 28,
-	CLOSURE_RUNNING_BIT	= 29,
-	CLOSURE_STACK_GUARD	= 30,
-	CLOSURE_STACK_BIT	= 31,
-};
-
 enum closure_state {
 	/*
 	 * CLOSURE_BLOCKING: Causes closure_wait_event() to block, instead of
@@ -234,23 +218,21 @@ enum closure_state {
 	 * closure with this flag set
 	 */
 
-	CLOSURE_BLOCKING	= (1 << CLOSURE_BLOCKING_BIT),
-	CLOSURE_WAITING		= (1 << CLOSURE_WAITING_BIT),
-	CLOSURE_SLEEPING	= (1 << CLOSURE_SLEEPING_BIT),
-	CLOSURE_TIMER		= (1 << CLOSURE_TIMER_BIT),
-	CLOSURE_RUNNING		= (1 << CLOSURE_RUNNING_BIT),
-	CLOSURE_STACK		= (1 << CLOSURE_STACK_BIT),
+	CLOSURE_BITS_START	= (1 << 19),
+	CLOSURE_DESTRUCTOR	= (1 << 19),
+	CLOSURE_BLOCKING	= (1 << 21),
+	CLOSURE_WAITING		= (1 << 23),
+	CLOSURE_SLEEPING	= (1 << 25),
+	CLOSURE_TIMER		= (1 << 27),
+	CLOSURE_RUNNING		= (1 << 29),
+	CLOSURE_STACK		= (1 << 31),
 };
 
 #define CLOSURE_GUARD_MASK					\
-	((1 << CLOSURE_BLOCKING_GUARD)|				\
-	 (1 << CLOSURE_WAITING_GUARD)|				\
-	 (1 << CLOSURE_SLEEPING_GUARD)|				\
-	 (1 << CLOSURE_TIMER_GUARD)|				\
-	 (1 << CLOSURE_RUNNING_GUARD)|				\
-	 (1 << CLOSURE_STACK_GUARD))
+	((CLOSURE_DESTRUCTOR|CLOSURE_BLOCKING|CLOSURE_WAITING|	\
+	  CLOSURE_SLEEPING|CLOSURE_TIMER|CLOSURE_RUNNING|CLOSURE_STACK) << 1)
 
-#define CLOSURE_REMAINING_MASK		((1 << CLOSURE_REMAINING_END) - 1)
+#define CLOSURE_REMAINING_MASK		(CLOSURE_BITS_START - 1)
 #define CLOSURE_REMAINING_INITIALIZER	(1|CLOSURE_RUNNING)
 
 struct closure {
@@ -659,6 +641,13 @@ do {									\
 do {									\
 	set_closure_fn(_cl, _fn, _wq);					\
 	closure_queue(cl);						\
+	return;								\
+} while (0)
+
+#define closure_return_with_destructor(_cl, _destructor)		\
+do {									\
+	set_closure_fn(_cl, _destructor, NULL);				\
+	closure_sub(_cl, CLOSURE_RUNNING - CLOSURE_DESTRUCTOR + 1);	\
 	return;								\
 } while (0)
 

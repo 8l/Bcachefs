@@ -658,4 +658,11 @@ static inline void closure_call(closure_fn fn, struct closure *cl,
 	fn(cl);
 }
 
+static inline void closure_trylock_call(closure_fn fn, struct closure *cl,
+					struct closure *parent)
+{
+	if (closure_trylock(cl, parent))
+		fn(cl);
+}
+
 #endif /* _LINUX_CLOSURE_H */

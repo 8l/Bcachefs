@@ -1017,9 +1017,6 @@ static void cached_dev_free(struct closure *cl)
 {
 	struct cached_dev *dc = container_of(cl, struct cached_dev, disk.cl);
 
-	/* XXX: background writeback could be in progress... */
-	cancel_delayed_work_sync(&dc->refill_dirty);
-	cancel_delayed_work_sync(&dc->read_dirty);
 	cancel_delayed_work_sync(&dc->writeback_rate_update);
 
 	mutex_lock(&register_lock);

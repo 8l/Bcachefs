@@ -278,8 +278,8 @@ struct cached_dev {
 
 	/* Number of writeback bios in flight */
 	atomic_t		in_flight;
-	struct delayed_work	refill_dirty;
-	struct delayed_work	read_dirty;
+	struct closure_with_timer writeback;
+	struct closure_waitlist	writeback_wait;
 
 	struct keybuf		writeback_keys;
 

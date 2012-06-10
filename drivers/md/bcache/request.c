@@ -1012,11 +1012,14 @@ static void request_write(struct cached_dev *d, struct search *s)
 {
 	struct closure *cl = &s->cl;
 	struct bio *bio = &s->bio.bio;
+	struct bkey start, end;
+	start = KEY(dc->disk.id, bio->bi_sector, 0);
+	end = KEY(dc->disk.id, bio_end(bio), 0);
 
 	check_should_skip(d, s);
 	down_read_non_owner(&d->writeback_lock);
 
-	if (bcache_in_writeback(d, bio->bi_sector, bio_sectors(bio))) {
+	if (bch_keybuf_check_overlapping(&dc->writeback_keys, &start, &end)) {
 		s->op.skip	= false;
 		s->writeback	= true;
 	}

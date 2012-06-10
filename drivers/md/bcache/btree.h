@@ -285,4 +285,14 @@ size_t btree_gc_finish(struct cache_set *);
 int btree_check(struct cache_set *, struct btree_op *);
 uint8_t __btree_mark_key(struct cache_set *, int, struct bkey *);
 
+void bch_keybuf_init(struct keybuf *, keybuf_pred_fn *);
+void bch_refill_keybuf(struct cache_set *, struct keybuf *, struct bkey *);
+bool bch_keybuf_check_overlapping(struct keybuf *, struct bkey *,
+				  struct bkey *);
+void __bch_keybuf_del(struct keybuf *, struct keybuf_key *);
+void bch_keybuf_del(struct keybuf *, struct keybuf_key *);
+struct keybuf_key *bch_keybuf_next(struct keybuf *);
+struct keybuf_key *bch_keybuf_next_rescan(struct cache_set *,
+					  struct keybuf *, struct bkey *);
+
 #endif

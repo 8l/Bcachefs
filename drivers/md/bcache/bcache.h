@@ -162,6 +162,35 @@ struct prio_set {
 #include "stats.h"
 struct search;
 struct btree;
+struct keybuf;
+
+struct keybuf_key {
+	struct rb_node		node;
+	BKEY_PADDED(key);
+	void			*private;
+};
+
+typedef bool (keybuf_pred_fn)(struct keybuf *, struct bkey *);
+
+struct keybuf {
+	keybuf_pred_fn		*key_predicate;
+
+	struct bkey		last_scanned;
+	spinlock_t		lock;
+
+	/*
+	 * Beginning and end of range in rb tree - so that we can skip taking
+	 * lock and checking the rb tree when we need to check for overlapping
+	 * keys.
+	 */
+	struct bkey		start;
+	struct bkey		end;
+
+	struct rb_root		keys;
+
+#define KEYBUF_NR		100
+	DECLARE_ARRAY_ALLOCATOR(struct keybuf_key, freelist, KEYBUF_NR);
+};
 
 struct bcache_device {
 	struct closure		cl;
@@ -205,18 +234,6 @@ struct io {
 	sector_t		last;
 };
 
-struct dirty_io {
-	struct closure		cl;
-	struct cached_dev	*d;
-	struct bio		bio;
-};
-
-struct dirty {
-	struct rb_node		node;
-	BKEY_PADDED(key);
-	struct dirty_io		*io;
-};
-
 struct cached_dev {
 	struct list_head	list;
 	struct bcache_device	disk;
@@ -246,17 +263,6 @@ struct cached_dev {
 	struct rw_semaphore	writeback_lock;
 
 	/*
-	 * Beginning and end of range in dirty rb tree - so that we can skip
-	 * taking dirty_lock and checking the rb tree. Protected by
-	 * writeback_lock.
-	 */
-	sector_t		writeback_start;
-	sector_t		writeback_end;
-
-	struct rb_root		dirty;
-	spinlock_t		dirty_lock;
-
-	/*
 	 * Nonzero, and writeback has a refcount (d->count), iff there is dirty
 	 * data in the cache. Protected by writeback_lock; must have an
 	 * shared lock to set and exclusive lock to clear.
@@ -267,10 +273,9 @@ struct cached_dev {
 	struct delayed_work	writeback_rate_update;
 
 	/*
-	 * Internal to the writeback code, so refill_dirty() and read_dirty()
-	 * can keep track of where they're at.
+	 * Internal to the writeback code, so read_dirty() can keep track of
+	 * where it's at.
 	 */
-	sector_t		last_found;
 	sector_t		last_read;
 
 	/* Number of writeback bios in flight */
@@ -278,8 +283,7 @@ struct cached_dev {
 	struct delayed_work	refill_dirty;
 	struct delayed_work	read_dirty;
 
-#define WRITEBACK_SLURP	100
-	DECLARE_ARRAY_ALLOCATOR(struct dirty, dirty_freelist, WRITEBACK_SLURP);
+	struct keybuf		writeback_keys;
 
 	/* For tracking sequential IO */
 #define RECENT_IO_BITS	7
@@ -896,7 +900,6 @@ static inline uint8_t bucket_disk_gen(struct bucket *b)
 
 /* Forward declarations */
 
-bool bcache_in_writeback(struct cached_dev *, sector_t, unsigned);
 void bcache_writeback_queue(struct cached_dev *);
 void bcache_writeback_add(struct cached_dev *, unsigned);
 

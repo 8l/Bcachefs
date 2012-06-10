@@ -2245,6 +2245,208 @@ int btree_search_recurse(struct btree *b, struct btree_op *op)
 	return ret;
 }
 
+/* Keybuf code */
+
+static inline int keybuf_cmp(struct keybuf_key *l, struct keybuf_key *r)
+{
+	/* Overlapping keys compare equal */
+	if (bkey_cmp(&l->key, &START_KEY(&r->key)) <= 0)
+		return -1;
+	if (bkey_cmp(&START_KEY(&l->key), &r->key) >= 0)
+		return 1;
+	return 0;
+}
+
+static inline int keybuf_nonoverlapping_cmp(struct keybuf_key *l, struct keybuf_key *r)
+{
+	return clamp_t(int64_t, bkey_cmp(&l->key, &r->key), -1, 1);
+}
+
+static int btree_refill_keybuf(struct btree *b, struct btree_op *op,
+			       struct keybuf *buf, struct bkey *end)
+{
+	struct btree_iter iter;
+	btree_iter_init(b, &iter, &buf->last_scanned);
+
+	while (!array_freelist_empty(&buf->freelist)) {
+		struct bkey *k = btree_iter_next(&iter);
+
+		if (!b->level) {
+			if (!k) {
+				buf->last_scanned = b->key;
+				break;
+			}
+
+			buf->last_scanned = *k;
+			if (bkey_cmp(&buf->last_scanned, end) >= 0)
+				break;
+
+			if (ptr_bad(b, k))
+				continue;
+
+			if (buf->key_predicate(buf, k)) {
+				struct keybuf_key *w;
+
+				pr_debug("%s", pkey(k));
+
+				spin_lock(&buf->lock);
+
+				w = array_alloc(&buf->freelist);
+
+				w->private = NULL;
+				bkey_copy(&w->key, k);
+
+				if (RB_INSERT(&buf->keys, w, node, keybuf_cmp))
+					array_free(&buf->freelist, w);
+
+				spin_unlock(&buf->lock);
+			}
+		} else {
+			if (!k)
+				break;
+
+			if (ptr_bad(b, k))
+				continue;
+
+			btree(refill_keybuf, k, b, op, buf, end);
+			/*
+			 * Might get an error here, but can't really do anything
+			 * and it'll get logged elsewhere. Just read what we
+			 * can.
+			 */
+
+			if (bkey_cmp(&buf->last_scanned, end) >= 0)
+				break;
+
+			cond_resched();
+		}
+	}
+
+	return 0;
+}
+
+void bch_refill_keybuf(struct cache_set *c, struct keybuf *buf,
+			  struct bkey *end)
+{
+	struct bkey start = buf->last_scanned;
+	struct btree_op op;
+	btree_op_init_stack(&op);
+
+	btree_root(refill_keybuf, c, &op, buf, end);
+	closure_sync(&op.cl);
+
+	pr_debug("found %s keys from %llu:%llu to %llu:%llu",
+		 RB_EMPTY_ROOT(&buf->keys) ? "no" :
+		 array_freelist_empty(&buf->freelist) ? "some" : "a few",
+		 KEY_DEV(&start), start.key,
+		 KEY_DEV(&buf->last_scanned), buf->last_scanned.key);
+
+	spin_lock(&buf->lock);
+
+	if (!RB_EMPTY_ROOT(&buf->keys)) {
+		struct keybuf_key *w;
+		w = RB_FIRST(&buf->keys, struct keybuf_key, node);
+		buf->start	= START_KEY(&w->key);
+
+		w = RB_LAST(&buf->keys, struct keybuf_key, node);
+		buf->end	= w->key;
+	} else {
+		buf->start	= MAX_KEY;
+		buf->end	= MAX_KEY;
+	}
+
+	spin_unlock(&buf->lock);
+}
+
+void __bch_keybuf_del(struct keybuf *buf, struct keybuf_key *w)
+{
+	rb_erase(&w->node, &buf->keys);
+	array_free(&buf->freelist, w);
+}
+
+void bch_keybuf_del(struct keybuf *buf, struct keybuf_key *w)
+{
+	spin_lock(&buf->lock);
+	__bch_keybuf_del(buf, w);
+	spin_unlock(&buf->lock);
+}
+
+bool bch_keybuf_check_overlapping(struct keybuf *buf, struct bkey *start,
+				  struct bkey *end)
+{
+	bool ret = false;
+	struct keybuf_key *p, *w, s = { .key = *start };
+
+	if (bkey_cmp(end, &buf->start) <= 0 ||
+	    bkey_cmp(start, &buf->end) >= 0)
+		return false;
+
+	spin_lock(&buf->lock);
+	w = RB_GREATER(&buf->keys, s, node, keybuf_nonoverlapping_cmp);
+
+	while (w && bkey_cmp(&START_KEY(&w->key), end) < 0) {
+		p = w;
+		w = RB_NEXT(w, node);
+
+		if (p->private)
+			ret = true;
+		else
+			__bch_keybuf_del(buf, p);
+	}
+
+	spin_unlock(&buf->lock);
+	return ret;
+}
+
+struct keybuf_key *bch_keybuf_next(struct keybuf *buf)
+{
+	struct keybuf_key *w = RB_FIRST(&buf->keys, struct keybuf_key, node);
+
+	while (w && w->private)
+		w = RB_NEXT(w, node);
+
+	return w;
+}
+
+struct keybuf_key *bch_keybuf_next_rescan(struct cache_set *c,
+					     struct keybuf *buf,
+					     struct bkey *end)
+{
+	struct keybuf_key *ret;
+
+	spin_lock(&buf->lock);
+
+	while (1) {
+		ret = bch_keybuf_next(buf);
+		if (ret) {
+			ret->private = ERR_PTR(-EINTR);
+			break;
+		}
+
+		if (bkey_cmp(&buf->last_scanned, end) >= 0) {
+			pr_debug("scan finished");
+			break;
+		}
+
+		spin_unlock(&buf->lock);
+		bch_refill_keybuf(c, buf, end);
+		spin_lock(&buf->lock);
+	}
+
+	spin_unlock(&buf->lock);
+	return ret;
+}
+
+void bch_keybuf_init(struct keybuf *buf, keybuf_pred_fn *fn)
+{
+	buf->key_predicate	= fn;
+	buf->last_scanned	= MAX_KEY;
+	buf->keys		= RB_ROOT;
+
+	spin_lock_init(&buf->lock);
+	array_allocator_init(&buf->freelist);
+}
+
 void bcache_btree_exit(void)
 {
 	if (btree_io_wq)

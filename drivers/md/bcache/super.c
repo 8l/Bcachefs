@@ -1075,7 +1075,6 @@ static int cached_dev_init(struct cached_dev *d, unsigned block_size)
 	if (bcache_device_init(&d->disk, block_size))
 		goto err;
 
-	spin_lock_init(&d->dirty_lock);
 	spin_lock_init(&d->io_lock);
 	closure_init_unlocked(&d->sb_write);
 	INIT_WORK(&d->detach, cached_dev_detach_finish);

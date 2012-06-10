@@ -42,7 +42,7 @@ static void refill_dirty(struct work_struct *work)
 	struct keybuf *buf = &dc->writeback_keys;
 	bool searched_from_start = false;
 	struct bkey end = MAX_KEY;
-	SET_KEY_DEV(&end, dc->disk.id);
+	SET_KEY_INODE(&end, dc->disk.id);
 
 	if (!atomic_read(&dc->disk.detaching) &&
 	    !dc->writeback_running)
@@ -50,7 +50,7 @@ static void refill_dirty(struct work_struct *work)
 
 	down_write(&dc->writeback_lock);
 
-	if (KEY_DEV(&buf->last_scanned) > dc->disk.id) {
+	if (KEY_INODE(&buf->last_scanned) > dc->disk.id) {
 		buf->last_scanned = KEY(dc->disk.id, 0, 0);
 		searched_from_start = true;
 	}
@@ -311,7 +311,7 @@ static void read_dirty(struct cached_dev *dc)
 			break;
 		}
 
-		dc->last_read	= w->key.key;
+		dc->last_read	= KEY_OFFSET(&w->key);
 		w->private	= ERR_PTR(-EINTR);
 		spin_unlock(&dc->writeback_keys.lock);
 

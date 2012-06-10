@@ -579,7 +579,7 @@ int __bch_pop_bucket_set(struct cache_set *c, int mark, uint16_t write_prio,
 	lockdep_assert_held(&c->bucket_lock);
 	BUG_ON(!n || n > c->caches_loaded || n > 8);
 
-	k->header = KEY_HEADER(0, 0);
+	bkey_init(k);
 
 	/* sort by free space/prio of oldest data in caches */
 

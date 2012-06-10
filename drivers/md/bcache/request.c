@@ -381,7 +381,7 @@ static bool bch_alloc_sectors(struct bkey *k, unsigned sectors,
 
 	sectors = min(sectors, b->sectors_free);
 
-	k->key += sectors;
+	SET_KEY_OFFSET(k, KEY_OFFSET(k) + sectors);
 	SET_KEY_SIZE(k, sectors);
 	SET_KEY_PTRS(k, KEY_PTRS(&b->key));
 
@@ -495,8 +495,8 @@ static void bio_insert_loop(struct closure *cl)
 
 		k = op->keys.top;
 		bkey_init(k);
-		SET_KEY_DEV(k, op->inode);
-		k->key = bio->bi_sector;
+		SET_KEY_INODE(k, op->inode);
+		SET_KEY_OFFSET(k, bio->bi_sector);
 
 		if (!bch_alloc_sectors(k, bio_sectors(bio), s))
 			goto err;

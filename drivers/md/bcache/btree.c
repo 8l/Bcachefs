@@ -117,7 +117,7 @@ void bch_btree_op_init_stack(struct btree_op *op)
 
 static void bkey_put(struct cache_set *c, struct bkey *k, int level)
 {
-	if ((level && k->key) || !level)
+	if ((level && KEY_OFFSET(k)) || !level)
 		__bkey_put(c, k);
 }
 
@@ -1106,10 +1106,10 @@ static int btree_gc_mark_node(struct btree *b, unsigned *keys, struct gc_stat *g
 		if (bch_ptr_invalid(b, k))
 			continue;
 
-		if (last_dev != KEY_DEV(k)) {
-			last_dev = KEY_DEV(k);
+		if (last_dev != KEY_INODE(k)) {
+			last_dev = KEY_INODE(k);
 
-			d = KEY_DEV(k) < b->c->nr_uuids
+			d = KEY_INODE(k) < b->c->nr_uuids
 				? b->c->devices[last_dev]
 				: NULL;
 		}
@@ -1635,7 +1635,7 @@ static bool fix_overlapping_extents(struct btree *b,
 {
 	void subtract_dirty(struct bkey *k, int sectors)
 	{
-		struct bcache_device *d = b->c->devices[KEY_DEV(k)];
+		struct bcache_device *d = b->c->devices[KEY_INODE(k)];
 
 		if (KEY_DIRTY(k) && d)
 			atomic_long_sub(sectors, &d->sectors_dirty);
@@ -1690,7 +1690,7 @@ static bool fix_overlapping_extents(struct btree *b,
 				if (k->ptr[i] != op->replace.ptr[i] + offset)
 					goto check_failed;
 
-			sectors_found = k->key - KEY_START(insert);
+			sectors_found = KEY_OFFSET(k) - KEY_START(insert);
 		}
 
 		if (bkey_cmp(insert, k) < 0 &&
@@ -1737,12 +1737,14 @@ static bool fix_overlapping_extents(struct btree *b,
 
 		if (bkey_cmp(insert, k) < 0) {
 			if (bkey_cmp(insert, &START_KEY(k)) > 0)
-				subtract_dirty(k, insert->key - KEY_START(k));
+				subtract_dirty(k, KEY_OFFSET(insert) -
+					       KEY_START(k));
 
 			bch_cut_front(insert, k);
 		} else {
 			if (bkey_cmp(k, &START_KEY(insert)) > 0)
-				subtract_dirty(k, k->key - KEY_START(insert));
+				subtract_dirty(k, KEY_OFFSET(k) -
+					       KEY_START(insert));
 
 			if (bkey_written(b, k) &&
 			    bkey_cmp(&START_KEY(insert), &START_KEY(k)) <= 0)
@@ -1764,7 +1766,8 @@ check_failed:
 			op->insert_collision = true;
 			return true;
 		} else if (sectors_found < KEY_SIZE(insert)) {
-			insert->key -= KEY_SIZE(insert) - sectors_found;
+			SET_KEY_OFFSET(insert, KEY_OFFSET(insert) -
+				       (KEY_SIZE(insert) - sectors_found));
 			SET_KEY_SIZE(insert, sectors_found);
 		}
 	}
@@ -1781,11 +1784,11 @@ static bool btree_insert_key(struct btree *b, struct btree_op *op,
 
 	BUG_ON(bkey_cmp(k, &b->key) > 0);
 	BUG_ON(b->level && !KEY_PTRS(k));
-	BUG_ON(!b->level && !k->key);
+	BUG_ON(!b->level && !KEY_OFFSET(k));
 
 	if (!b->level) {
 		struct btree_iter iter;
-		struct bkey search = KEY(KEY_DEV(k), KEY_START(k), 0);
+		struct bkey search = KEY(KEY_INODE(k), KEY_START(k), 0);
 
 		/*
 		 * bset_search() returns the first key that is strictly greater
@@ -1793,8 +1796,8 @@ static bool btree_insert_key(struct btree *b, struct btree_op *op,
 		 * the first key that is greater than or equal to KEY_START(k) -
 		 * unless KEY_START(k) is 0.
 		 */
-		if (search.key)
-			search.key--;
+		if (KEY_OFFSET(&search))
+			SET_KEY_OFFSET(&search, KEY_OFFSET(&search) - 1);
 
 		prev = NULL;
 		m = bch_btree_iter_init(b, &iter, &search);
@@ -1835,7 +1838,7 @@ merged:
 	bch_check_key_order_msg(b, i, "%s for %s at %s: %s", status,
 				op_type(op), pbtree(b), pkey(k));
 
-	if (b->level && !k->key)
+	if (b->level && !KEY_OFFSET(k))
 		b->prio_blocked++;
 
 	pr_debug("%s for %s at %s: %s", status,
@@ -2164,7 +2167,7 @@ static int submit_partial_cache_miss(struct btree *b, struct btree_op *op,
 	       !op->lookup_done) {
 		unsigned sectors = INT_MAX;
 
-		if (KEY_DEV(k) == op->inode) {
+		if (KEY_INODE(k) == op->inode) {
 			if (KEY_START(k) <= bio->bi_sector)
 				break;
 
@@ -2200,13 +2203,13 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 	PTR_BUCKET(b->c, k, ptr)->prio = INITIAL_PRIO;
 
 	while (!op->lookup_done &&
-	       KEY_DEV(k) == op->inode &&
-	       bio->bi_sector < k->key) {
+	       KEY_INODE(k) == op->inode &&
+	       bio->bi_sector < KEY_OFFSET(k)) {
 		struct bkey *bio_key;
 		sector_t sector = PTR_OFFSET(k, ptr) +
 			(bio->bi_sector - KEY_START(k));
 		unsigned sectors = min_t(uint64_t, INT_MAX,
-					 k->key - bio->bi_sector);
+					 KEY_OFFSET(k) - bio->bi_sector);
 
 		n = bio_split(bio, sectors, GFP_NOIO, s->d->bio_split);
 		if (!n)
@@ -2256,8 +2259,15 @@ int bch_btree_search_recurse(struct btree *b, struct btree_op *op)
 	do {
 		k = bch_btree_iter_next(&iter);
 		if (!k) {
+			/*
+			 * b->key would be exactly what we want, except that
+			 * pointers to btree nodes have nonzero size - we
+			 * wouldn't go far enough
+			 */
+
 			ret = submit_partial_cache_miss(b, op,
-					&KEY(KEY_DEV(&b->key), b->key.key, 0));
+					&KEY(KEY_INODE(&b->key),
+					     KEY_OFFSET(&b->key), 0));
 			break;
 		}
 
@@ -2366,8 +2376,8 @@ void bch_refill_keybuf(struct cache_set *c, struct keybuf *buf,
 	pr_debug("found %s keys from %llu:%llu to %llu:%llu",
 		 RB_EMPTY_ROOT(&buf->keys) ? "no" :
 		 array_freelist_empty(&buf->freelist) ? "some" : "a few",
-		 KEY_DEV(&start), start.key,
-		 KEY_DEV(&buf->last_scanned), buf->last_scanned.key);
+		 KEY_INODE(&start), KEY_OFFSET(&start),
+		 KEY_INODE(&buf->last_scanned), KEY_OFFSET(&buf->last_scanned));
 
 	spin_lock(&buf->lock);
 

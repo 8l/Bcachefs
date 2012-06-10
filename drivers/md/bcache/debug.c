@@ -116,7 +116,7 @@ struct keyprint_hack bch_pkey(const struct bkey *k)
 
 #define p(...)	(out += scnprintf(out, end - out, __VA_ARGS__))
 
-	p("%llu:%llu len %llu -> [", KEY_DEV(k), k->key, KEY_SIZE(k));
+	p("%llu:%llu len %llu -> [", KEY_INODE(k), KEY_OFFSET(k), KEY_SIZE(k));
 
 	if (KEY_PTRS(k))
 		while (1) {
@@ -340,7 +340,7 @@ static int bch_btree_dump(struct btree *b, struct btree_op *op, struct seq_file 
 		if (!j)
 			last = *prev;
 
-		if (last > k->key)
+		if (last > KEY_OFFSET(k))
 			seq_printf(f, "Key skipped backwards\n");
 
 		if (!b->level && j &&
@@ -355,7 +355,7 @@ static int bch_btree_dump(struct btree *b, struct btree_op *op, struct seq_file 
 		if (!b->level && !buf[0])
 			*sectors += KEY_SIZE(k);
 
-		last = k->key;
+		last = KEY_OFFSET(k);
 		biggest = max(biggest, last);
 	}
 	*prev = biggest;
@@ -460,18 +460,21 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 		while (1) {
 			struct bset *i = write_block(b);
 			struct bkey *k = op.keys.top;
+			unsigned rand;
 
-			k->key = get_random_int();
+			bkey_init(k);
+			rand = get_random_int();
 
-			op.type = k->key & 1
+			op.type = rand & 1
 				? BTREE_INSERT
 				: BTREE_REPLACE;
-			k->key >>= 1;
+			rand >>= 1;
 
-			k->header = KEY_HEADER(bucket_remainder(c, k->key), 0);
-			k->key >>= c->bucket_bits;
-			k->key &= 1024 * 512 - 1;
-			k->key += c->sb.bucket_size;
+			SET_KEY_SIZE(k, bucket_remainder(c, rand));
+			rand >>= c->bucket_bits;
+			rand &= 1024 * 512 - 1;
+			rand += c->sb.bucket_size;
+			SET_KEY_OFFSET(k, rand);
 #if 0
 			SET_KEY_PTRS(k, 1);
 #endif

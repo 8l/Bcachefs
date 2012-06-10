@@ -420,7 +420,7 @@ static void journal_reclaim(struct cache_set *c)
 				  ca->sb.nr_this_dev);
 	}
 
-	k->header = KEY_HEADER(0, 0);
+	bkey_init(k);
 	SET_KEY_PTRS(k, n);
 
 	if (n)

@@ -38,8 +38,8 @@ BITMASK(GC_MARK,	 struct bucket, gc_mark, 0, 2);
 BITMASK(GC_SECTORS_USED, struct bucket, gc_mark, 2, 14);
 
 struct bkey {
-	uint64_t	header;
-	uint64_t	key;
+	uint64_t	high;
+	uint64_t	low;
 	uint64_t	ptr[];
 };
 
@@ -701,17 +701,26 @@ static inline unsigned local_clock_us(void)
 		k->ptr[i] |= v << offset;				\
 	}
 
-KEY_FIELD(KEY_PTRS,	header, 60, 3)
-KEY_FIELD(HEADER_SIZE,	header, 58, 2)
-KEY_FIELD(KEY_CSUM,	header, 56, 2)
-KEY_FIELD(KEY_PINNED,	header, 55, 1)
-KEY_FIELD(KEY_DIRTY,	header, 36, 1)
+KEY_FIELD(KEY_PTRS,	high, 60, 3)
+KEY_FIELD(HEADER_SIZE,	high, 58, 2)
+KEY_FIELD(KEY_CSUM,	high, 56, 2)
+KEY_FIELD(KEY_PINNED,	high, 55, 1)
+KEY_FIELD(KEY_DIRTY,	high, 36, 1)
 
-KEY_FIELD(KEY_SIZE,	header, 20, 16)
-KEY_FIELD(KEY_DEV,	header, 0,  20)
+KEY_FIELD(KEY_SIZE,	high, 20, 16)
+KEY_FIELD(KEY_INODE,	high, 0,  20)
 
-KEY_FIELD(KEY_SECTOR,	key,	16, 47)
-KEY_FIELD(KEY_SNAPSHOT,	key,	0,  16)
+/* Next time I change the on disk format, KEY_OFFSET() won't be 64 bits */
+
+static inline uint64_t KEY_OFFSET(const struct bkey *k)
+{
+	return k->low;
+}
+
+static inline void SET_KEY_OFFSET(struct bkey *k, uint64_t v)
+{
+	k->low = v;
+}
 
 PTR_FIELD(PTR_DEV,		51, 12)
 PTR_FIELD(PTR_OFFSET,		8,  43)
@@ -760,26 +769,24 @@ static inline struct bucket *PTR_BUCKET(struct cache_set *c,
 
 /* Btree key macros */
 
-static inline void bkey_init(struct bkey *k)
-{
-	/*
-	 * The high bit being set is a relic from when we used it to do binary
-	 * searches - it told you where a key started. It's not used anymore,
-	 * and can probably be safely dropped.
-	 */
-
-	k->header = 1ULL << 63;
-	k->key = 0;
+/*
+ * The high bit being set is a relic from when we used it to do binary
+ * searches - it told you where a key started. It's not used anymore,
+ * and can probably be safely dropped.
+ */
+#define KEY(dev, sector, len)	(struct bkey)				\
+{									\
+	.high = (1ULL << 63) | ((uint64_t) (len) << 20) | (dev),	\
+	.low = (sector)							\
 }
 
-#define KEY_HEADER(len, dev)						\
-	(((uint64_t) 1 << 63) | ((uint64_t) (len) << 20) | (dev))
+static inline void bkey_init(struct bkey *k)
+{
+	*k = KEY(0, 0, 0);
+}
 
-#define KEY(dev, sector, len)	(struct bkey)				\
-	{ .header = KEY_HEADER(len, dev), .key = (sector) }
-
-#define KEY_START(k)		((k)->key - KEY_SIZE(k))
-#define START_KEY(k)		KEY(KEY_DEV(k), KEY_START(k), 0)
+#define KEY_START(k)		(KEY_OFFSET(k) - KEY_SIZE(k))
+#define START_KEY(k)		KEY(KEY_INODE(k), KEY_START(k), 0)
 #define MAX_KEY			KEY(~(~0 << 20), ((uint64_t) ~0) >> 1, 0)
 #define ZERO_KEY		KEY(0, 0, 0)
 

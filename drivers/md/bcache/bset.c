@@ -73,7 +73,7 @@ bool __bch_ptr_invalid(struct cache_set *c, int level, const struct bkey *k)
 	if (level && (!KEY_PTRS(k) || !KEY_SIZE(k) || KEY_DIRTY(k)))
 		goto bad;
 
-	if (!level && KEY_SIZE(k) > k->key)
+	if (!level && KEY_SIZE(k) > KEY_OFFSET(k))
 		goto bad;
 
 	if (!KEY_SIZE(k))
@@ -183,7 +183,7 @@ bool __bch_cut_front(const struct bkey *where, struct bkey *k)
 		return false;
 
 	if (bkey_cmp(where, k) < 0)
-		len = k->key - where->key;
+		len = KEY_OFFSET(k) - KEY_OFFSET(where);
 	else
 		bkey_copy_key(k, where);
 
@@ -202,10 +202,10 @@ bool __bch_cut_back(const struct bkey *where, struct bkey *k)
 	if (bkey_cmp(where, k) >= 0)
 		return false;
 
-	BUG_ON(KEY_DEV(where) != KEY_DEV(k));
+	BUG_ON(KEY_INODE(where) != KEY_INODE(k));
 
 	if (bkey_cmp(where, &START_KEY(k)) > 0)
-		len = where->key - KEY_START(k);
+		len = KEY_OFFSET(where) - KEY_START(k);
 
 	bkey_copy_key(k, where);
 
@@ -243,7 +243,7 @@ bool bch_bkey_try_merge(struct btree *b, struct bkey *l, struct bkey *r)
 	 * overflow KEY_SIZE
 	 */
 	if (KEY_SIZE(l) + KEY_SIZE(r) > USHRT_MAX) {
-		l->key += USHRT_MAX - KEY_SIZE(l);
+		SET_KEY_OFFSET(l, KEY_OFFSET(l) + USHRT_MAX - KEY_SIZE(l));
 		SET_KEY_SIZE(l, USHRT_MAX);
 
 		bch_cut_front(l, r);
@@ -257,8 +257,8 @@ bool bch_bkey_try_merge(struct btree *b, struct bkey *l, struct bkey *r)
 			SET_KEY_CSUM(l, 0);
 	}
 
+	SET_KEY_OFFSET(l, KEY_OFFSET(l) + KEY_SIZE(r));
 	SET_KEY_SIZE(l, KEY_SIZE(l) + KEY_SIZE(r));
-	l->key += KEY_SIZE(r);
 
 	return true;
 }
@@ -548,7 +548,7 @@ static inline uint64_t shrd128(uint64_t high, uint64_t low, uint8_t shift)
 static inline unsigned bfloat_mantissa(const struct bkey *k,
 				       struct bkey_float *f)
 {
-	const uint64_t *p = &k->key - (f->exponent >> 6);
+	const uint64_t *p = &k->low - (f->exponent >> 6);
 	return shrd128(p[-1], p[0], f->exponent & 63) & BKEY_MANTISSA_MASK;
 }
 
@@ -569,10 +569,10 @@ static void make_bfloat(struct bset_tree *t, unsigned j)
 	BUG_ON(m < l || m > r);
 	BUG_ON(bkey_next(p) != m);
 
-	if (KEY_DEV(l) != KEY_DEV(r))
-		f->exponent = fls64(KEY_DEV(r) ^ KEY_DEV(l)) + 64;
+	if (KEY_INODE(l) != KEY_INODE(r))
+		f->exponent = fls64(KEY_INODE(r) ^ KEY_INODE(l)) + 64;
 	else
-		f->exponent = fls64(r->key ^ l->key);
+		f->exponent = fls64(r->low ^ l->low);
 
 	f->exponent = max_t(int, f->exponent - BKEY_MANTISSA_BITS, 0);
 

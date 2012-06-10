@@ -95,57 +95,56 @@ struct keylist {
 	uint64_t		d[KEYLIST_INLINE];
 };
 
-static inline void keylist_init(struct keylist *l)
+static inline void bch_keylist_init(struct keylist *l)
 {
 	l->top = (void *) (l->list = l->d);
 }
 
-static inline void keylist_push(struct keylist *l)
+static inline void bch_keylist_push(struct keylist *l)
 {
 	l->top = next(l->top);
 }
 
-static inline void keylist_add(struct keylist *l, struct bkey *k)
+static inline void bch_keylist_add(struct keylist *l, struct bkey *k)
 {
 	bkey_copy(l->top, k);
-	keylist_push(l);
+	bch_keylist_push(l);
 }
 
-static inline bool keylist_empty(struct keylist *l)
+static inline bool bch_keylist_empty(struct keylist *l)
 {
 	return l->top == (void *) l->list;
 }
 
-static inline void keylist_free(struct keylist *l)
+static inline void bch_keylist_free(struct keylist *l)
 {
 	if (l->list != l->d)
 		kfree(l->list);
 }
 
-void keylist_copy(struct keylist *, struct keylist *);
-struct bkey *keylist_pop(struct keylist *);
-int keylist_realloc(struct keylist *, int, struct cache_set *);
+void bch_keylist_copy(struct keylist *, struct keylist *);
+struct bkey *bch_keylist_pop(struct keylist *);
+int bch_keylist_realloc(struct keylist *, int, struct cache_set *);
 
-void bkey_copy_single_ptr(struct bkey *, const struct bkey *, unsigned);
-bool __cut_front(const struct bkey *, struct bkey *);
-bool __cut_back(const struct bkey *, struct bkey *);
+void bch_bkey_copy_single_ptr(struct bkey *, const struct bkey *, unsigned);
+bool __bch_cut_front(const struct bkey *, struct bkey *);
+bool __bch_cut_back(const struct bkey *, struct bkey *);
 
-static inline bool cut_front(const struct bkey *where, struct bkey *k)
+static inline bool bch_cut_front(const struct bkey *where, struct bkey *k)
 {
 	BUG_ON(bkey_cmp(where, k) > 0);
-	return __cut_front(where, k);
+	return __bch_cut_front(where, k);
 }
 
-static inline bool cut_back(const struct bkey *where, struct bkey *k)
+static inline bool bch_cut_back(const struct bkey *where, struct bkey *k)
 {
 	BUG_ON(bkey_cmp(where, &START_KEY(k)) < 0);
-	return __cut_back(where, k);
+	return __bch_cut_back(where, k);
 }
 
-const char *ptr_status(struct cache_set *, const struct bkey *);
-bool __ptr_invalid(struct cache_set *, int level, const struct bkey *);
-bool ptr_invalid(struct btree *, const struct bkey *);
-bool ptr_bad(struct btree *, const struct bkey *);
+const char *bch_ptr_status(struct cache_set *, const struct bkey *);
+bool __bch_ptr_invalid(struct cache_set *, int level, const struct bkey *);
+bool bch_ptr_bad(struct btree *, const struct bkey *);
 
 static inline uint8_t gen_after(uint8_t a, uint8_t b)
 {
@@ -165,14 +164,11 @@ static inline bool ptr_available(struct cache_set *c, const struct bkey *k,
 	return (PTR_DEV(k, i) < MAX_CACHES_PER_SET) && PTR_CACHE(c, k, i);
 }
 
-struct bkey *next_recurse_key(struct btree *, struct bkey *);
-struct bkey *btree_iter_next(struct btree_iter *);
-void btree_iter_push(struct btree_iter *, struct bkey *, struct bkey *);
-struct bkey *__btree_iter_init(struct btree *, struct btree_iter *,
-			       struct bkey *, struct bset_tree *);
-
-#define btree_iter_init(b, iter, search)			\
-	__btree_iter_init(b, iter, search, (b)->sets)
+struct bkey *bch_next_recurse_key(struct btree *, struct bkey *);
+struct bkey *bch_btree_iter_next(struct btree_iter *);
+void bch_btree_iter_push(struct btree_iter *, struct bkey *, struct bkey *);
+struct bkey *__bch_btree_iter_init(struct btree *, struct btree_iter *,
+				   struct bkey *, struct bset_tree *);
 
 #define BKEY_MID_BITS		3
 #define BKEY_MID_MAX		(~(~0 << (BKEY_MID_BITS - 1)))
@@ -209,27 +205,31 @@ struct bkey_float {
 #define bset_tree_bytes(b)	(bset_tree_space(b) * sizeof(struct bkey_float))
 #define bset_prev_bytes(b)	(bset_tree_space(b) * sizeof(uint8_t))
 
-void bset_init_next(struct btree *);
+void bch_bset_init_next(struct btree *);
 
-void bset_fix_invalidated_key(struct btree *, struct bkey *);
-void bset_fix_lookup_table(struct btree *, struct bkey *);
+void bch_bset_fix_invalidated_key(struct btree *, struct bkey *);
+void bch_bset_fix_lookup_table(struct btree *, struct bkey *);
 
-struct bkey *__bset_search(struct btree *, struct bset_tree *,
+struct bkey *__bch_bset_search(struct btree *, struct bset_tree *,
 			   const struct bkey *);
 
-static inline struct bkey *bset_search(struct btree *b, struct bset_tree *t,
-				       const struct bkey *search)
+static inline struct bkey *bch_bset_search(struct btree *b, struct bset_tree *t,
+					   const struct bkey *search)
 {
-	return search ? __bset_search(b, t, search) : t->data->start;
+	return search ? __bch_bset_search(b, t, search) : t->data->start;
 }
 
-bool bkey_try_merge(struct btree *, struct bkey *, struct bkey *);
-void btree_sort_lazy(struct btree *);
-void btree_sort_into(struct btree *, struct btree *);
-void btree_sort_and_fix_extents(struct btree *, struct btree_iter *);
-void btree_sort_partial(struct btree *, unsigned);
-#define btree_sort(b)	btree_sort_partial(b, 0)
+bool bch_bkey_try_merge(struct btree *, struct bkey *, struct bkey *);
+void bch_btree_sort_lazy(struct btree *);
+void bch_btree_sort_into(struct btree *, struct btree *);
+void bch_btree_sort_and_fix_extents(struct btree *, struct btree_iter *);
+void bch_btree_sort_partial(struct btree *, unsigned);
 
-int bset_print_stats(struct cache_set *, char *);
+static inline void bch_btree_sort(struct btree *b)
+{
+	bch_btree_sort_partial(b, 0);
+}
+
+int bch_bset_print_stats(struct cache_set *, char *);
 
 #endif

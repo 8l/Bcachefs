@@ -5,13 +5,13 @@
 
 /* Bios with headers */
 
-void bbio_free(struct bio *bio, struct cache_set *c)
+void bch_bbio_free(struct bio *bio, struct cache_set *c)
 {
 	struct bbio *b = container_of(bio, struct bbio, bio);
 	mempool_free(b, c->bio_meta);
 }
 
-struct bio *bbio_alloc(struct cache_set *c)
+struct bio *bch_bbio_alloc(struct cache_set *c)
 {
 	struct bbio *b = mempool_alloc(c->bio_meta, GFP_NOIO);
 	struct bio *bio = &b->bio;
@@ -30,7 +30,7 @@ static void bbio_destructor(struct bio *bio)
 	kfree(b);
 }
 
-struct bio *bbio_kmalloc(gfp_t gfp, int vecs)
+struct bio *bch_bbio_kmalloc(gfp_t gfp, int vecs)
 {
 	struct bio *bio;
 	struct bbio *b;
@@ -49,9 +49,9 @@ struct bio *bbio_kmalloc(gfp_t gfp, int vecs)
 	return bio;
 }
 
-struct bio *__bio_split_get(struct bio *bio, int len, struct bio_set *bs)
+struct bio *__bch_bio_split_get(struct bio *bio, int len, struct bio_set *bs)
 {
-	struct bio *ret = bio_split_front(bio, len, bbio_kmalloc, GFP_NOIO, bs);
+	struct bio *ret = bio_split_front(bio, len, bch_bbio_kmalloc, GFP_NOIO, bs);
 
 	if (ret && ret != bio) {
 		closure_get(ret->bi_private);
@@ -61,7 +61,7 @@ struct bio *__bio_split_get(struct bio *bio, int len, struct bio_set *bs)
 	return ret;
 }
 
-void __submit_bbio(struct bio *bio, struct cache_set *c)
+void __bch_submit_bbio(struct bio *bio, struct cache_set *c)
 {
 	struct bbio *b = container_of(bio, struct bbio, bio);
 
@@ -72,15 +72,15 @@ void __submit_bbio(struct bio *bio, struct cache_set *c)
 	generic_make_request(bio);
 }
 
-void submit_bbio(struct bio *bio, struct cache_set *c,
-			struct bkey *k, unsigned ptr)
+void bch_submit_bbio(struct bio *bio, struct cache_set *c,
+		     struct bkey *k, unsigned ptr)
 {
 	struct bbio *b = container_of(bio, struct bbio, bio);
-	bkey_copy_single_ptr(&b->key, k, ptr);
-	__submit_bbio(bio, c);
+	bch_bkey_copy_single_ptr(&b->key, k, ptr);
+	__bch_submit_bbio(bio, c);
 }
 
-int submit_bbio_split(struct bio *bio, struct cache_set *c,
+int bch_submit_bbio_split(struct bio *bio, struct cache_set *c,
 		      struct bkey *k, unsigned ptr)
 {
 	struct closure *cl = bio->bi_private;
@@ -94,7 +94,7 @@ int submit_bbio_split(struct bio *bio, struct cache_set *c,
 	bio->bi_bdev	= PTR_CACHE(c, k, ptr)->bdev;
 
 	do {
-		n = bio_split_get(bio, bio_max_sectors(bio), c);
+		n = bch_bio_split_get(bio, bio_max_sectors(bio), c);
 		if (!n) {
 			closure_put(cl);
 			return -ENOMEM;
@@ -102,7 +102,7 @@ int submit_bbio_split(struct bio *bio, struct cache_set *c,
 
 		b = container_of(n, struct bbio, bio);
 
-		bkey_copy_single_ptr(&b->key, k, ptr);
+		bch_bkey_copy_single_ptr(&b->key, k, ptr);
 		SET_KEY_SIZE(&b->key, KEY_SIZE(k) - sectors_done);
 		SET_PTR_OFFSET(&b->key, 0, PTR_OFFSET(k, ptr) + sectors_done);
 
@@ -117,7 +117,7 @@ int submit_bbio_split(struct bio *bio, struct cache_set *c,
 
 /* IO errors */
 
-void count_io_errors(struct cache *c, int error, const char *m)
+void bch_count_io_errors(struct cache *c, int error, const char *m)
 {
 	/*
 	 * The halflife of an error is:
@@ -163,13 +163,13 @@ void count_io_errors(struct cache *c, int error, const char *m)
 			err_printk("%s: IO error on %s, recovering\n",
 				   bdevname(c->bdev, buf), m);
 		else
-			cache_set_error(c->set, "%s: too many IO errors %s",
-					bdevname(c->bdev, buf), m);
+			bch_cache_set_error(c->set, "%s: too many IO errors %s",
+					    bdevname(c->bdev, buf), m);
 	}
 }
 
-void bcache_endio(struct cache_set *c, struct bio *bio,
-		  int error, const char *m)
+void bch_bbio_endio(struct cache_set *c, struct bio *bio,
+		    int error, const char *m)
 {
 	struct closure *cl = bio->bi_private;
 	struct bbio *b = container_of(bio, struct bbio, bio);
@@ -195,7 +195,7 @@ void bcache_endio(struct cache_set *c, struct bio *bio,
 			atomic_inc(&c->congested);
 	}
 
-	count_io_errors(ca, error, m);
+	bch_count_io_errors(ca, error, m);
 	bio_put(bio);
 	closure_put(cl);
 }

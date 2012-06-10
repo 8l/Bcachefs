@@ -790,13 +790,13 @@ static inline struct bucket *PTR_BUCKET(struct cache_set *c,
 
 #define btree_bug(b, ...)						\
 do {									\
-	if (cache_set_error((b)->c, __VA_ARGS__))			\
+	if (bch_cache_set_error((b)->c, __VA_ARGS__))			\
 		dump_stack();						\
 } while (0)
 
 #define cache_bug(c, ...)						\
 do {									\
-	if (cache_set_error(c, __VA_ARGS__))				\
+	if (bch_cache_set_error(c, __VA_ARGS__))			\
 		dump_stack();						\
 } while (0)
 
@@ -815,7 +815,7 @@ do {									\
 #define cache_set_err_on(cond, c, ...)					\
 do {									\
 	if (cond)							\
-		cache_set_error(c, __VA_ARGS__);			\
+		bch_cache_set_error(c, __VA_ARGS__);			\
 } while (0)
 
 /* Looping macros */
@@ -895,65 +895,63 @@ static inline uint8_t bucket_disk_gen(struct bucket *b)
 	static struct kobj_attribute ksysfs_##n =			\
 		__ATTR(n, S_IWUSR|S_IRUSR, show, store)
 
-#define bio_split_get(bio, len, c)					\
-	__bio_split_get(bio, len, (c)->bio_split)
+#define bch_bio_split_get(bio, len, c)					\
+	__bch_bio_split_get(bio, len, (c)->bio_split)
 
 /* Forward declarations */
 
-void bcache_writeback_queue(struct cached_dev *);
-void bcache_writeback_add(struct cached_dev *, unsigned);
+void bch_writeback_queue(struct cached_dev *);
+void bch_writeback_add(struct cached_dev *, unsigned);
 
-void count_io_errors(struct cache *, int, const char *);
-void bcache_endio(struct cache_set *, struct bio *, int, const char *);
-void bbio_free(struct bio *, struct cache_set *);
-struct bio *bbio_alloc(struct cache_set *);
-struct bio *bbio_kmalloc(gfp_t, int);
-struct bio *__bio_split_get(struct bio *, int, struct bio_set *);
+void bch_count_io_errors(struct cache *, int, const char *);
+void bch_bbio_endio(struct cache_set *, struct bio *, int, const char *);
+void bch_bbio_free(struct bio *, struct cache_set *);
+struct bio *bch_bbio_alloc(struct cache_set *);
+struct bio *bch_bbio_kmalloc(gfp_t, int);
+struct bio *__bch_bio_split_get(struct bio *, int, struct bio_set *);
 
-void __submit_bbio(struct bio *, struct cache_set *);
-void submit_bbio(struct bio *, struct cache_set *, struct bkey *, unsigned);
-int submit_bbio_split(struct bio *, struct cache_set *,
+void __bch_submit_bbio(struct bio *, struct cache_set *);
+void bch_submit_bbio(struct bio *, struct cache_set *, struct bkey *, unsigned);
+int bch_submit_bbio_split(struct bio *, struct cache_set *,
 		      struct bkey *, unsigned);
 
-void cache_read_endio(struct bio *, int);
-
-struct bcache_cgroup;
+struct bch_cgroup;
 struct cgroup;
-struct bcache_cgroup *cgroup_to_bcache(struct cgroup *cgroup);
-struct bcache_cgroup *bio_to_cgroup(struct bio *bio);
+struct bch_cgroup *cgroup_to_bcache(struct cgroup *cgroup);
+struct bch_cgroup *bio_to_cgroup(struct bio *bio);
 
-uint8_t inc_gen(struct cache *, struct bucket *);
-void rescale_priorities(struct cache_set *, int);
-bool bucket_add_unused(struct cache *, struct bucket *);
-bool can_save_prios(struct cache *);
-void free_some_buckets(struct cache *);
-void unpop_bucket(struct cache_set *, struct bkey *);
-int __pop_bucket_set(struct cache_set *, int, uint16_t,
+uint8_t bch_inc_gen(struct cache *, struct bucket *);
+void bch_rescale_priorities(struct cache_set *, int);
+bool bch_bucket_add_unused(struct cache *, struct bucket *);
+bool bch_can_save_prios(struct cache *);
+void bch_free_some_buckets(struct cache *);
+void bch_unpop_bucket(struct cache_set *, struct bkey *);
+int __bch_pop_bucket_set(struct cache_set *, int, uint16_t,
 		     struct bkey *, int, struct closure *);
-int pop_bucket_set(struct cache_set *, int, uint16_t,
+int bch_pop_bucket_set(struct cache_set *, int, uint16_t,
 		   struct bkey *, int, struct closure *);
 
 __printf(2, 3)
-bool cache_set_error(struct cache_set *, const char *, ...);
+bool bch_cache_set_error(struct cache_set *, const char *, ...);
 
-void prio_write(struct cache *);
-void write_bdev_super(struct cached_dev *, struct closure *);
+void bch_prio_write(struct cache *);
+void bch_write_bdev_super(struct cached_dev *, struct closure *);
 
 extern struct workqueue_struct *bcache_wq;
-extern const char * const bcache_cache_modes[];
+extern const char * const bch_cache_modes[];
 
-struct cache_set *cache_set_alloc(struct cache_sb *);
-void free_discards(struct cache *);
-int alloc_discards(struct cache *);
-void bcache_btree_cache_free(struct cache_set *);
-int bcache_btree_cache_alloc(struct cache_set *);
-void bcache_writeback_init_cached_dev(struct cached_dev *);
+struct cache_set *bch_cache_set_alloc(struct cache_sb *);
+void bch_free_discards(struct cache *);
+int bch_alloc_discards(struct cache *);
+void bch_btree_cache_free(struct cache_set *);
+int bch_btree_cache_alloc(struct cache_set *);
+void bch_writeback_init_cached_dev(struct cached_dev *);
 
-void bcache_debug_exit(void);
-int bcache_debug_init(struct kobject *);
-void bcache_writeback_exit(void);
-int bcache_writeback_init(void);
-void bcache_request_exit(void);
-int bcache_request_init(void);
-void bcache_btree_exit(void);
-int bcache_btree_init(void);
+void bch_debug_exit(void);
+int bch_debug_init(struct kobject *);
+void bch_writeback_exit(void);
+int bch_writeback_init(void);
+void bch_request_exit(void);
+int bch_request_init(void);
+void bch_btree_exit(void);
+int bch_btree_init(void);

@@ -177,7 +177,7 @@ STORE(__cached_dev)
 	d_strtoi_h(readahead);
 
 	if (attr == &sysfs_clear_stats)
-		clear_stats(&d->accounting);
+		bch_cache_accounting_clear(&d->accounting);
 
 	if (attr == &sysfs_running &&
 	    strtoul_or_return(buf))
@@ -191,13 +191,13 @@ STORE(__cached_dev)
 
 		if ((unsigned) v != BDEV_CACHE_MODE(&d->sb)) {
 			SET_BDEV_CACHE_MODE(&d->sb, v);
-			write_bdev_super(d, NULL);
+			bch_write_bdev_super(d, NULL);
 		}
 	}
 
 	if (attr == &sysfs_label) {
 		memcpy(d->sb.label, buf, SB_LABEL_SIZE);
-		write_bdev_super(d, NULL);
+		bch_write_bdev_super(d, NULL);
 		if (d->disk.c) {
 			memcpy(d->disk.c->uuids[d->disk.id].label,
 			       buf, SB_LABEL_SIZE);
@@ -235,7 +235,7 @@ STORE(cached_dev)
 	size = __cached_dev_store(kobj, attr, buf, size);
 
 	if (attr == &sysfs_writeback_running)
-		bcache_writeback_queue(dc);
+		bch_writeback_queue(dc);
 
 	if (attr == &sysfs_writeback_percent)
 		schedule_delayed_work(&dc->writeback_rate_update,
@@ -365,7 +365,7 @@ lock_root:
 			rw_lock(false, b, b->level);
 		} while (b != c->root);
 
-		for_each_key_filter(b, k, ptr_bad)
+		for_each_key_filter(b, k, bch_ptr_bad)
 			bytes += bkey_bytes(k);
 
 		rw_unlock(false, b);
@@ -457,7 +457,7 @@ lock_root:
 	sysfs_print(io_error_limit,	c->error_limit >> IO_ERROR_SHIFT);
 
 	sysfs_printf(congested,			"%hllu",
-		     ((uint64_t) bcache_get_congested(c)) << 9);
+		     ((uint64_t) bch_get_congested(c)) << 9);
 	sysfs_print(congested_read_threshold_us,
 		    c->congested_read_threshold_us);
 	sysfs_print(congested_write_threshold_us,
@@ -470,7 +470,7 @@ lock_root:
 	sysfs_printf(btree_shrinker_disabled,	"%i", c->shrinker_disabled);
 
 	if (attr == &sysfs_bset_tree_stats)
-		return bset_print_stats(c, buf);
+		return bch_bset_print_stats(c, buf);
 
 	return 0;
 }
@@ -510,11 +510,11 @@ STORE(__cache_set)
 		atomic_long_set(&c->writeback_keys_failed,	0);
 
 		memset(&c->gc_stats, 0, sizeof(struct gc_stat));
-		clear_stats(&c->accounting);
+		bch_cache_accounting_clear(&c->accounting);
 	}
 
 	if (attr == &sysfs_trigger_gc)
-		bcache_queue_gc(c);
+		bch_queue_gc(c);
 
 	if (attr == &sysfs_prune_cache) {
 		struct shrink_control sc;

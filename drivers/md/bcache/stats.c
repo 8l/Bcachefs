@@ -55,8 +55,8 @@ static struct attribute *accounting_files[] = {
 	NULL
 };
 
-ssize_t cache_stats_show(struct kobject *kobj,
-			      struct attribute *attr,
+static ssize_t cache_stats_show(struct kobject *kobj,
+				struct attribute *attr,
 			      char *buf) {
 	struct cache_stats *s =
 		container_of(kobj, struct cache_stats, kobj);
@@ -95,7 +95,7 @@ static struct kobj_type accounting_obj = {
 
 static void scale_accounting(unsigned long data);
 
-void init_cache_accounting(struct cache_accounting *acc, struct closure *parent)
+void bch_cache_accounting_init(struct cache_accounting *acc, struct closure *parent)
 {
 	kobject_init(&acc->total.kobj,		&accounting_obj);
 	kobject_init(&acc->five_minute.kobj,	&accounting_obj);
@@ -110,8 +110,8 @@ void init_cache_accounting(struct cache_accounting *acc, struct closure *parent)
 	add_timer(&acc->timer);
 }
 
-int add_cache_accounting_kobjs(struct cache_accounting *acc,
-			       struct kobject *parent)
+int bch_cache_accounting_add_kobjs(struct cache_accounting *acc,
+				   struct kobject *parent)
 {
 	int ret = kobject_add(&acc->total.kobj, parent,
 			      "stats_total");
@@ -124,14 +124,14 @@ int add_cache_accounting_kobjs(struct cache_accounting *acc,
 	return ret;
 }
 
-void clear_stats(struct cache_accounting *acc)
+void bch_cache_accounting_clear(struct cache_accounting *acc)
 {
 	memset(&acc->total.cache_hits,
 	       0,
 	       sizeof(unsigned long) * 7);
 }
 
-void destroy_cache_accounting(struct cache_accounting *acc)
+void bch_cache_accounting_destroy(struct cache_accounting *acc)
 {
 	kobject_put(&acc->total.kobj);
 	kobject_put(&acc->five_minute.kobj);
@@ -145,12 +145,12 @@ void destroy_cache_accounting(struct cache_accounting *acc)
 
 /* EWMA scaling */
 
-void scale_stat(unsigned long *stat)
+static void scale_stat(unsigned long *stat)
 {
 	*stat =  ewma_add(*stat, 0, accounting_weight, 0);
 }
 
-void scale_stats(struct cache_stats *stats, unsigned long rescale_at)
+static void scale_stats(struct cache_stats *stats, unsigned long rescale_at)
 {
 	if (++stats->rescale == rescale_at) {
 		stats->rescale = 0;
@@ -164,7 +164,7 @@ void scale_stats(struct cache_stats *stats, unsigned long rescale_at)
 	}
 }
 
-void scale_accounting(unsigned long data)
+static void scale_accounting(unsigned long data)
 {
 	struct cache_accounting *acc = (struct cache_accounting *) data;
 
@@ -213,7 +213,7 @@ static void mark_cache_stats(struct cache_stat_collector *stats,
 			atomic_inc(&stats->cache_bypass_misses);
 }
 
-void mark_cache_accounting(struct search *s, bool hit, bool bypass)
+void bch_mark_cache_accounting(struct search *s, bool hit, bool bypass)
 {
 	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 	mark_cache_stats(&dc->accounting.collector, hit, bypass);
@@ -223,19 +223,21 @@ void mark_cache_accounting(struct search *s, bool hit, bool bypass)
 #endif
 }
 
-void mark_cache_readahead(struct search *s)
+void bch_mark_cache_readahead(struct search *s)
 {
 	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 	atomic_inc(&dc->accounting.collector.cache_readaheads);
 	atomic_inc(&s->op.c->accounting.collector.cache_readaheads);
 }
-void mark_cache_miss_collision(struct search *s)
+
+void bch_mark_cache_miss_collision(struct search *s)
 {
 	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 	atomic_inc(&dc->accounting.collector.cache_miss_collisions);
 	atomic_inc(&s->op.c->accounting.collector.cache_miss_collisions);
 }
-void mark_sectors_bypassed(struct search *s, int sectors)
+
+void bch_mark_sectors_bypassed(struct search *s, int sectors)
 {
 	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 	atomic_add(sectors, &dc->accounting.collector.sectors_bypassed);

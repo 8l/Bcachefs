@@ -14,7 +14,7 @@ static struct dentry *debug;
 
 /* Various debug code */
 
-const char *ptr_status(struct cache_set *c, const struct bkey *k)
+const char *bch_ptr_status(struct cache_set *c, const struct bkey *k)
 {
 	for (unsigned i = 0; i < KEY_PTRS(k); i++)
 		if (ptr_available(c, k, i)) {
@@ -61,7 +61,7 @@ static void dump_bset(struct btree *b, struct bset *i)
 				       PTR_BUCKET(b->c, k, j)->prio);
 		}
 
-		printk(" %s\n", ptr_status(b->c, k));
+		printk(" %s\n", bch_ptr_status(b->c, k));
 
 		if (next(k) < end(i) &&
 		    skipped_backwards(b, k))
@@ -106,7 +106,7 @@ dump_key_and_panic(struct btree *b, struct bset *i, int j)
 	dump_bucket_and_panic(b, "");
 }
 
-struct keyprint_hack bcache_pkey(const struct bkey *k)
+struct keyprint_hack bch_pkey(const struct bkey *k)
 {
 	unsigned i = 0;
 	struct keyprint_hack r;
@@ -137,7 +137,7 @@ struct keyprint_hack bcache_pkey(const struct bkey *k)
 	return r;
 }
 
-struct keyprint_hack bcache_pbtree(const struct btree *b)
+struct keyprint_hack bch_pbtree(const struct btree *b)
 {
 	struct keyprint_hack r;
 
@@ -148,7 +148,7 @@ struct keyprint_hack bcache_pbtree(const struct btree *b)
 
 #ifdef CONFIG_BCACHE_DEBUG
 
-void btree_verify(struct btree *b, struct bset *new)
+void bch_btree_verify(struct btree *b, struct bset *new)
 {
 	struct btree *v = b->c->verify_data;
 	struct closure cl;
@@ -166,7 +166,7 @@ void btree_verify(struct btree *b, struct bset *new)
 	v->written = 0;
 	v->level = b->level;
 
-	btree_read(v);
+	bch_btree_read(v);
 	closure_wait_event(&v->io.wait, &cl,
 			   atomic_read(&b->io.cl.remaining) == -1);
 
@@ -206,7 +206,7 @@ static void data_verify_endio(struct bio *bio, int error)
 	closure_put(cl);
 }
 
-void data_verify(struct search *s)
+void bch_data_verify(struct search *s)
 {
 	char name[BDEVNAME_SIZE];
 	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
@@ -259,7 +259,7 @@ out_put:
 
 #ifdef CONFIG_BCACHE_EDEBUG
 
-unsigned count_data(struct btree *b)
+unsigned bch_count_data(struct btree *b)
 {
 	unsigned ret = 0;
 	struct bkey *k;
@@ -270,7 +270,7 @@ unsigned count_data(struct btree *b)
 	return ret;
 }
 
-void check_key_order_msg(struct btree *b, struct bset *i, const char *m, ...)
+void bch_check_key_order_msg(struct btree *b, struct bset *i, const char *m, ...)
 {
 	if (!i->keys)
 		return;
@@ -285,7 +285,7 @@ void check_key_order_msg(struct btree *b, struct bset *i, const char *m, ...)
 		}
 }
 
-void check_keys(struct btree *b, const char *m, ...)
+void bch_check_keys(struct btree *b, const char *m, ...)
 {
 	va_list args;
 	struct bkey *k, *p;
@@ -294,19 +294,19 @@ void check_keys(struct btree *b, const char *m, ...)
 	if (b->level)
 		return;
 
-	btree_iter_init(b, &iter, NULL);
+	bch_btree_iter_init(b, &iter, NULL);
 
 	do
-		p = btree_iter_next(&iter);
-	while (p && ptr_invalid(b, p));
+		p = bch_btree_iter_next(&iter);
+	while (p && bch_ptr_invalid(b, p));
 
-	while ((k = btree_iter_next(&iter))) {
+	while ((k = bch_btree_iter_next(&iter))) {
 		if (bkey_cmp(&START_KEY(p), &START_KEY(k)) > 0) {
 			printk(KERN_ERR "Keys out of order:\n");
 			goto bug;
 		}
 
-		if (ptr_invalid(b, k))
+		if (bch_ptr_invalid(b, k))
 			continue;
 
 		if (bkey_cmp(p, &START_KEY(k)) > 0) {
@@ -326,7 +326,7 @@ bug:
 
 #ifdef CONFIG_DEBUG_FS
 
-static int btree_dump(struct btree *b, struct btree_op *op, struct seq_file *f,
+static int bch_btree_dump(struct btree *b, struct btree_op *op, struct seq_file *f,
 		      const char *tabs, uint64_t *prev, uint64_t *sectors)
 {
 	struct bkey *k;
@@ -344,7 +344,7 @@ static int btree_dump(struct btree *b, struct btree_op *op, struct seq_file *f,
 		if (!b->level && j &&
 		    last != KEY_START(k))
 			seq_printf(f, "<hole>\n");
-		else if (b->level && !ptr_bad(b, k))
+		else if (b->level && !bch_ptr_bad(b, k))
 			btree(dump, k, b, op, f, tabs - 1, &last, sectors);
 
 		seq_printf(f, "%s%zi %4i: %s %s\n",
@@ -369,7 +369,7 @@ static int debug_seq_show(struct seq_file *f, void *data)
 	struct cache_set *c = ca->set;
 
 	struct btree_op op;
-	btree_op_init_stack(&op);
+	bch_btree_op_init_stack(&op);
 
 	btree_root(dump, c, &op, f, &tabs[4], &last, &sectors);
 
@@ -392,7 +392,7 @@ static const struct file_operations cache_debug_ops = {
 	.release	= single_release
 };
 
-void bcache_debug_init_cache(struct cache *c)
+void bch_debug_init_cache(struct cache *c)
 {
 	if (!IS_ERR_OR_NULL(debug)) {
 		char b[BDEVNAME_SIZE];
@@ -423,7 +423,7 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 	struct btree *all[3], *b, *fill, *orig;
 
 	struct btree_op op;
-	btree_op_init_stack(&op);
+	bch_btree_op_init_stack(&op);
 
 	sb = kzalloc(sizeof(struct cache_sb), GFP_KERNEL);
 	if (!sb)
@@ -432,7 +432,7 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 	sb->bucket_size = 128;
 	sb->block_size = 4;
 
-	c = cache_set_alloc(sb);
+	c = bch_cache_set_alloc(sb);
 	if (!c)
 		return -ENOMEM;
 
@@ -453,7 +453,7 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 		for (int i = 0; i < 3; i++)
 			all[i]->written = all[i]->nsets = 0;
 
-		bset_init_next(b);
+		bch_bset_init_next(b);
 
 		while (1) {
 			struct bset *i = write_block(b);
@@ -473,8 +473,8 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 #if 0
 			SET_KEY_PTRS(k, 1);
 #endif
-			keylist_push(&op.keys);
-			bcache_btree_insert_keys(b, &op);
+			bch_keylist_push(&op.keys);
+			bch_btree_insert_keys(b, &op);
 
 			if (should_split(b) ||
 			    set_blocks(i, b->c) !=
@@ -489,8 +489,8 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 				if (b->written == btree_blocks(b))
 					break;
 
-				btree_sort_lazy(b);
-				bset_init_next(b);
+				bch_btree_sort_lazy(b);
+				bch_bset_init_next(b);
 			}
 		}
 
@@ -498,9 +498,9 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 		       fill->sets[0].data,
 		       btree_bytes(c));
 
-		btree_sort(b);
+		bch_btree_sort(b);
 		fill->written = 0;
-		btree_read_done(&fill->io.cl);
+		bch_btree_read_done(&fill->io.cl);
 
 		if (b->sets[0].data->keys != fill->sets[0].data->keys ||
 		    memcmp(b->sets[0].data->start,
@@ -548,13 +548,13 @@ static ssize_t store(struct kobject *k, struct kobj_attribute *attr,
 kobj_attribute_rw(latency_warn_ms, show, store);
 #endif
 
-void bcache_debug_exit(void)
+void bch_debug_exit(void)
 {
 	if (!IS_ERR_OR_NULL(debug))
 		debugfs_remove_recursive(debug);
 }
 
-int __init bcache_debug_init(struct kobject *kobj)
+int __init bch_debug_init(struct kobject *kobj)
 {
 	int ret = 0;
 #ifdef CONFIG_BCACHE_DEBUG

@@ -113,6 +113,18 @@ static inline void set_gc_sectors(struct cache_set *c)
 	atomic_set(&c->sectors_to_gc, c->sb.bucket_size * c->nbuckets / 8);
 }
 
+static inline bool bch_ptr_invalid(struct btree *b, const struct bkey *k)
+{
+	return __bch_ptr_invalid(b->c, b->level, k);
+}
+
+static inline struct bkey *bch_btree_iter_init(struct btree *b,
+					       struct btree_iter *iter,
+					       struct bkey *search)
+{
+	return __bch_btree_iter_init(b, iter, search, b->sets);
+}
+
 /* Looping macros */
 
 #define for_each_cached_btree(b, cursor, c)				\
@@ -187,7 +199,7 @@ struct btree_op {
 	BKEY_PADDED(replace);
 };
 
-void btree_op_init_stack(struct btree_op *);
+void bch_btree_op_init_stack(struct btree_op *);
 
 static inline void rw_lock(bool w, struct btree *b, int level)
 {
@@ -200,11 +212,13 @@ static inline void rw_lock(bool w, struct btree *b, int level)
 static inline void rw_unlock(bool w, struct btree *b)
 {
 #ifdef CONFIG_BCACHE_EDEBUG
+	unsigned i;
+
 	if (w &&
 	    b->key.ptr[0] &&
 	    btree_node_read_done(b))
-		for (unsigned i = 0; i <= b->nsets; i++)
-			check_key_order(b, b->sets[i].data);
+		for (i = 0; i <= b->nsets; i++)
+			bch_check_key_order(b, b->sets[i].data);
 #endif
 
 	if (w)
@@ -228,9 +242,9 @@ static inline void rw_unlock(bool w, struct btree *b)
 ({									\
 	int _r, l = (b)->level - 1;					\
 	bool _w = l <= (op)->lock;					\
-	struct btree *_b = get_bucket((b)->c, k, l, op);		\
+	struct btree *_b = bch_get_bucket((b)->c, k, l, op);		\
 	if (!IS_ERR(_b)) {						\
-		_r = btree_ ## f(_b, op, ##__VA_ARGS__);		\
+		_r = bch_btree_ ## f(_b, op, ##__VA_ARGS__);		\
 		rw_unlock(_w, _b);					\
 	} else								\
 		_r = PTR_ERR(_b);					\
@@ -246,9 +260,9 @@ static inline void rw_unlock(bool w, struct btree *b)
 		rw_lock(_w, _b, _b->level);				\
 		if (_b == (c)->root &&					\
 		    _w == insert_lock(op, _b))				\
-			_r = btree_ ## f(_b, op, ##__VA_ARGS__);	\
+			_r = bch_btree_ ## f(_b, op, ##__VA_ARGS__);	\
 		rw_unlock(_w, _b);					\
-		bcache_cannibalize_unlock(c, &(op)->cl);		\
+		bch_cannibalize_unlock(c, &(op)->cl);		\
 	} while (_r == -EINTR);						\
 									\
 	_r;								\
@@ -263,25 +277,27 @@ static inline bool should_split(struct btree *b)
 		 > btree_blocks(b));
 }
 
-void btree_read_done(struct closure *);
-void btree_read(struct btree *);
-void btree_write(struct btree *b, bool now, struct btree_op *op);
+void bch_btree_read_done(struct closure *);
+void bch_btree_read(struct btree *);
+void bch_btree_write(struct btree *b, bool now, struct btree_op *op);
 
-void bcache_cannibalize_unlock(struct cache_set *, struct closure *);
-void bcache_btree_set_root(struct btree *);
-struct btree *bcache_btree_alloc(struct cache_set *, int, struct closure *);
-struct btree *get_bucket(struct cache_set *, struct bkey *,
-			 int, struct btree_op *);
+void bch_cannibalize_unlock(struct cache_set *, struct closure *);
+void bch_btree_set_root(struct btree *);
+struct btree *bch_btree_alloc(struct cache_set *, int, struct closure *);
+struct btree *bch_get_bucket(struct cache_set *, struct bkey *,
+				int, struct btree_op *);
 
-bool bcache_btree_insert_keys(struct btree *, struct btree_op *);
-bool btree_insert_check_key(struct btree *, struct btree_op *, struct bio *);
-int bcache_btree_insert(struct btree_op *, struct cache_set *);
-int btree_search_recurse(struct btree *, struct btree_op *);
+bool bch_btree_insert_keys(struct btree *, struct btree_op *);
+bool bch_btree_insert_check_key(struct btree *, struct btree_op *,
+				   struct bio *);
+int bch_btree_insert(struct btree_op *, struct cache_set *);
 
-void bcache_queue_gc(struct cache_set *);
-size_t btree_gc_finish(struct cache_set *);
-int btree_check(struct cache_set *, struct btree_op *);
-uint8_t __btree_mark_key(struct cache_set *, int, struct bkey *);
+int bch_btree_search_recurse(struct btree *, struct btree_op *);
+
+void bch_queue_gc(struct cache_set *);
+size_t bch_btree_gc_finish(struct cache_set *);
+int bch_btree_check(struct cache_set *, struct btree_op *);
+uint8_t __bch_btree_mark_key(struct cache_set *, int, struct bkey *);
 
 void bch_keybuf_init(struct keybuf *, keybuf_pred_fn *);
 void bch_refill_keybuf(struct cache_set *, struct keybuf *, struct bkey *);

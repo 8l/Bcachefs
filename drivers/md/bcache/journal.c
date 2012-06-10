@@ -123,7 +123,7 @@ next_set:
 	return ret;
 }
 
-int bcache_journal_read(struct cache_set *c, struct list_head *list,
+int bch_journal_read(struct cache_set *c, struct list_head *list,
 			struct btree_op *op)
 {
 #define read_bucket(b)							\
@@ -223,7 +223,7 @@ bsearch:
 #undef read_bucket
 }
 
-void bcache_journal_mark(struct cache_set *c, struct list_head *list)
+void bch_journal_mark(struct cache_set *c, struct list_head *list)
 {
 	atomic_t p = { 0 };
 	struct journal_replay *i;
@@ -263,12 +263,12 @@ void bcache_journal_mark(struct cache_set *c, struct list_head *list)
 					g->prio = INITIAL_PRIO;
 			}
 
-			__btree_mark_key(c, 0, k);
+			__bch_btree_mark_key(c, 0, k);
 		}
 	}
 }
 
-int bcache_journal_replay(struct cache_set *s, struct list_head *list,
+int bch_journal_replay(struct cache_set *s, struct list_head *list,
 			  struct btree_op *op)
 {
 	int ret = 0, keys = 0, entries = 0;
@@ -288,16 +288,16 @@ int bcache_journal_replay(struct cache_set *s, struct list_head *list,
 		for (struct bkey *k = i->j.start; k < end(&i->j); k = next(k)) {
 			pr_debug("%s", pkey(k));
 			bkey_copy(op->keys.top, k);
-			keylist_push(&op->keys);
+			bch_keylist_push(&op->keys);
 
 			op->journal = i->pin;
 			atomic_inc(op->journal);
 
-			ret = bcache_btree_insert(op, s);
+			ret = bch_btree_insert(op, s);
 			if (ret)
 				goto err;
 
-			BUG_ON(!keylist_empty(&op->keys));
+			BUG_ON(!bch_keylist_empty(&op->keys));
 			keys++;
 		}
 
@@ -368,7 +368,7 @@ out:
 		return;
 found:
 	if (btree_node_dirty(best))
-		btree_write(best, true, NULL);
+		bch_btree_write(best, true, NULL);
 	rw_unlock(true, best);
 }
 
@@ -427,7 +427,7 @@ static void journal_reclaim(struct cache_set *c)
 		__closure_wake_up(&c->journal.wait);
 }
 
-void bcache_journal_next(struct journal *j)
+void bch_journal_next(struct journal *j)
 {
 	atomic_t p = { 1 };
 
@@ -494,7 +494,7 @@ static void journal_write_unlocked(struct closure *cl)
 	if (!w->need_write) {
 		/*
 		 * XXX: have to unlock closure before we unlock journal lock,
-		 * else we race with bcache_journal(). But this way we race
+		 * else we race with bch_journal(). But this way we race
 		 * against cache set unregister. Doh.
 		 */
 		set_closure_fn(cl, NULL, NULL);
@@ -549,7 +549,7 @@ static void journal_write_unlocked(struct closure *cl)
 	}
 
 	atomic_dec_bug(&fifo_back(&c->journal.pin));
-	bcache_journal_next(&c->journal);
+	bch_journal_next(&c->journal);
 	journal_reclaim(c);
 
 	spin_unlock(&c->journal.lock);
@@ -583,7 +583,7 @@ static void __journal_try_write(struct cache_set *c, bool noflush)
 
 #define journal_try_write(c)	__journal_try_write(c, false)
 
-void bcache_journal_meta(struct cache_set *c, struct closure *cl)
+void bch_journal_meta(struct cache_set *c, struct closure *cl)
 {
 	struct journal_write *w;
 
@@ -602,11 +602,11 @@ void bcache_journal_meta(struct cache_set *c, struct closure *cl)
 
 /*
  * Entry point to the journalling code - bio_insert() and btree_invalidate()
- * pass bcache_journal() a list of keys to be journalled, and then
- * bcache_journal() hands those same keys off to btree_insert_async()
+ * pass bch_journal() a list of keys to be journalled, and then
+ * bch_journal() hands those same keys off to btree_insert_async()
  */
 
-void bcache_journal(struct closure *cl)
+void bch_journal(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 	struct cache_set *c = op->c;
@@ -634,7 +634,7 @@ void bcache_journal(struct closure *cl)
 		spin_unlock(&c->journal.lock);
 
 		btree_flush_write(c);
-		continue_at(cl, bcache_journal, bcache_wq);
+		continue_at(cl, bch_journal, bcache_wq);
 	}
 
 	w = c->journal.cur;
@@ -645,7 +645,7 @@ void bcache_journal(struct closure *cl)
 	    b > c->journal.blocks_free) {
 		/* XXX: If we were inserting so many keys that they won't fit in
 		 * an _empty_ journal write, we'll deadlock. For now, handle
-		 * this in keylist_realloc() - but something to think about.
+		 * this in bch_keylist_realloc() - but something to think about.
 		 */
 		BUG_ON(!w->data->keys);
 
@@ -655,7 +655,7 @@ void bcache_journal(struct closure *cl)
 		closure_flush(&c->journal.io);
 
 		journal_try_write(c);
-		continue_at(cl, bcache_journal, bcache_wq);
+		continue_at(cl, bch_journal, bcache_wq);
 	}
 
 	memcpy(end(w->data), op->keys.list, n * sizeof(uint64_t));
@@ -671,17 +671,17 @@ void bcache_journal(struct closure *cl)
 
 	journal_try_write(c);
 out:
-	bcache_btree_insert_async(cl);
+	bch_btree_insert_async(cl);
 }
 
-void bcache_journal_free(struct cache_set *c)
+void bch_journal_free(struct cache_set *c)
 {
 	free_pages((unsigned long) c->journal.w[1].data, JSET_BITS);
 	free_pages((unsigned long) c->journal.w[0].data, JSET_BITS);
 	free_fifo(&c->journal.pin);
 }
 
-int bcache_journal_alloc(struct cache_set *c)
+int bch_journal_alloc(struct cache_set *c)
 {
 	struct journal *j = &c->journal;
 

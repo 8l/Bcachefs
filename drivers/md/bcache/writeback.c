@@ -57,12 +57,12 @@ static void refill_dirty(struct work_struct *work)
 
 	if (!atomic_read(&dc->has_dirty)) {
 		SET_BDEV_STATE(&dc->sb, BDEV_STATE_CLEAN);
-		write_bdev_super(dc, NULL);
+		bch_write_bdev_super(dc, NULL);
 		up_write(&dc->writeback_lock);
 		return;
 	}
 
-	bcache_refill_keybuf(dc->disk.c, buf, &end);
+	bch_refill_keybuf(dc->disk.c, buf, &end);
 
 	if (searched_from_start) {
 		/* Searched the entire btree - delay for awhile */
@@ -84,12 +84,12 @@ static void refill_dirty(struct work_struct *work)
 	read_dirty(dc);
 }
 
-void bcache_writeback_queue(struct cached_dev *d)
+void bch_writeback_queue(struct cached_dev *d)
 {
 	queue_delayed_work(dirty_wq, &d->refill_dirty, 0);
 }
 
-void bcache_writeback_add(struct cached_dev *d, unsigned sectors)
+void bch_writeback_add(struct cached_dev *d, unsigned sectors)
 {
 	atomic_long_add(sectors, &d->disk.sectors_dirty);
 
@@ -98,7 +98,7 @@ void bcache_writeback_add(struct cached_dev *d, unsigned sectors)
 		if (BDEV_STATE(&d->sb) != BDEV_STATE_DIRTY) {
 			SET_BDEV_STATE(&d->sb, BDEV_STATE_DIRTY);
 			/* XXX: should do this synchronously */
-			write_bdev_super(d, NULL);
+			bch_write_bdev_super(d, NULL);
 		}
 
 		atomic_inc(&d->count);
@@ -212,19 +212,19 @@ static void write_dirty_finish(struct closure *cl)
 	/* This is kind of a dumb way of signalling errors. */
 	if (KEY_DIRTY(&w->key)) {
 		struct btree_op op;
-		btree_op_init_stack(&op);
+		bch_btree_op_init_stack(&op);
 
 		op.type = BTREE_REPLACE;
 		bkey_copy(&op.replace, &w->key);
 
 		SET_KEY_DIRTY(&w->key, false);
-		keylist_add(&op.keys, &w->key);
+		bch_keylist_add(&op.keys, &w->key);
 
 		for (unsigned i = 0; i < KEY_PTRS(&w->key); i++)
 			atomic_inc(&PTR_BUCKET(dc->disk.c, &w->key, i)->pin);
 
 		pr_debug("clearing %s", pkey(&w->key));
-		bcache_btree_insert(&op, dc->disk.c);
+		bch_btree_insert(&op, dc->disk.c);
 		closure_sync(&op.cl);
 
 		atomic_long_inc(op.insert_collision
@@ -273,8 +273,8 @@ static void read_dirty_endio(struct bio *bio, int error)
 	struct keybuf_key *w = bio->bi_private;
 	struct dirty_io *io = w->private;
 
-	count_io_errors(PTR_CACHE(io->d->disk.c, &w->key, 0),
-			error, "reading dirty data from cache");
+	bch_count_io_errors(PTR_CACHE(io->d->disk.c, &w->key, 0),
+			    error, "reading dirty data from cache");
 
 	dirty_endio(bio, error);
 }
@@ -366,7 +366,7 @@ static void read_dirty_work(struct work_struct *work)
 	read_dirty(dc);
 }
 
-void bcache_writeback_init_cached_dev(struct cached_dev *d)
+void bch_writeback_init_cached_dev(struct cached_dev *d)
 {
 	INIT_DELAYED_WORK(&d->refill_dirty, refill_dirty);
 	INIT_DELAYED_WORK(&d->read_dirty, read_dirty_work);
@@ -389,13 +389,13 @@ void bcache_writeback_init_cached_dev(struct cached_dev *d)
 			      d->writeback_rate_update_seconds * HZ);
 }
 
-void bcache_writeback_exit(void)
+void bch_writeback_exit(void)
 {
 	if (dirty_wq)
 		destroy_workqueue(dirty_wq);
 }
 
-int __init bcache_writeback_init(void)
+int __init bch_writeback_init(void)
 {
 	dirty_wq = create_singlethread_workqueue("bcache_writeback");
 	if (!dirty_wq)

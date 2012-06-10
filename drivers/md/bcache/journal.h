@@ -98,16 +98,16 @@ struct closure;
 struct cache_set;
 struct btree_op;
 
-void bcache_journal(struct closure *);
-void bcache_journal_next(struct journal *);
-void bcache_journal_mark(struct cache_set *, struct list_head *);
-void bcache_journal_meta(struct cache_set *, struct closure *);
-int bcache_journal_read(struct cache_set *, struct list_head *,
+void bch_journal(struct closure *);
+void bch_journal_next(struct journal *);
+void bch_journal_mark(struct cache_set *, struct list_head *);
+void bch_journal_meta(struct cache_set *, struct closure *);
+int bch_journal_read(struct cache_set *, struct list_head *,
 			struct btree_op *);
-int bcache_journal_replay(struct cache_set *, struct list_head *,
+int bch_journal_replay(struct cache_set *, struct list_head *,
 			  struct btree_op *);
 
-void bcache_journal_free(struct cache_set *);
-int bcache_journal_alloc(struct cache_set *);
+void bch_journal_free(struct cache_set *);
+int bch_journal_alloc(struct cache_set *);
 
 #endif /* _BCACHE_JOURNAL_H */

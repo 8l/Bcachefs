@@ -69,7 +69,7 @@ static void do_discard(struct cache *);
 
 /* Bucket heap / gen */
 
-uint8_t inc_gen(struct cache *c, struct bucket *b)
+uint8_t bch_inc_gen(struct cache *c, struct bucket *b)
 {
 	uint8_t ret = ++b->gen;
 
@@ -84,7 +84,7 @@ uint8_t inc_gen(struct cache *c, struct bucket *b)
 	return ret;
 }
 
-void rescale_priorities(struct cache_set *c, int sectors)
+void bch_rescale_priorities(struct cache_set *c, int sectors)
 {
 	struct cache *ca;
 	struct bucket *b;
@@ -236,7 +236,7 @@ static void do_discard(struct cache *c)
 	}
 }
 
-void free_discards(struct cache *ca)
+void bch_free_discards(struct cache *ca)
 {
 	struct discard *d;
 
@@ -248,7 +248,7 @@ void free_discards(struct cache *ca)
 	}
 }
 
-int alloc_discards(struct cache *ca)
+int bch_alloc_discards(struct cache *ca)
 {
 	for (int i = 0; i < MAX_IN_FLIGHT_DISCARDS; i++) {
 		struct discard *d = kzalloc(sizeof(*d), GFP_KERNEL);
@@ -271,7 +271,7 @@ static inline bool can_inc_bucket_gen(struct bucket *b)
 		bucket_disk_gen(b) < BUCKET_DISK_GEN_MAX;
 }
 
-bool bucket_add_unused(struct cache *c, struct bucket *b)
+bool bch_bucket_add_unused(struct cache *c, struct bucket *b)
 {
 	BUG_ON(GC_MARK(b) || GC_SECTORS_USED(b));
 
@@ -299,7 +299,7 @@ static bool can_invalidate_bucket(struct cache *c, struct bucket *b)
 
 static void invalidate_one_bucket(struct cache *c, struct bucket *b)
 {
-	inc_gen(c, b);
+	bch_inc_gen(c, b);
 	b->prio = INITIAL_PRIO;
 	atomic_inc(&b->pin);
 	fifo_push(&c->free_inc, b - c->buckets);
@@ -332,7 +332,7 @@ static void invalidate_buckets_lru(struct cache *c)
 			continue;
 
 		if (!GC_SECTORS_USED(b)) {
-			if (!bucket_add_unused(c, b))
+			if (!bch_bucket_add_unused(c, b))
 				return;
 		} else {
 			if (!heap_full(&c->heap))
@@ -345,7 +345,7 @@ static void invalidate_buckets_lru(struct cache *c)
 	}
 
 	if (c->heap.used * 2 < c->heap.size)
-		bcache_queue_gc(c->set);
+		bch_queue_gc(c->set);
 
 	for (ssize_t i = c->heap.used / 2 - 1; i >= 0; --i)
 		heap_sift(&c->heap, i, bucket_min_cmp);
@@ -356,7 +356,7 @@ static void invalidate_buckets_lru(struct cache *c)
 			 * multiple times when it can't do anything
 			 */
 			c->invalidate_needs_gc = 1;
-			bcache_queue_gc(c->set);
+			bch_queue_gc(c->set);
 			return;
 		}
 
@@ -381,7 +381,7 @@ static void invalidate_buckets_fifo(struct cache *c)
 
 		if (++checked >= c->sb.nbuckets) {
 			c->invalidate_needs_gc = 1;
-			bcache_queue_gc(c->set);
+			bch_queue_gc(c->set);
 			return;
 		}
 	}
@@ -406,7 +406,7 @@ static void invalidate_buckets_random(struct cache *c)
 
 		if (++checked >= c->sb.nbuckets / 2) {
 			c->invalidate_needs_gc = 1;
-			bcache_queue_gc(c->set);
+			bch_queue_gc(c->set);
 			return;
 		}
 	}
@@ -434,7 +434,7 @@ static void invalidate_buckets(struct cache *c)
 	}
 }
 
-bool can_save_prios(struct cache *c)
+bool bch_can_save_prios(struct cache *c)
 {
 	return ((c->need_save_prio > 64 ||
 		 (c->set->gc_mark_valid &&
@@ -443,7 +443,7 @@ bool can_save_prios(struct cache *c)
 		!atomic_read(&c->set->prio_blocked));
 }
 
-void free_some_buckets(struct cache *c)
+void bch_free_some_buckets(struct cache *c)
 {
 	long r;
 	lockdep_assert_held(&c->set->bucket_lock);
@@ -486,14 +486,14 @@ void free_some_buckets(struct cache *c)
 	     c->need_save_prio > 64))
 		atomic_set(&c->prio_written, 0);
 
-	if (!can_save_prios(c))
+	if (!bch_can_save_prios(c))
 		return;
 
 	invalidate_buckets(c);
 
 	if (!fifo_empty(&c->free_inc) ||
 	    c->need_save_prio > 64)
-		prio_write(c);
+		bch_prio_write(c);
 }
 
 static long pop_bucket(struct cache *c, int mark,
@@ -510,7 +510,7 @@ static long pop_bucket(struct cache *c, int mark,
 		watermark = c->free.size / 2;
 
 again:
-	free_some_buckets(c);
+	bch_free_some_buckets(c);
 
 	if (fifo_used(&c->free) > watermark &&
 	    fifo_pop(&c->free, r)) {
@@ -551,7 +551,7 @@ again:
 
 		closure_wait_event(&c->set->bucket_wait, cl,
 				   atomic_read(&c->prio_written) > 0 ||
-				   can_save_prios(c));
+				   bch_can_save_prios(c));
 
 		if (closure_blocking(cl)) {
 			mutex_lock(&c->set->bucket_lock);
@@ -562,19 +562,19 @@ again:
 	return -1;
 }
 
-void unpop_bucket(struct cache_set *c, struct bkey *k)
+void bch_unpop_bucket(struct cache_set *c, struct bkey *k)
 {
 	for (unsigned i = 0; i < KEY_PTRS(k); i++) {
 		struct bucket *b = PTR_BUCKET(c, k, i);
 
 		SET_GC_MARK(b, 0);
 		SET_GC_SECTORS_USED(b, 0);
-		bucket_add_unused(PTR_CACHE(c, k, i), b);
+		bch_bucket_add_unused(PTR_CACHE(c, k, i), b);
 	}
 }
 
-int __pop_bucket_set(struct cache_set *c, int mark, uint16_t write_prio,
-		     struct bkey *k, int n, struct closure *cl)
+int __bch_pop_bucket_set(struct cache_set *c, int mark, uint16_t write_prio,
+			 struct bkey *k, int n, struct closure *cl)
 {
 	lockdep_assert_held(&c->bucket_lock);
 	BUG_ON(!n || n > c->caches_loaded || n > 8);
@@ -599,17 +599,17 @@ int __pop_bucket_set(struct cache_set *c, int mark, uint16_t write_prio,
 
 	return 0;
 err:
-	unpop_bucket(c, k);
+	bch_unpop_bucket(c, k);
 	__bkey_put(c, k);
 	return -1;
 }
 
-int pop_bucket_set(struct cache_set *c, int mark, uint16_t write_prio,
-		   struct bkey *k, int n, struct closure *cl)
+int bch_pop_bucket_set(struct cache_set *c, int mark, uint16_t write_prio,
+		       struct bkey *k, int n, struct closure *cl)
 {
 	int ret;
 	mutex_lock(&c->bucket_lock);
-	ret = __pop_bucket_set(c, mark, write_prio, k, n, cl);
+	ret = __bch_pop_bucket_set(c, mark, write_prio, k, n, cl);
 	mutex_unlock(&c->bucket_lock);
 	return ret;
 }

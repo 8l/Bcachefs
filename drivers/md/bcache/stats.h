@@ -38,21 +38,21 @@ struct cache_accounting {
 	struct cache_stats day;
 };
 
-void init_cache_accounting(struct cache_accounting *acc,
-			   struct closure *parent);
-
-int add_cache_accounting_kobjs(struct cache_accounting *acc,
-			       struct kobject *parent);
-
-void clear_stats(struct cache_accounting *acc);
-
-void destroy_cache_accounting(struct cache_accounting *acc);
-
 struct search;
-void mark_cache_accounting(struct search *s, bool hit, bool bypass);
 
-void mark_cache_readahead(struct search *s);
-void mark_cache_miss_collision(struct search *s);
-void mark_sectors_bypassed(struct search *s, int sectors);
+void bch_cache_accounting_init(struct cache_accounting *acc,
+			       struct closure *parent);
+
+int bch_cache_accounting_add_kobjs(struct cache_accounting *acc,
+				   struct kobject *parent);
+
+void bch_cache_accounting_clear(struct cache_accounting *acc);
+
+void bch_cache_accounting_destroy(struct cache_accounting *acc);
+
+void bch_mark_cache_accounting(struct search *s, bool hit, bool bypass);
+void bch_mark_cache_readahead(struct search *s);
+void bch_mark_cache_miss_collision(struct search *s);
+void bch_mark_sectors_bypassed(struct search *s, int sectors);
 
 #endif /* _BCACHE_STATS_H_ */

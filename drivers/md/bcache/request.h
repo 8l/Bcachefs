@@ -27,19 +27,20 @@ struct search {
 	struct btree_op		op;
 };
 
-void cache_read_endio(struct bio *, int);
-int bcache_get_congested(struct cache_set *);
-void bcache_btree_insert_async(struct closure *);
+void bch_cache_read_endio(struct bio *, int);
+int bch_get_congested(struct cache_set *);
+void bch_btree_insert_async(struct closure *);
+void bch_cache_read_endio(struct bio *, int);
 
-void bcache_open_buckets_free(struct cache_set *);
-int bcache_open_buckets_alloc(struct cache_set *);
+void bch_open_buckets_free(struct cache_set *);
+int bch_open_buckets_alloc(struct cache_set *);
 
-void cached_dev_request_init(struct cached_dev *d);
-void flash_dev_request_init(struct bcache_device *d);
+void bch_cached_dev_request_init(struct cached_dev *d);
+void bch_flash_dev_request_init(struct bcache_device *d);
 
-extern struct kmem_cache *search_cache, *passthrough_cache;
+extern struct kmem_cache *bch_search_cache, *bch_passthrough_cache;
 
-struct bcache_cgroup {
+struct bch_cgroup {
 #ifdef CONFIG_CGROUP_BCACHE
 	struct cgroup_subsys_state	css;
 #endif

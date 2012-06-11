@@ -883,10 +883,13 @@ static void cached_dev_detach_finish(struct work_struct *w)
 	struct closure cl;
 	closure_init_stack(&cl);
 
-	mutex_lock(&register_lock);
-
 	BUG_ON(!atomic_read(&dc->disk.detaching));
 	BUG_ON(atomic_read(&dc->count));
+
+	sysfs_remove_link(&dc->disk.kobj, dc->disk.name);
+	sysfs_remove_link(&dc->disk.kobj, "cache");
+
+	mutex_lock(&register_lock);
 
 	memset(&dc->sb.set_uuid, 0, 16);
 	SET_BDEV_STATE(&dc->sb, BDEV_STATE_NONE);
@@ -1042,8 +1045,6 @@ static void cached_dev_flush(struct closure *cl)
 	struct bcache_device *d = &dc->disk;
 
 	bch_cache_accounting_destroy(&dc->accounting);
-	sysfs_remove_link(&d->kobj, d->name);
-	sysfs_remove_link(&d->kobj, "cache");
 	kobject_del(&d->kobj);
 
 	continue_at(cl, cached_dev_free, system_wq);
@@ -1340,7 +1341,7 @@ static void __cache_set_unregister(struct closure *cl)
 			cached_dev_detach(dc);
 
 	for (size_t i = 0; i < c->nr_uuids; i++)
-		if (c->devices[i])
+		if (c->devices[i] && UUID_FLASH_ONLY(&c->uuids[i]))
 			bcache_device_stop(c->devices[i]);
 
 	mutex_unlock(&register_lock);

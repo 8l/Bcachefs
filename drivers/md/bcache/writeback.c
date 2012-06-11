@@ -12,6 +12,84 @@ struct dirty_io {
 	struct bio		bio;
 };
 
+/* Rate limiting */
+
+static void __update_writeback_rate(struct cached_dev *dc)
+{
+	struct cache_set *c = dc->disk.c;
+	uint64_t cache_sectors = c->nbuckets * c->sb.bucket_size;
+	uint64_t cache_dirty_target =
+		div_u64(cache_sectors * dc->writeback_percent, 100);
+
+	int64_t target = div64_u64(cache_dirty_target * bdev_sectors(dc->bdev),
+				   c->cached_dev_sectors);
+
+	/* PD controller */
+
+	int change = 0;
+	int64_t error;
+	int64_t dirty = atomic_long_read(&dc->disk.sectors_dirty);
+	int64_t derivative = dirty - dc->disk.sectors_dirty_last;
+
+	dc->disk.sectors_dirty_last = dirty;
+
+	derivative *= dc->writeback_rate_d_term;
+	derivative = clamp(derivative, -dirty, dirty);
+
+	derivative = ewma_add(dc->disk.sectors_dirty_derivative, derivative,
+			      dc->writeback_rate_d_smooth, 0);
+
+	/* Avoid divide by zero */
+	if (!target)
+		goto out;
+
+	error = div64_s64((dirty + derivative - target) << 8, target);
+
+	change = div_s64((dc->writeback_rate.rate * error) >> 8,
+			 dc->writeback_rate_p_term_inverse);
+
+	/* Don't increase writeback rate if the device isn't keeping up */
+	if (change > 0 &&
+	    time_after64(local_clock(),
+			 dc->writeback_rate.next + 10 * NSEC_PER_MSEC))
+		change = 0;
+
+	dc->writeback_rate.rate =
+		clamp_t(int64_t, dc->writeback_rate.rate + change,
+			1, NSEC_PER_MSEC);
+out:
+	dc->writeback_rate_derivative = derivative;
+	dc->writeback_rate_change = change;
+	dc->writeback_rate_target = target;
+
+	schedule_delayed_work(&dc->writeback_rate_update,
+			      dc->writeback_rate_update_seconds * HZ);
+}
+
+static void update_writeback_rate(struct work_struct *work)
+{
+	struct cached_dev *dc = container_of(to_delayed_work(work),
+					     struct cached_dev,
+					     writeback_rate_update);
+
+	down_read(&dc->writeback_lock);
+
+	if (atomic_read(&dc->has_dirty) &&
+	    dc->writeback_percent)
+		__update_writeback_rate(dc);
+
+	up_read(&dc->writeback_lock);
+}
+
+static unsigned writeback_delay(struct cached_dev *dc, unsigned sectors)
+{
+	if (atomic_read(&dc->disk.detaching) ||
+	    !dc->writeback_percent)
+		return 0;
+
+	return next_delay(&dc->writeback_rate, sectors * 10000000ULL);
+}
+
 /* Background writeback */
 
 static bool dirty_pred(struct keybuf *buf, struct bkey *k)
@@ -112,82 +190,6 @@ void bch_writeback_add(struct cached_dev *dc, unsigned sectors)
 			schedule_delayed_work(&dc->writeback_rate_update,
 				      dc->writeback_rate_update_seconds * HZ);
 	}
-}
-
-static void __update_writeback_rate(struct cached_dev *dc)
-{
-	struct cache_set *c = dc->disk.c;
-	uint64_t cache_sectors = c->nbuckets * c->sb.bucket_size;
-	uint64_t cache_dirty_target =
-		div_u64(cache_sectors * dc->writeback_percent, 100);
-
-	int64_t target = div64_u64(cache_dirty_target * bdev_sectors(dc->bdev),
-				   c->cached_dev_sectors);
-
-	/* PD controller */
-
-	int change = 0;
-	int64_t error;
-	int64_t dirty = atomic_long_read(&dc->disk.sectors_dirty);
-	int64_t derivative = dirty - dc->disk.sectors_dirty_last;
-
-	dc->disk.sectors_dirty_last = dirty;
-
-	derivative *= dc->writeback_rate_d_term;
-	derivative = clamp(derivative, -dirty, dirty);
-
-	derivative = ewma_add(dc->disk.sectors_dirty_derivative, derivative,
-			      dc->writeback_rate_d_smooth, 0);
-
-	/* Avoid divide by zero */
-	if (!target)
-		goto out;
-
-	error = div64_s64((dirty + derivative - target) << 8, target);
-
-	change = div_s64((dc->writeback_rate.rate * error) >> 8,
-			 dc->writeback_rate_p_term_inverse);
-
-	/* Don't increase writeback rate if the device isn't keeping up */
-	if (change > 0 &&
-	    time_after64(local_clock(),
-			 dc->writeback_rate.next + 10 * NSEC_PER_MSEC))
-		change = 0;
-
-	dc->writeback_rate.rate =
-		clamp_t(int64_t, dc->writeback_rate.rate + change,
-			1, NSEC_PER_MSEC);
-out:
-	dc->writeback_rate_derivative = derivative;
-	dc->writeback_rate_change = change;
-	dc->writeback_rate_target = target;
-
-	schedule_delayed_work(&dc->writeback_rate_update,
-			      dc->writeback_rate_update_seconds * HZ);
-}
-
-static void update_writeback_rate(struct work_struct *work)
-{
-	struct cached_dev *dc = container_of(to_delayed_work(work),
-					     struct cached_dev,
-					     writeback_rate_update);
-
-	down_read(&dc->writeback_lock);
-
-	if (atomic_read(&dc->has_dirty) &&
-	    dc->writeback_percent)
-		__update_writeback_rate(dc);
-
-	up_read(&dc->writeback_lock);
-}
-
-static unsigned writeback_delay(struct cached_dev *dc, unsigned sectors)
-{
-	if (atomic_read(&dc->disk.detaching) ||
-	    !dc->writeback_percent)
-		return 0;
-
-	return next_delay(&dc->writeback_rate, sectors * 10000000ULL);
 }
 
 /* Background writeback - IO loop */

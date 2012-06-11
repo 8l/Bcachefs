@@ -1646,7 +1646,7 @@ static bool fix_overlapping_extents(struct btree *b,
 	while (1) {
 		struct bkey *k = bch_btree_iter_next(iter);
 		if (!k ||
-		    bkey_cmp(insert, &START_KEY(k)) <= 0)
+		    bkey_cmp(&START_KEY(k), insert) >= 0)
 			break;
 
 		if (bkey_cmp(k, &START_KEY(insert)) <= 0)
@@ -1736,15 +1736,11 @@ static bool fix_overlapping_extents(struct btree *b,
 		}
 
 		if (bkey_cmp(insert, k) < 0) {
-			if (bkey_cmp(insert, &START_KEY(k)) > 0)
-				subtract_dirty(k, KEY_OFFSET(insert) -
-					       KEY_START(k));
+			subtract_dirty(k, KEY_OFFSET(insert) - KEY_START(k));
 
 			bch_cut_front(insert, k);
 		} else {
-			if (bkey_cmp(k, &START_KEY(insert)) > 0)
-				subtract_dirty(k, KEY_OFFSET(k) -
-					       KEY_START(insert));
+			subtract_dirty(k, KEY_OFFSET(k) - KEY_START(insert));
 
 			if (bkey_written(b, k) &&
 			    bkey_cmp(&START_KEY(insert), &START_KEY(k)) <= 0)

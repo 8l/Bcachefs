@@ -1189,7 +1189,10 @@ void bch_btree_sort_lazy(struct btree *b)
 /* Sysfs stuff */
 
 struct bset_stats {
-	size_t writes, sets, keys, trees, floats, failed, tree_space;
+	size_t nodes;
+	size_t sets_written, sets_unwritten;
+	size_t bytes_written, bytes_unwritten;
+	size_t floats, failed;
 };
 
 static int bch_btree_bset_stats(struct btree *b, struct btree_op *op,
@@ -1197,19 +1200,25 @@ static int bch_btree_bset_stats(struct btree *b, struct btree_op *op,
 {
 	struct bkey *k;
 
-	if (btree_node_dirty(b))
-		stats->writes++;
-	stats->sets		+= b->nsets + 1;
-	stats->tree_space	+= bset_tree_space(b);
+	stats->nodes++;
 
-	for (int i = 0; i < MAX_BSETS && b->sets[i].size; i++) {
-		stats->trees++;
-		stats->keys	+= b->sets[i].data->keys * sizeof(uint64_t);
-		stats->floats	+= b->sets[i].size - 1;
+	for (int i = 0; i <= b->nsets; i++) {
+		struct bset_tree *t = &b->sets[i];
+		size_t bytes = t->data->keys * sizeof(uint64_t);
 
-		for (size_t j = 1; j < b->sets[i].size; j++)
-			if (b->sets[i].tree[j].exponent == 127)
-				stats->failed++;
+		if (bset_written(b, t)) {
+			stats->sets_written++;
+			stats->bytes_written += bytes;
+
+			stats->floats += t->size - 1;
+
+			for (size_t j = 1; j < t->size; j++)
+				if (t->tree[j].exponent == 127)
+					stats->failed++;
+		} else {
+			stats->sets_unwritten++;
+			stats->bytes_unwritten += bytes;
+		}
 	}
 
 	if (b->level)
@@ -1226,21 +1235,25 @@ int bch_bset_print_stats(struct cache_set *c, char *buf)
 {
 	struct btree_op op;
 	struct bset_stats t;
+	int ret;
 
 	bch_btree_op_init_stack(&op);
 	memset(&t, 0, sizeof(struct bset_stats));
 
-	btree_root(bset_stats, c, &op, &t);
+	ret = btree_root(bset_stats, c, &op, &t);
+	if (ret)
+		return ret;
 
 	return snprintf(buf, PAGE_SIZE,
-			"sets:		%zu\n"
-			"write sets:	%zu\n"
-			"key bytes:	%zu\n"
-			"trees:		%zu\n"
-			"tree space:	%zu\n"
-			"floats:		%zu\n"
-			"bytes/float:	%zu\n"
-			"failed:		%zu\n",
-			t.sets, t.writes, t.keys, t.trees, t.tree_space,
-			t.floats, DIV_SAFE(t.keys, t.floats), t.failed);
+			"btree nodes:		%zu\n"
+			"written sets:		%zu\n"
+			"unwritten sets:		%zu\n"
+			"written key bytes:	%zu\n"
+			"unwritten key bytes:	%zu\n"
+			"floats:			%zu\n"
+			"failed:			%zu\n",
+			t.nodes,
+			t.sets_written, t.sets_unwritten,
+			t.bytes_written, t.bytes_unwritten,
+			t.floats, t.failed);
 }

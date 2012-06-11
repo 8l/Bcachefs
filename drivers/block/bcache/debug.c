@@ -461,9 +461,9 @@ static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
 
 			k->key = get_random_int();
 
-			op.insert_type = k->key & 1
-				? INSERT_WRITE
-				: INSERT_REPLACE;
+			op.type = k->key & 1
+				? BTREE_INSERT
+				: BTREE_REPLACE;
 			k->key >>= 1;
 
 			k->header = KEY_HEADER(bucket_remainder(c, k->key), 0);

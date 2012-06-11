@@ -154,9 +154,9 @@ struct btree_op {
 
 	/* Btree insertion type */
 	enum {
-		INSERT_WRITE,
-		INSERT_REPLACE,
-	} insert_type:8;
+		BTREE_INSERT,
+		BTREE_REPLACE
+	} type:8;
 
 	unsigned		lookup_done:1;
 	unsigned		insert_collision:1;
@@ -247,13 +247,6 @@ static inline bool should_split(struct btree *b)
 		(i->seq == b->sets[0].data->seq &&
 		 b->written + __set_blocks(i, i->keys + 15, b->c)
 		 > btree_blocks(b));
-}
-
-extern const char * const bcache_insert_types[];
-
-static inline const char *insert_type(struct btree_op *op)
-{
-	return bcache_insert_types[op->insert_type];
 }
 
 void btree_read_done(struct closure *);

@@ -325,7 +325,7 @@ static void write_dirty_finish(struct closure *cl)
 		struct btree_op op;
 		btree_op_init_stack(&op);
 
-		op.insert_type = INSERT_REPLACE;
+		op.type = BTREE_REPLACE;
 		bkey_copy(&op.replace, &w->key);
 		SET_KEY_DIRTY(&op.replace, true);
 

@@ -28,6 +28,12 @@ struct bio_passthrough {
 struct kmem_cache *passthrough_cache;
 struct kmem_cache *search_cache;
 
+static const char *search_type(struct search *s)
+{
+	return s->writeback ? "writeback"
+		: s->write ? "write" : "read";
+}
+
 /* Cgroup interface */
 
 #ifdef CONFIG_CGROUP_BCACHE
@@ -490,7 +496,7 @@ err:
 	bio_put(bio);
 
 	pr_debug("error for %s, %i/%i sectors done, bi_sector %llu",
-		 insert_type(op), sectors - bio_sectors(bio), sectors,
+		 search_type(s), sectors - bio_sectors(bio), sectors,
 		 (uint64_t) bio->bi_sector);
 
 	if (s->writeback) {
@@ -800,7 +806,7 @@ static void request_read_done(struct closure *cl)
 	__bio_complete(s);
 
 	if (s->cache_bio && !atomic_read(&s->op.d->c->closing)) {
-		s->op.insert_type = INSERT_REPLACE;
+		s->op.type = BTREE_REPLACE;
 		closure_init(&s->op.cl, &s->cl);
 		bio_insert(&s->op.cl);
 	}
@@ -936,7 +942,6 @@ static void request_write(struct cached_dev *d, struct search *s)
 	struct closure *cl = &s->cl;
 	struct bio *bio = &s->bio.bio;
 
-	s->op.insert_type = INSERT_WRITE;
 	down_read_non_owner(&d->writeback_lock);
 
 	if (bcache_in_writeback(d, bio->bi_sector, bio_sectors(bio))) {
@@ -1338,8 +1343,6 @@ static void flash_dev_write(struct search *s)
 {
 	struct closure *cl = &s->cl;
 	struct bio *bio = &s->bio.bio;
-
-	s->op.insert_type = INSERT_WRITE;
 
 	if (bio->bi_rw & (1 << BIO_RW_DISCARD)) {
 		s->cache_bio	= s->orig_bio;

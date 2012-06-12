@@ -619,94 +619,6 @@ static sector_t raid10_find_virt(struct r10conf *conf, sector_t sector, int dev)
 	return (vchunk << geo->chunk_shift) + offset;
 }
 
-/**
- *	raid10_mergeable_bvec -- tell bio layer if a two requests can be merged
- *	@q: request queue
- *	@bvm: properties of new bio
- *	@biovec: the request that could be merged to it.
- *
- *	Return amount of bytes we can accept at this offset
- *	This requires checking for end-of-chunk if near_copies != raid_disks,
- *	and for subordinate merge_bvec_fns if merge_check_needed.
- */
-static int raid10_mergeable_bvec(struct request_queue *q,
-				 struct bvec_merge_data *bvm,
-				 struct bio_vec *biovec)
-{
-	struct mddev *mddev = q->queuedata;
-	struct r10conf *conf = mddev->private;
-	sector_t sector = bvm->bi_sector + get_start_sect(bvm->bi_bdev);
-	int max;
-	unsigned int chunk_sectors;
-	unsigned int bio_sectors = bvm->bi_size >> 9;
-	struct geom *geo = &conf->geo;
-
-	chunk_sectors = (conf->geo.chunk_mask & conf->prev.chunk_mask) + 1;
-	if (conf->reshape_progress != MaxSector &&
-	    ((sector >= conf->reshape_progress) !=
-	     conf->mddev->reshape_backwards))
-		geo = &conf->prev;
-
-	if (geo->near_copies < geo->raid_disks) {
-		max = (chunk_sectors - ((sector & (chunk_sectors - 1))
-					+ bio_sectors)) << 9;
-		if (max < 0)
-			/* bio_add cannot handle a negative return */
-			max = 0;
-		if (max <= biovec->bv_len && bio_sectors == 0)
-			return biovec->bv_len;
-	} else
-		max = biovec->bv_len;
-
-	if (mddev->merge_check_needed) {
-		struct {
-			struct r10bio r10_bio;
-			struct r10dev devs[conf->copies];
-		} on_stack;
-		struct r10bio *r10_bio = &on_stack.r10_bio;
-		int s;
-		if (conf->reshape_progress != MaxSector) {
-			/* Cannot give any guidance during reshape */
-			if (max <= biovec->bv_len && bio_sectors == 0)
-				return biovec->bv_len;
-			return 0;
-		}
-		r10_bio->sector = sector;
-		raid10_find_phys(conf, r10_bio);
-		rcu_read_lock();
-		for (s = 0; s < conf->copies; s++) {
-			int disk = r10_bio->devs[s].devnum;
-			struct md_rdev *rdev = rcu_dereference(
-				conf->mirrors[disk].rdev);
-			if (rdev && !test_bit(Faulty, &rdev->flags)) {
-				struct request_queue *q =
-					bdev_get_queue(rdev->bdev);
-				if (q->merge_bvec_fn) {
-					bvm->bi_sector = r10_bio->devs[s].addr
-						+ rdev->data_offset;
-					bvm->bi_bdev = rdev->bdev;
-					max = min(max, q->merge_bvec_fn(
-							  q, bvm, biovec));
-				}
-			}
-			rdev = rcu_dereference(conf->mirrors[disk].replacement);
-			if (rdev && !test_bit(Faulty, &rdev->flags)) {
-				struct request_queue *q =
-					bdev_get_queue(rdev->bdev);
-				if (q->merge_bvec_fn) {
-					bvm->bi_sector = r10_bio->devs[s].addr
-						+ rdev->data_offset;
-					bvm->bi_bdev = rdev->bdev;
-					max = min(max, q->merge_bvec_fn(
-							  q, bvm, biovec));
-				}
-			}
-		}
-		rcu_read_unlock();
-	}
-	return max;
-}
-
 /*
  * This routine returns the disk from which the requested read should
  * be done. There is a per-array 'next expected sequential IO' sector
@@ -1072,9 +984,7 @@ static void make_request(struct mddev *mddev, struct bio * bio)
 		return;
 	}
 
-	/* If this request crosses a chunk boundary, we need to
-	 * split it.  This will only happen for 1 PAGE (or less) requests.
-	 */
+	/* If this request crosses a chunk boundary, we need to split it. */
 	if (unlikely((bio->bi_sector & chunk_mask) + (bio->bi_size >> 9)
 		     > chunk_sects
 		     && (conf->geo.near_copies < conf->geo.raid_disks
@@ -3603,7 +3513,6 @@ static int run(struct mddev *mddev)
 		stripe /= conf->geo.near_copies;
 		if (mddev->queue->backing_dev_info.ra_pages < 2 * stripe)
 			mddev->queue->backing_dev_info.ra_pages = 2 * stripe;
-		blk_queue_merge_bvec(mddev->queue, raid10_mergeable_bvec);
 	}
 
 

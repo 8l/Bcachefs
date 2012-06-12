@@ -41,73 +41,6 @@ const char *bch_ptr_status(struct cache_set *c, const struct bkey *k)
 	return "";
 }
 
-static bool skipped_backwards(struct btree *b, struct bkey *k)
-{
-	return bkey_cmp(k, (!b->level)
-			? &START_KEY(bkey_next(k))
-			: bkey_next(k)) > 0;
-}
-
-static void dump_bset(struct btree *b, struct bset *i)
-{
-	for (struct bkey *k = i->start; k < end(i); k = bkey_next(k)) {
-		printk(KERN_ERR "block %zu key %zu/%i: %s", index(i, b),
-		       (uint64_t *) k - i->d, i->keys, pkey(k));
-
-		for (unsigned j = 0; j < KEY_PTRS(k); j++) {
-			size_t n = PTR_BUCKET_NR(b->c, k, j);
-			printk(" bucket %zu", n);
-
-			if (n >= b->c->sb.first_bucket && n < b->c->sb.nbuckets)
-				printk(" prio %i",
-				       PTR_BUCKET(b->c, k, j)->prio);
-		}
-
-		printk(" %s\n", bch_ptr_status(b->c, k));
-
-		if (bkey_next(k) < end(i) &&
-		    skipped_backwards(b, k))
-			printk(KERN_ERR "Key skipped backwards\n");
-	}
-}
-
-static void vdump_bucket_and_panic(struct btree *b, const char *m, va_list args)
-{
-	struct bset *i;
-
-	console_lock();
-
-	for_each_sorted_set(b, i)
-		dump_bset(b, i);
-
-	vprintk(m, args);
-
-	console_unlock();
-
-	panic("at %s\n", pbtree(b));
-}
-
-static void dump_bucket_and_panic(struct btree *b, const char *m, ...)
-{
-	va_list args;
-	va_start(args, m);
-	vdump_bucket_and_panic(b, m, args);
-	va_end(args);
-}
-
-static void __maybe_unused
-dump_key_and_panic(struct btree *b, struct bset *i, int j)
-{
-	long bucket = PTR_BUCKET_NR(b->c, node(i, j), 0);
-	long r = PTR_OFFSET(node(i, j), 0) & ~(~0 << b->c->bucket_bits);
-
-	printk(KERN_ERR "level %i block %zu key %i/%i: %s "
-	       "bucket %llu offset %li into bucket\n",
-	       b->level, index(i, b), j, i->keys, pkey(node(i, j)),
-	       (uint64_t) bucket, r);
-	dump_bucket_and_panic(b, "");
-}
-
 struct keyprint_hack bch_pkey(const struct bkey *k)
 {
 	unsigned i = 0;
@@ -272,7 +205,55 @@ unsigned bch_count_data(struct btree *b)
 	return ret;
 }
 
-void bch_check_key_order_msg(struct btree *b, struct bset *i, const char *m, ...)
+static bool skipped_backwards(struct btree *b, struct bkey *k)
+{
+	return bkey_cmp(k, (!b->level)
+			? &START_KEY(bkey_next(k))
+			: bkey_next(k)) > 0;
+}
+
+static void dump_bset(struct btree *b, struct bset *i)
+{
+	for (struct bkey *k = i->start; k < end(i); k = bkey_next(k)) {
+		printk(KERN_ERR "block %zu key %zi/%u: %s", index(i, b),
+		       (uint64_t *) k - i->d, i->keys, pkey(k));
+
+		for (unsigned j = 0; j < KEY_PTRS(k); j++) {
+			size_t n = PTR_BUCKET_NR(b->c, k, j);
+			printk(" bucket %zu", n);
+
+			if (n >= b->c->sb.first_bucket && n < b->c->sb.nbuckets)
+				printk(" prio %i",
+				       PTR_BUCKET(b->c, k, j)->prio);
+		}
+
+		printk(" %s\n", bch_ptr_status(b->c, k));
+
+		if (bkey_next(k) < end(i) &&
+		    skipped_backwards(b, k))
+			printk(KERN_ERR "Key skipped backwards\n");
+	}
+}
+
+static void vdump_bucket_and_panic(struct btree *b, const char *fmt,
+				   va_list args)
+{
+	struct bset *i;
+
+	console_lock();
+
+	for_each_sorted_set(b, i)
+		dump_bset(b, i);
+
+	vprintk(fmt, args);
+
+	console_unlock();
+
+	panic("at %s\n", pbtree(b));
+}
+
+void bch_check_key_order_msg(struct btree *b, struct bset *i,
+			     const char *fmt, ...)
 {
 	if (!i->keys)
 		return;
@@ -280,14 +261,14 @@ void bch_check_key_order_msg(struct btree *b, struct bset *i, const char *m, ...
 	for (struct bkey *k = i->start; bkey_next(k) < end(i); k = bkey_next(k))
 		if (skipped_backwards(b, k)) {
 			va_list args;
-			va_start(args, m);
+			va_start(args, fmt);
 
-			vdump_bucket_and_panic(b, m, args);
+			vdump_bucket_and_panic(b, fmt, args);
 			va_end(args);
 		}
 }
 
-void bch_check_keys(struct btree *b, const char *m, ...)
+void bch_check_keys(struct btree *b, const char *fmt, ...)
 {
 	va_list args;
 	struct bkey *k, *p;
@@ -319,8 +300,8 @@ void bch_check_keys(struct btree *b, const char *m, ...)
 	}
 	return;
 bug:
-	va_start(args, m);
-	vdump_bucket_and_panic(b, m, args);
+	va_start(args, fmt);
+	vdump_bucket_and_panic(b, fmt, args);
 	va_end(args);
 }
 
@@ -329,7 +310,7 @@ bug:
 #ifdef CONFIG_DEBUG_FS
 
 static int bch_btree_dump(struct btree *b, struct btree_op *op, struct seq_file *f,
-		      const char *tabs, uint64_t *prev, uint64_t *sectors)
+			  const char *tabs, uint64_t *prev, uint64_t *sectors)
 {
 	struct bkey *k;
 	char buf[30];
@@ -408,7 +389,7 @@ void bch_debug_init_cache_set(struct cache_set *c)
 
 #ifdef CONFIG_BCACHE_DEBUG
 static ssize_t btree_fuzz(struct kobject *k, struct kobj_attribute *a,
-		      const char *buffer, size_t size)
+			  const char *buffer, size_t size)
 {
 	void dump(struct btree *b)
 	{

@@ -1238,7 +1238,7 @@ static int flash_dev_create(struct cache_set *c, uint64_t size)
 /* Cache set */
 
 __printf(2, 3)
-bool bch_cache_set_error(struct cache_set *c, const char *m, ...)
+bool bch_cache_set_error(struct cache_set *c, const char *fmt, ...)
 {
 	va_list args;
 
@@ -1251,8 +1251,8 @@ bool bch_cache_set_error(struct cache_set *c, const char *m, ...)
 
 	printk(KERN_ERR "bcache: error on %pU: ", c->sb.set_uuid);
 
-	va_start(args, m);
-	vprintk(m, args);
+	va_start(args, fmt);
+	vprintk(fmt, args);
 	va_end(args);
 
 	printk(", disabling caching\n");

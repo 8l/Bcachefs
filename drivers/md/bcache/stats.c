@@ -219,7 +219,7 @@ void bch_mark_cache_accounting(struct search *s, bool hit, bool bypass)
 	mark_cache_stats(&dc->accounting.collector, hit, bypass);
 	mark_cache_stats(&s->op.c->accounting.collector, hit, bypass);
 #ifdef CONFIG_CGROUP_BCACHE
-	mark_cache_stats(&(bio_to_cgroup(s->orig_bio)->stats), hit, bypass);
+	mark_cache_stats(&(bch_bio_to_cgroup(s->orig_bio)->stats), hit, bypass);
 #endif
 }
 

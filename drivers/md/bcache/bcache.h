@@ -928,11 +928,6 @@ struct bio *bch_bbio_alloc(struct cache_set *);
 void __bch_submit_bbio(struct bio *, struct cache_set *);
 void bch_submit_bbio(struct bio *, struct cache_set *, struct bkey *, unsigned);
 
-struct bch_cgroup;
-struct cgroup;
-struct bch_cgroup *cgroup_to_bcache(struct cgroup *cgroup);
-struct bch_cgroup *bio_to_cgroup(struct bio *bio);
-
 uint8_t bch_inc_gen(struct cache *, struct bucket *);
 void bch_rescale_priorities(struct cache_set *, int);
 bool bch_bucket_add_unused(struct cache *, struct bucket *);

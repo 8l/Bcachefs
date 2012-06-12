@@ -28,7 +28,7 @@ static const char invalid_uuid[] = {
 };
 
 /* Default is -1; we skip past it for struct cached_dev's cache mode */
-const char * const bcache_cache_modes[] = {
+const char * const bch_cache_modes[] = {
 	"default",
 	"writethrough",
 	"writeback",

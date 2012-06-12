@@ -26,7 +26,7 @@ static void check_should_skip(struct cached_dev *, struct search *);
 #ifdef CONFIG_CGROUP_BCACHE
 static struct bch_cgroup bcache_default_cgroup = { .cache_mode = -1 };
 
-struct bch_cgroup *cgroup_to_bcache(struct cgroup *cgroup)
+static struct bch_cgroup *cgroup_to_bcache(struct cgroup *cgroup)
 {
 	struct cgroup_subsys_state *css;
 	return cgroup &&
@@ -35,9 +35,15 @@ struct bch_cgroup *cgroup_to_bcache(struct cgroup *cgroup)
 		: &bcache_default_cgroup;
 }
 
-struct bch_cgroup *bio_to_cgroup(struct bio *bio)
+struct bch_cgroup *bch_bio_to_cgroup(struct bio *bio)
 {
-	return cgroup_to_bcache(get_bio_cgroup(bio));
+	struct cgroup_subsys_state *css = bio->bi_css
+		? cgroup_subsys_state(bio->bi_css->cgroup, bcache_subsys_id)
+		: task_subsys_state(current, bcache_subsys_id);
+
+	return css
+		? container_of(css, struct bch_cgroup, css)
+		: &bcache_default_cgroup;
 }
 
 static ssize_t cache_mode_read(struct cgroup *cgrp, struct cftype *cft,
@@ -102,7 +108,7 @@ static u64 bch_cache_bypass_misses_read(struct cgroup *cgrp,
 	return atomic_read(&bcachecg->stats.cache_bypass_misses);
 }
 
-struct cftype bch_files[] = {
+static struct cftype bch_files[] = {
 	{
 		.name		= "cache_mode",
 		.read		= cache_mode_read,
@@ -129,6 +135,7 @@ struct cftype bch_files[] = {
 		.name		= "cache_bypass_misses",
 		.read_u64	= bch_cache_bypass_misses_read,
 	},
+	{ }	/* terminate */
 };
 
 static void init_bch_cgroup(struct bch_cgroup *cg)
@@ -154,17 +161,9 @@ static void bcachecg_destroy(struct cgroup *cgroup)
 	kfree(cg);
 }
 
-static int bcachecg_populate(struct cgroup_subsys *subsys,
-			     struct cgroup *cgroup)
-{
-	return cgroup_add_files(cgroup, subsys, bch_files,
-				ARRAY_SIZE(bch_files));
-}
-
 struct cgroup_subsys bcache_subsys = {
 	.create		= bcachecg_create,
 	.destroy	= bcachecg_destroy,
-	.populate	= bcachecg_populate,
 	.subsys_id	= bcache_subsys_id,
 	.name		= "bcache",
 	.module		= THIS_MODULE,
@@ -175,7 +174,7 @@ EXPORT_SYMBOL_GPL(bcache_subsys);
 static unsigned cache_mode(struct cached_dev *dc, struct bio *bio)
 {
 #ifdef CONFIG_CGROUP_BCACHE
-	int r = bio_to_cgroup(bio)->cache_mode;
+	int r = bch_bio_to_cgroup(bio)->cache_mode;
 	if (r >= 0)
 		return r;
 #endif
@@ -185,7 +184,7 @@ static unsigned cache_mode(struct cached_dev *dc, struct bio *bio)
 static bool verify(struct cached_dev *dc, struct bio *bio)
 {
 #ifdef CONFIG_CGROUP_BCACHE
-	if (bio_to_cgroup(bio)->verify)
+	if (bch_bio_to_cgroup(bio)->verify)
 		return true;
 #endif
 	return dc->verify;
@@ -1341,6 +1340,8 @@ int __init bch_request_init(void)
 #ifdef CONFIG_CGROUP_BCACHE
 	cgroup_load_subsys(&bcache_subsys);
 	init_bch_cgroup(&bcache_default_cgroup);
+
+	cgroup_add_cftypes(&bcache_subsys, bch_files);
 #endif
 	return 0;
 }

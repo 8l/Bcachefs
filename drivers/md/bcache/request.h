@@ -46,7 +46,7 @@ struct bch_cgroup {
 	struct cgroup_subsys_state	css;
 #endif
 	/*
-	 * We subtract one from the index into bcache_cache_modes[], so that
+	 * We subtract one from the index into bch_cache_modes[], so that
 	 * default == -1; this makes it so the rest match up with d->cache_mode,
 	 * and we use d->cache_mode if cgrp->cache_mode < 0
 	 */
@@ -54,5 +54,7 @@ struct bch_cgroup {
 	bool				verify;
 	struct cache_stat_collector	stats;
 };
+
+struct bch_cgroup *bch_bio_to_cgroup(struct bio *bio);
 
 #endif /* _BCACHE_REQUEST_H_ */

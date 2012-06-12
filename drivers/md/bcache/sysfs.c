@@ -88,7 +88,7 @@ SHOW(__cached_dev)
 
 	if (attr == &sysfs_cache_mode)
 		return snprint_string_list(buf, PAGE_SIZE,
-					   bcache_cache_modes + 1,
+					   bch_cache_modes + 1,
 					   BDEV_CACHE_MODE(&dc->sb));
 
 	sysfs_printf(data_csum,		"%i", dc->disk.data_csum);
@@ -185,7 +185,7 @@ STORE(__cached_dev)
 		cached_dev_run(dc);
 
 	if (attr == &sysfs_cache_mode) {
-		ssize_t v = read_string_list(buf, bcache_cache_modes + 1);
+		ssize_t v = read_string_list(buf, bch_cache_modes + 1);
 
 		if (v < 0)
 			return v;

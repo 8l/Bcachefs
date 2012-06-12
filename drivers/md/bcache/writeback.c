@@ -159,7 +159,8 @@ static void refill_dirty(struct closure *cl)
 
 	ratelimit_reset(&dc->writeback_rate);
 
-	read_dirty(cl);
+	/* Punt to workqueue only so we don't recurse and blow the stack */
+	continue_at(cl, read_dirty, dirty_wq);
 }
 
 void bch_writeback_queue(struct cached_dev *dc)

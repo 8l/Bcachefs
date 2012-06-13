@@ -2410,7 +2410,8 @@ bool bch_keybuf_check_overlapping(struct keybuf *buf, struct bkey *start,
 				  struct bkey *end)
 {
 	bool ret = false;
-	struct keybuf_key *p, *w, s = { .key = *start };
+	struct keybuf_key *p, *w, s;
+	s.key = *start;
 
 	if (bkey_cmp(end, &buf->start) <= 0 ||
 	    bkey_cmp(start, &buf->end) >= 0)

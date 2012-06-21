@@ -7,6 +7,7 @@
 #include <linux/bio.h>
 #include <linux/blkdev.h>
 #include <linux/blktrace_api.h>
+#include <linux/blk-mq.h>
 
 #include "blk.h"
 #include "blk-cgroup.h"
@@ -498,6 +499,9 @@ static void blk_release_queue(struct kobject *kobj)
 
 	if (q->queue_tags)
 		__blk_queue_free_tags(q);
+
+	if (q->mq_ops)
+		blk_mq_free_queue(q);
 
 	blk_trace_shutdown(q);
 

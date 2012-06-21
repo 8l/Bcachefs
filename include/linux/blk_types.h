@@ -42,6 +42,8 @@ struct bio {
 						 * top bits priority
 						 */
 
+	struct io_context	*bi_ioc;
+
 	unsigned short		bi_vcnt;	/* how many bio_vec's */
 	unsigned short		bi_idx;		/* current index into bvl_vec */
 
@@ -73,7 +75,6 @@ struct bio {
 	 * Optional ioc and css associated with this bio.  Put on bio
 	 * release.  Read comment on top of bio_associate_current().
 	 */
-	struct io_context	*bi_ioc;
 	struct cgroup_subsys_state *bi_css;
 #endif
 #if defined(CONFIG_BLK_DEV_INTEGRITY)

@@ -79,6 +79,7 @@ void blk_mq_end_io(struct request *rq, int error)
 
 	put_cpu();
 }
+EXPORT_SYMBOL(blk_mq_end_io);
 
 static void blk_mq_start_request(struct request *rq)
 {
@@ -297,7 +298,7 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 	q->queue_ctx = ctx;
 	q->queue_hw_ctx = hctx;
 
-	q->make_request_fn = blk_mq_make_request;
+	blk_queue_make_request(q, blk_mq_make_request);
 	q->mq_ops = reg->ops;
 
 	for_each_possible_cpu(i) {

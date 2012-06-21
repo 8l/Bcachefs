@@ -12,6 +12,8 @@
 #include <linux/blk-mq.h>
 #include "blk.h"
 
+static const mq_delay = msecs_to_jiffies(2);
+
 static struct request *blk_mq_alloc_request(struct request_queue *q,
 					    struct blk_mq_ctx *ctx,
 					    unsigned int rw_flags)
@@ -62,6 +64,7 @@ static void ipi_end_io(void *data)
 
 void blk_mq_end_io(struct request *rq, int error)
 {
+#if 0
 	struct blk_mq_ctx *ctx = rq->mq_ctx;
 	int cpu = get_cpu();
 
@@ -78,6 +81,9 @@ void blk_mq_end_io(struct request *rq, int error)
 	}
 
 	put_cpu();
+#else
+	__blk_mq_end_io(rq, error);
+#endif
 }
 EXPORT_SYMBOL(blk_mq_end_io);
 
@@ -94,11 +100,9 @@ static void blk_mq_rq_timer(unsigned long data)
 {
 	struct request_queue *q = (struct request_queue *) data;
 	struct request *rq, *tmp;
-	unsigned long flags, next = 0;
+	unsigned long next = 0;
 	struct blk_mq_ctx *ctx;
 	int i, next_set = 0;
-
-	local_irq_save(flags);
 
 	queue_for_each_ctx(q, ctx, i) {
 		spin_lock(&ctx->lock);
@@ -106,8 +110,6 @@ static void blk_mq_rq_timer(unsigned long data)
 			blk_rq_check_expired(rq, &next, &next_set);
 		spin_unlock(&ctx->lock);
 	}
-
-	local_irq_restore(flags);
 
 	if (next_set)
 		mod_timer(&q->timeout, round_jiffies_up(next));
@@ -151,21 +153,26 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	struct request_queue *q = hctx->queue;
 	struct blk_mq_ctx *ctx;
 	LIST_HEAD(rq_list);
-	int i;
+	int bit;
 
-	spin_lock_irq(&hctx->lock);
+	if (test_bit(0, &hctx->running))
+		return;
 
-	hctx_for_each_ctx(hctx, ctx, i) {
-		if (list_empty_careful(&ctx->rq_list))
-			continue;
+	if (!list_empty(&hctx->pending)) {
+		spin_lock(&hctx->lock);
+		list_splice_init(&hctx->pending, &rq_list);
+		spin_unlock(&hctx->lock);
+	}
+
+	for_each_set_bit(bit, &hctx->ctx_map, hctx->nr_ctx) {
+		clear_bit(bit, &hctx->ctx_map);
+		ctx = hctx->ctxs[bit];
+		BUG_ON(bit != ctx->cpu);
 
 		spin_lock(&ctx->lock);
 		list_splice_tail_init(&ctx->rq_list, &rq_list);
 		spin_unlock(&ctx->lock);
 	}
-
-	list_splice_tail_init(&hctx->pending, &rq_list);
-	spin_unlock_irq(&hctx->lock);
 
 	while (!list_empty(&rq_list)) {
 		struct request *rq;
@@ -189,10 +196,12 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		}
 	}
 
+	clear_bit(0, &hctx->running);
+
 	if (!list_empty(&rq_list)) {
-		spin_lock_irq(&hctx->lock);
+		spin_lock(&hctx->lock);
 		list_splice(&rq_list, &hctx->pending);
-		spin_unlock_irq(&hctx->lock);
+		spin_unlock(&hctx->lock);
 	}
 }
 
@@ -217,7 +226,6 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct blk_mq_hw_ctx *hctx;
 	struct blk_mq_ctx *ctx;
-	unsigned long flags;
 	unsigned int rw_flags;
 	int is_sync = rw_is_sync(bio->bi_rw);
 	struct request *rq;
@@ -228,7 +236,7 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 	if (is_sync)
 		rw_flags |= REQ_SYNC;
 
-	local_irq_save(flags);
+	preempt_disable();
 	ctx = per_cpu_ptr(q->queue_ctx, smp_processor_id());
 	hctx = q->mq_ops->map_queue(q, ctx);
 
@@ -241,18 +249,22 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 		init_request_from_bio(rq, bio);
 		list_add_tail(&rq->queuelist, &ctx->rq_list);
 
+		if (!test_bit(ctx->cpu, &hctx->ctx_map))
+			set_bit(ctx->cpu, &hctx->ctx_map);
+
 		/*
 		 * We do this early, to ensure we are on the right CPU.
 		 */
 		blk_mq_add_timer(rq);
 	}
 
-	spin_unlock_irqrestore(&ctx->lock, flags);
+	spin_unlock(&ctx->lock);
+	preempt_enable();
 
 	if (is_sync)
 		blk_mq_run_hw_queue(hctx);
 	else
-		kblockd_schedule_delayed_work(q, &hctx->delayed_work, 1);
+		kblockd_schedule_delayed_work(q, &hctx->delayed_work, mq_delay);
 }
 
 struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *q,
@@ -261,160 +273,6 @@ struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *q,
 	return &q->queue_hw_ctx[0];
 }
 EXPORT_SYMBOL(blk_mq_map_single_queue);
-
-static void blk_mq_sysfs_release(struct kobject *kobj)
-{
-}
-
-struct blk_mq_ctx_sysfs_entry {
-	struct attribute attr;
-	ssize_t (*show)(struct blk_mq_ctx *, char *);
-	ssize_t (*store)(struct blk_mq_ctx *, const char *, size_t);
-};
-
-static ssize_t blk_mq_sysfs_show(struct kobject *kobj, struct attribute *attr,
-				 char *page)
-{
-	struct blk_mq_ctx_sysfs_entry *entry;
-	struct blk_mq_ctx *ctx;
-	ssize_t res;
-
-	entry = container_of(attr, struct blk_mq_ctx_sysfs_entry, attr);
-	ctx = container_of(kobj, struct blk_mq_ctx, kobj);
-
-	if (!entry->show)
-		return -EIO;
-
-	//mutex_lock(&q->sysfs_lock);
-	res = entry->show(ctx, page);
-	//mutex_unlock(&q->sysfs_lock);
-	return res;
-}
-
-static ssize_t blk_mq_sysfs_store(struct kobject *kobj, struct attribute *attr,
-				  const char *page, size_t length)
-{
-	struct blk_mq_ctx_sysfs_entry *entry;
-	struct blk_mq_ctx *ctx;
-	ssize_t res;
-
-	entry = container_of(attr, struct blk_mq_ctx_sysfs_entry, attr);
-	ctx = container_of(kobj, struct blk_mq_ctx, kobj);
-
-	if (!entry->store)
-		return -EIO;
-
-	//mutex_unlock(&q->sysfs_lock);
-	res = entry->store(ctx, page, length);
-	//mutex_unlock(&q->sysfs_lock);
-	return res;
-}
-
-static ssize_t blk_mq_sysfs_dispatched_show(struct blk_mq_ctx *ctx, char *page)
-{
-	return sprintf(page, "%lu %lu\n", ctx->rq_dispatched[1], ctx->rq_dispatched[0]);
-}
-
-static ssize_t blk_mq_sysfs_completed_show(struct blk_mq_ctx *ctx, char *page)
-{
-	return sprintf(page, "%lu %lu\n", ctx->rq_completed[1], ctx->rq_completed[0]);
-}
-
-static ssize_t blk_mq_sysfs_rq_list_show(struct blk_mq_ctx *ctx, char *page)
-{
-	char *start_page = page;
-	struct request *rq;
-
-	page += sprintf(page, "Pending list:\n");
-
-	list_for_each_entry(rq, &ctx->rq_list, queuelist)
-		page += sprintf(page, "\t%p\n", rq);
-
-	return page - start_page;
-}
-
-static struct blk_mq_ctx_sysfs_entry blk_mq_sysfs_dispatched = {
-	.attr = {.name = "dispatched", .mode = S_IRUGO },
-	.show = blk_mq_sysfs_dispatched_show,
-};
-static struct blk_mq_ctx_sysfs_entry blk_mq_sysfs_completed = {
-	.attr = {.name = "completed", .mode = S_IRUGO },
-	.show = blk_mq_sysfs_completed_show,
-};
-static struct blk_mq_ctx_sysfs_entry blk_mq_sysfs_rq_list = {
-	.attr = {.name = "rq_list", .mode = S_IRUGO },
-	.show = blk_mq_sysfs_rq_list_show,
-};
-
-static struct attribute *default_attrs[] = {
-	&blk_mq_sysfs_dispatched.attr,
-	&blk_mq_sysfs_completed.attr,
-	&blk_mq_sysfs_rq_list.attr,
-	NULL,
-};
-
-static const struct sysfs_ops blk_mq_sysfs_ops = {
-	.show	= blk_mq_sysfs_show,
-	.store	= blk_mq_sysfs_store,
-};
-
-static struct kobj_type blk_mq_ktype = {
-	.sysfs_ops	= &blk_mq_sysfs_ops,
-	.release	= blk_mq_sysfs_release,
-};
-
-static struct kobj_type blk_mq_ctx_ktype = {
-	.sysfs_ops	= &blk_mq_sysfs_ops,
-	.default_attrs	= default_attrs,
-	.release	= blk_mq_sysfs_release,
-};
-
-void blk_mq_unregister_disk(struct gendisk *disk)
-{
-	struct request_queue *q = disk->queue;
-
-	kobject_uevent(&q->mq_kobj, KOBJ_REMOVE);
-	kobject_del(&q->mq_kobj);
-
-	kobject_put(&disk_to_dev(disk)->kobj);
-}
-
-int blk_mq_register_disk(struct gendisk *disk)
-{
-	struct device *dev = disk_to_dev(disk);
-	struct request_queue *q = disk->queue;
-	struct blk_mq_hw_ctx *hctx;
-	struct blk_mq_ctx *ctx;
-	int ret, i, j;
-
-	kobject_init(&q->mq_kobj, &blk_mq_ktype);
-
-	ret = kobject_add(&q->mq_kobj, kobject_get(&dev->kobj), "%s", "mq");
-	if (ret < 0)
-		return ret;
-
-	kobject_uevent(&q->mq_kobj, KOBJ_ADD);
-
-	queue_for_each_hw_ctx(q, hctx, i) {
-		kobject_init(&hctx->kobj, &blk_mq_ktype);
-		ret = kobject_add(&hctx->kobj, &q->mq_kobj, "%u", i);
-		if (ret)
-			break;
-		hctx_for_each_ctx(hctx, ctx, j) {
-			kobject_init(&ctx->kobj, &blk_mq_ctx_ktype);
-			ret = kobject_add(&ctx->kobj, &hctx->kobj, "%u", j);
-			if (ret)
-				break;
-		}
-	}
-
-	if (ret) {
-		blk_mq_unregister_disk(disk);
-		return ret;
-	}
-
-	return 0;
-}
 
 struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 {
@@ -448,6 +306,7 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 	}
 
 	setup_timer(&q->timeout, blk_mq_rq_timer, (unsigned long) q);
+	blk_queue_rq_timeout(q, 30000);
 
 	q->queue_ctx = ctx;
 	q->queue_hw_ctx = hctx;

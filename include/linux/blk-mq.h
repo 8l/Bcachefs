@@ -23,6 +23,7 @@ struct blk_mq_ctx {
 
 struct blk_mq_hw_ctx {
 	spinlock_t		lock;
+	unsigned long		running;
 
 	struct list_head	pending;
 	struct delayed_work	delayed_work;
@@ -33,6 +34,10 @@ struct blk_mq_hw_ctx {
 
 	unsigned int		nr_ctx;
 	struct blk_mq_ctx	**ctxs;
+	unsigned long		ctx_map;
+
+	unsigned long		queued;
+	unsigned long		run;
 
 	struct kobject		kobj;
 };

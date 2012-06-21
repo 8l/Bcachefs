@@ -12,8 +12,6 @@
 #include <linux/blk-mq.h>
 #include "blk.h"
 
-static const mq_delay = msecs_to_jiffies(2);
-
 static struct request *blk_mq_alloc_request(struct request_queue *q,
 					    struct blk_mq_ctx *ctx,
 					    unsigned int rw_flags)
@@ -55,6 +53,9 @@ static void __blk_mq_end_io(struct request *rq, int error)
 	blk_mq_free_request(rq);
 }
 
+#undef BLK_MQ_IPI_REDIRECT
+
+#if defined(BLK_MQ_IPI_REDIRECT)
 static void ipi_end_io(void *data)
 {
 	struct request *rq = data;
@@ -64,7 +65,6 @@ static void ipi_end_io(void *data)
 
 void blk_mq_end_io(struct request *rq, int error)
 {
-#if 0
 	struct blk_mq_ctx *ctx = rq->mq_ctx;
 	int cpu = get_cpu();
 
@@ -81,10 +81,13 @@ void blk_mq_end_io(struct request *rq, int error)
 	}
 
 	put_cpu();
-#else
-	__blk_mq_end_io(rq, error);
-#endif
 }
+#else
+void blk_mq_end_io(struct request *rq, int error)
+{
+	__blk_mq_end_io(rq, error);
+}
+#endif
 EXPORT_SYMBOL(blk_mq_end_io);
 
 static void blk_mq_start_request(struct request *rq)
@@ -155,9 +158,13 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	LIST_HEAD(rq_list);
 	int bit;
 
-	if (test_bit(0, &hctx->running))
+	/*
+	 * Someone else is already in here, let him do the work
+	 */
+	if (atomic_add_return(1, &hctx->run_count) != 1)
 		return;
 
+re_run:
 	if (!list_empty(&hctx->pending)) {
 		spin_lock(&hctx->lock);
 		list_splice_init(&hctx->pending, &rq_list);
@@ -196,13 +203,14 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		}
 	}
 
-	clear_bit(0, &hctx->running);
-
 	if (!list_empty(&rq_list)) {
 		spin_lock(&hctx->lock);
 		list_splice(&rq_list, &hctx->pending);
 		spin_unlock(&hctx->lock);
-	}
+	} else if (!hctx->ctx_map)
+		atomic_set(&hctx->run_count, 0);
+	else if (atomic_add_return(-1, &hctx->run_count))
+		goto re_run;
 }
 
 void blk_mq_run_queue(struct request_queue *q)
@@ -264,7 +272,7 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 	if (is_sync)
 		blk_mq_run_hw_queue(hctx);
 	else
-		kblockd_schedule_delayed_work(q, &hctx->delayed_work, mq_delay);
+		kblockd_schedule_delayed_work(q, &hctx->delayed_work, 2);
 }
 
 struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *q,
@@ -338,6 +346,7 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 		INIT_DELAYED_WORK(&hctx->delayed_work, blk_mq_work_fn);
 		spin_lock_init(&hctx->lock);
 		INIT_LIST_HEAD(&hctx->pending);
+		atomic_set(&hctx->run_count, 0);
 		hctx->queue = q;
 		hctx->flags = reg->flags;
 

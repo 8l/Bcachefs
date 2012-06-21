@@ -146,48 +146,6 @@ static void blk_mq_add_timer(struct request *rq)
 	__blk_add_timer(rq, &rq->mq_ctx->timeout);
 }
 
-static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
-{
-	struct blk_mq_hw_ctx *hctx;
-	struct blk_mq_ctx *ctx;
-	unsigned long flags;
-	unsigned int rw_flags;
-	int is_sync = rw_is_sync(bio->bi_rw);
-	struct request *rq;
-
-	blk_queue_bounce(q, &bio);
-
-	rw_flags = bio_data_dir(bio);
-	if (is_sync)
-		rw_flags |= REQ_SYNC;
-
-	local_irq_save(flags);
-	ctx = per_cpu_ptr(q->queue_ctx, smp_processor_id());
-	hctx = q->mq_ops->map_queue(q, ctx);
-
-	spin_lock(&ctx->lock);
-
-	if (!(hctx->flags & BLK_MQ_F_SHOULD_MERGE) ||
-	    !blk_mq_attempt_merge(q, ctx, bio)) {
-		rq = blk_mq_alloc_request(q, ctx, rw_flags);
-
-		init_request_from_bio(rq, bio);
-		list_add_tail(&rq->queuelist, &ctx->rq_list);
-
-		/*
-		 * We do this early, to ensure we are on the right CPU.
-		 */
-		blk_mq_add_timer(rq);
-	}
-
-	spin_unlock_irqrestore(&ctx->lock, flags);
-
-	if (is_sync)
-		kblockd_schedule_delayed_work(q, &hctx->delayed_work, 0);
-	else
-		kblockd_schedule_delayed_work(q, &hctx->delayed_work, 1);
-}
-
 void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 {
 	struct request_queue *q = hctx->queue;
@@ -253,6 +211,48 @@ static void blk_mq_work_fn(struct work_struct *work)
 
 	hctx = container_of(work, struct blk_mq_hw_ctx, delayed_work.work);
 	blk_mq_run_hw_queue(hctx);
+}
+
+static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
+{
+	struct blk_mq_hw_ctx *hctx;
+	struct blk_mq_ctx *ctx;
+	unsigned long flags;
+	unsigned int rw_flags;
+	int is_sync = rw_is_sync(bio->bi_rw);
+	struct request *rq;
+
+	blk_queue_bounce(q, &bio);
+
+	rw_flags = bio_data_dir(bio);
+	if (is_sync)
+		rw_flags |= REQ_SYNC;
+
+	local_irq_save(flags);
+	ctx = per_cpu_ptr(q->queue_ctx, smp_processor_id());
+	hctx = q->mq_ops->map_queue(q, ctx);
+
+	spin_lock(&ctx->lock);
+
+	if (!(hctx->flags & BLK_MQ_F_SHOULD_MERGE) ||
+	    !blk_mq_attempt_merge(q, ctx, bio)) {
+		rq = blk_mq_alloc_request(q, ctx, rw_flags);
+
+		init_request_from_bio(rq, bio);
+		list_add_tail(&rq->queuelist, &ctx->rq_list);
+
+		/*
+		 * We do this early, to ensure we are on the right CPU.
+		 */
+		blk_mq_add_timer(rq);
+	}
+
+	spin_unlock_irqrestore(&ctx->lock, flags);
+
+	if (is_sync)
+		blk_mq_run_hw_queue(hctx);
+	else
+		kblockd_schedule_delayed_work(q, &hctx->delayed_work, 1);
 }
 
 struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *q,

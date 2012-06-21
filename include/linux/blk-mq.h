@@ -17,6 +17,8 @@ struct blk_mq_ctx {
 
 	/* incremented at completion time */
 	unsigned long		____cacheline_aligned_in_smp rq_completed[2];
+
+	struct kobject		kobj;
 };
 
 struct blk_mq_hw_ctx {
@@ -31,6 +33,8 @@ struct blk_mq_hw_ctx {
 
 	unsigned int		nr_ctx;
 	struct blk_mq_ctx	**ctxs;
+
+	struct kobject		kobj;
 };
 
 typedef int (queue_rq_fn) (struct blk_mq_hw_ctx *, struct request *);
@@ -61,22 +65,24 @@ struct blk_mq_reg {
 
 struct request_queue *blk_mq_init_queue(struct blk_mq_reg *);
 void blk_mq_free_queue(struct request_queue *);
+int blk_mq_register_disk(struct gendisk *);
+void blk_mq_unregister_disk(struct gendisk *);
 
 struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *q, struct blk_mq_ctx *);
 
 void blk_mq_end_io(struct request *rq, int error);
 
 #define queue_for_each_hw_ctx(q, hctx, i)				\
-	for (i = 0, hctx = &(q)->queue_hw_ctx[0];			\
-	     i < (q)->nr_hw_queues; i++, hctx++)
+	for ((i) = 0, hctx = &(q)->queue_hw_ctx[0];			\
+	     (i) < (q)->nr_hw_queues; (i)++, hctx++)
 
 #define queue_for_each_ctx(q, ctx, i)					\
-	for (i = 0, ctx = per_cpu_ptr((q)->queue_ctx, 0);		\
-	     i < (q)->nr_queues; i++, ctx = per_cpu_ptr(q->queue_ctx, i))
+	for ((i) = 0, ctx = per_cpu_ptr((q)->queue_ctx, 0);		\
+	     (i) < (q)->nr_queues; (i)++, ctx = per_cpu_ptr(q->queue_ctx, (i)))
 
 #define hctx_for_each_ctx(hctx, ctx, i)					\
-	for (i = 0, ctx = (hctx)->ctxs[0];				\
-	     i < (hctx)->nr_ctx; i++, ctx = (hctx)->ctxs[i])
+	for ((i) = 0, ctx = (hctx)->ctxs[0];				\
+	     (i) < (hctx)->nr_ctx; (i)++, ctx = (hctx)->ctxs[(i)])
 
 #define blk_ctx_sum(q, sum)						\
 ({									\

@@ -371,6 +371,7 @@ struct request_queue {
 	 * queue kobject
 	 */
 	struct kobject kobj;
+	struct kobject mq_kobj;
 
 	/*
 	 * queue settings

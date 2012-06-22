@@ -39,6 +39,8 @@ struct blk_mq_hw_ctx {
 
 	unsigned long		queued;
 	unsigned long		run;
+#define BLK_MQ_MAX_DISPATCH_ORDER	10
+	unsigned long		dispatched[BLK_MQ_MAX_DISPATCH_ORDER];
 
 	struct kobject		kobj;
 };

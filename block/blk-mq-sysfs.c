@@ -114,17 +114,22 @@ static ssize_t blk_mq_sysfs_completed_show(struct blk_mq_ctx *ctx, char *page)
 	return sprintf(page, "%lu %lu\n", ctx->rq_completed[1], ctx->rq_completed[0]);
 }
 
-static ssize_t blk_mq_sysfs_rq_list_show(struct blk_mq_ctx *ctx, char *page)
+static ssize_t sysfs_list_show(char *page, struct list_head *list, char *msg)
 {
 	char *start_page = page;
 	struct request *rq;
 
-	page += sprintf(page, "Pending list:\n");
+	page += sprintf(page, "%s:\n", msg);
 
-	list_for_each_entry(rq, &ctx->rq_list, queuelist)
+	list_for_each_entry(rq, list, queuelist)
 		page += sprintf(page, "\t%p\n", rq);
 
 	return page - start_page;
+}
+
+static ssize_t blk_mq_sysfs_rq_list_show(struct blk_mq_ctx *ctx, char *page)
+{
+	return sysfs_list_show(page, &ctx->rq_list, "CTX pending");
 }
 
 static ssize_t blk_mq_hw_sysfs_queued_show(struct blk_mq_hw_ctx *hctx,
@@ -136,6 +141,28 @@ static ssize_t blk_mq_hw_sysfs_queued_show(struct blk_mq_hw_ctx *hctx,
 static ssize_t blk_mq_hw_sysfs_run_show(struct blk_mq_hw_ctx *hctx, char *page)
 {
 	return sprintf(page, "%lu\n", hctx->run);
+}
+
+static ssize_t blk_mq_hw_sysfs_dispatched_show(struct blk_mq_hw_ctx *hctx,
+					       char *page)
+{
+	char *start_page = page;
+	int i;
+
+	page += sprintf(page, "%8u\t%lu\n", 0U, hctx->dispatched[0]);
+
+	for (i = 1; i < BLK_MQ_MAX_DISPATCH_ORDER; i++) {
+		unsigned long d = 1U << (i - 1);
+
+		page += sprintf(page, "%8lu\t%lu\n", d, hctx->dispatched[i]);
+	}
+
+	return page - start_page;
+}
+
+static ssize_t blk_mq_hw_sysfs_rq_list_show(struct blk_mq_hw_ctx *hctx, char *page)
+{
+	return sysfs_list_show(page, &hctx->pending, "HCTX pending");
 }
 
 static struct blk_mq_ctx_sysfs_entry blk_mq_sysfs_dispatched = {
@@ -162,15 +189,24 @@ static struct blk_mq_hw_ctx_sysfs_entry blk_mq_hw_sysfs_queued = {
 	.attr = {.name = "queued", .mode = S_IRUGO },
 	.show = blk_mq_hw_sysfs_queued_show,
 };
-
 static struct blk_mq_hw_ctx_sysfs_entry blk_mq_hw_sysfs_run = {
 	.attr = {.name = "run", .mode = S_IRUGO },
 	.show = blk_mq_hw_sysfs_run_show,
+};
+static struct blk_mq_hw_ctx_sysfs_entry blk_mq_hw_sysfs_dispatched = {
+	.attr = {.name = "dispatched", .mode = S_IRUGO },
+	.show = blk_mq_hw_sysfs_dispatched_show,
+};
+static struct blk_mq_hw_ctx_sysfs_entry blk_mq_hw_sysfs_pending = {
+	.attr = {.name = "pending", .mode = S_IRUGO },
+	.show = blk_mq_hw_sysfs_rq_list_show,
 };
 
 static struct attribute *default_hw_ctx_attrs[] = {
 	&blk_mq_hw_sysfs_queued.attr,
 	&blk_mq_hw_sysfs_run.attr,
+	&blk_mq_hw_sysfs_dispatched.attr,
+	&blk_mq_hw_sysfs_pending.attr,
 	NULL,
 };
 
@@ -248,5 +284,3 @@ int blk_mq_register_disk(struct gendisk *disk)
 
 	return 0;
 }
-
-

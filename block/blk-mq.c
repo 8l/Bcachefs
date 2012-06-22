@@ -156,15 +156,10 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	struct request_queue *q = hctx->queue;
 	struct blk_mq_ctx *ctx;
 	LIST_HEAD(rq_list);
-	int bit;
+	int bit, queued;
 
-	/*
-	 * Someone else is already in here, let him do the work
-	 */
-	if (atomic_add_return(1, &hctx->run_count) != 1)
-		return;
+	hctx->run++;
 
-re_run:
 	if (!list_empty(&hctx->pending)) {
 		spin_lock(&hctx->lock);
 		list_splice_init(&hctx->pending, &rq_list);
@@ -181,6 +176,7 @@ re_run:
 		spin_unlock(&ctx->lock);
 	}
 
+	queued = 0;
 	while (!list_empty(&rq_list)) {
 		struct request *rq;
 		int ret;
@@ -191,6 +187,7 @@ re_run:
 		ret = q->mq_ops->queue_rq(hctx, rq);
 		switch (ret) {
 		case BLK_MQ_RQ_QUEUE_OK:
+			queued++;
 			continue;
 		case BLK_MQ_RQ_QUEUE_BUSY:
 			break;
@@ -203,14 +200,16 @@ re_run:
 		}
 	}
 
+	if (!queued)
+		hctx->dispatched[0]++;
+	else if (queued < (1 << (BLK_MQ_MAX_DISPATCH_ORDER - 1)))
+		hctx->dispatched[ilog2(queued) + 1]++;
+
 	if (!list_empty(&rq_list)) {
 		spin_lock(&hctx->lock);
 		list_splice(&rq_list, &hctx->pending);
 		spin_unlock(&hctx->lock);
-	} else if (!hctx->ctx_map)
-		atomic_set(&hctx->run_count, 0);
-	else if (atomic_add_return(-1, &hctx->run_count))
-		goto re_run;
+	}
 }
 
 void blk_mq_run_queue(struct request_queue *q)
@@ -247,6 +246,8 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 	preempt_disable();
 	ctx = per_cpu_ptr(q->queue_ctx, smp_processor_id());
 	hctx = q->mq_ops->map_queue(q, ctx);
+
+	hctx->queued++;
 
 	spin_lock(&ctx->lock);
 

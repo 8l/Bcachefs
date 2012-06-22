@@ -30,6 +30,7 @@
 #include <linux/list_sort.h>
 #include <linux/delay.h>
 #include <linux/ratelimit.h>
+#include <linux/blk-mq.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/block.h>
@@ -2888,6 +2889,11 @@ static void queue_unplugged(struct request_queue *q, unsigned int depth,
 {
 	trace_block_unplug(q, depth, !from_schedule);
 
+	if (q->mq_ops) {
+		blk_mq_flush_plug(q, from_schedule);
+		return;
+	}
+
 	/*
 	 * Don't mess with dead queue.
 	 */
@@ -2994,7 +3000,14 @@ void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 				queue_unplugged(q, depth, from_schedule);
 			q = rq->q;
 			depth = 0;
-			spin_lock(q->queue_lock);
+			if (!q->mq_ops)
+				spin_lock(q->queue_lock);
+		}
+
+		if (q->mq_ops) {
+			depth++;
+			blk_mq_insert_request(q, rq);
+			continue;
 		}
 
 		/*

@@ -212,13 +212,20 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	}
 }
 
-void blk_mq_run_queue(struct request_queue *q)
+void blk_mq_run_queues(struct request_queue *q, bool async)
 {
 	struct blk_mq_hw_ctx *hctx;
 	int i;
 
-	queue_for_each_hw_ctx(q, hctx, i)
-		blk_mq_run_hw_queue(hctx);
+	queue_for_each_hw_ctx(q, hctx, i) {
+		if (!hctx->ctx_map && list_empty(&hctx->pending))
+			continue;
+
+		if (!async)
+			blk_mq_run_hw_queue(hctx);
+		else
+			kblockd_schedule_delayed_work(q, &hctx->delayed_work, 0);
+	}
 }
 
 static void blk_mq_work_fn(struct work_struct *work)
@@ -227,6 +234,39 @@ static void blk_mq_work_fn(struct work_struct *work)
 
 	hctx = container_of(work, struct blk_mq_hw_ctx, delayed_work.work);
 	blk_mq_run_hw_queue(hctx);
+}
+
+void blk_mq_flush_plug(struct request_queue *q, bool from_schedule)
+{
+	blk_mq_run_queues(q, from_schedule);
+}
+
+static void __blk_mq_insert_request(struct blk_mq_hw_ctx *hctx,
+				    struct blk_mq_ctx *ctx,
+				    struct request *rq)
+{
+	list_add_tail(&rq->queuelist, &ctx->rq_list);
+
+	if (!test_bit(ctx->cpu, &hctx->ctx_map))
+		set_bit(ctx->cpu, &hctx->ctx_map);
+
+	/*
+	 * We do this early, to ensure we are on the right CPU.
+	 */
+	blk_mq_add_timer(rq);
+}
+
+void blk_mq_insert_request(struct request_queue *q, struct request *rq)
+{
+	struct blk_mq_hw_ctx *hctx;
+	struct blk_mq_ctx *ctx;
+
+	ctx = per_cpu_ptr(q->queue_ctx, smp_processor_id());
+	hctx = q->mq_ops->map_queue(q, ctx);
+	
+	spin_lock(&ctx->lock);
+	__blk_mq_insert_request(hctx, ctx, rq);
+	spin_unlock(&ctx->lock);
 }
 
 static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
@@ -256,15 +296,7 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 		rq = blk_mq_alloc_request(q, ctx, rw_flags);
 
 		init_request_from_bio(rq, bio);
-		list_add_tail(&rq->queuelist, &ctx->rq_list);
-
-		if (!test_bit(ctx->cpu, &hctx->ctx_map))
-			set_bit(ctx->cpu, &hctx->ctx_map);
-
-		/*
-		 * We do this early, to ensure we are on the right CPU.
-		 */
-		blk_mq_add_timer(rq);
+		__blk_mq_insert_request(hctx, ctx, rq);
 	}
 
 	spin_unlock(&ctx->lock);

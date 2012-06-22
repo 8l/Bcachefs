@@ -273,15 +273,10 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct blk_mq_hw_ctx *hctx;
 	struct blk_mq_ctx *ctx;
-	unsigned int rw_flags;
 	int is_sync = rw_is_sync(bio->bi_rw);
 	struct request *rq;
 
 	blk_queue_bounce(q, &bio);
-
-	rw_flags = bio_data_dir(bio);
-	if (is_sync)
-		rw_flags |= REQ_SYNC;
 
 	preempt_disable();
 	ctx = per_cpu_ptr(q->queue_ctx, smp_processor_id());
@@ -293,6 +288,12 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 
 	if (!(hctx->flags & BLK_MQ_F_SHOULD_MERGE) ||
 	    !blk_mq_attempt_merge(q, ctx, bio)) {
+		unsigned int rw_flags;
+
+		rw_flags = bio_data_dir(bio);
+		if (is_sync)
+			rw_flags |= REQ_SYNC;
+
 		rq = blk_mq_alloc_request(q, ctx, rw_flags);
 
 		init_request_from_bio(rq, bio);

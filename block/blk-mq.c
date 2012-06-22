@@ -256,7 +256,7 @@ static void __blk_mq_insert_request(struct blk_mq_hw_ctx *hctx,
 	blk_mq_add_timer(rq);
 }
 
-void blk_mq_insert_request(struct request_queue *q, struct request *rq)
+void blk_mq_insert_requests(struct request_queue *q, struct list_head *list)
 {
 	struct blk_mq_hw_ctx *hctx;
 	struct blk_mq_ctx *ctx;
@@ -265,7 +265,13 @@ void blk_mq_insert_request(struct request_queue *q, struct request *rq)
 	hctx = q->mq_ops->map_queue(q, ctx);
 	
 	spin_lock(&ctx->lock);
-	__blk_mq_insert_request(hctx, ctx, rq);
+	while (!list_empty(list)) {
+		struct request *rq;
+
+		rq = list_entry(list->next, struct request, queuelist);
+		list_del_init(&rq->queuelist);
+		__blk_mq_insert_request(hctx, ctx, rq);
+	}
 	spin_unlock(&ctx->lock);
 }
 

@@ -77,7 +77,7 @@ int blk_mq_register_disk(struct gendisk *);
 void blk_mq_unregister_disk(struct gendisk *);
 
 void blk_mq_flush_plug(struct request_queue *, bool);
-void blk_mq_insert_request(struct request_queue *, struct request *);
+void blk_mq_insert_requests(struct request_queue *, struct list_head *);
 
 struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *q, struct blk_mq_ctx *);
 

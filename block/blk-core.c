@@ -2889,11 +2889,6 @@ static void queue_unplugged(struct request_queue *q, unsigned int depth,
 {
 	trace_block_unplug(q, depth, !from_schedule);
 
-	if (q->mq_ops) {
-		blk_mq_flush_plug(q, from_schedule);
-		return;
-	}
-
 	/*
 	 * Don't mess with dead queue.
 	 */
@@ -2959,12 +2954,23 @@ struct blk_plug_cb *blk_check_plugged(blk_plug_cb_fn unplug, void *data,
 }
 EXPORT_SYMBOL(blk_check_plugged);
 
+static void do_queue_unplug(struct request_queue *q, bool from_schedule,
+			    unsigned int depth, struct list_head *list)
+{
+	if (q->mq_ops) {
+		trace_block_unplug(q, depth, !from_schedule);
+		blk_mq_insert_requests(q, list);
+	} else
+		queue_unplugged(q, depth, from_schedule);
+}
+
 void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 {
 	struct request_queue *q;
 	unsigned long flags;
 	struct request *rq;
 	LIST_HEAD(list);
+	LIST_HEAD(q_list);
 	unsigned int depth;
 
 	BUG_ON(plug->magic != PLUG_MAGIC);
@@ -2997,7 +3003,7 @@ void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 			 * This drops the queue lock
 			 */
 			if (q)
-				queue_unplugged(q, depth, from_schedule);
+				do_queue_unplug(q, from_schedule, depth, &q_list);
 			q = rq->q;
 			depth = 0;
 			if (!q->mq_ops)
@@ -3006,7 +3012,7 @@ void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 
 		if (q->mq_ops) {
 			depth++;
-			blk_mq_insert_request(q, rq);
+			list_add_tail(&rq->queuelist, &q_list);
 			continue;
 		}
 
@@ -3033,7 +3039,7 @@ void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 	 * This drops the queue lock
 	 */
 	if (q)
-		queue_unplugged(q, depth, from_schedule);
+		do_queue_unplug(q, from_schedule, depth, &q_list);
 
 	local_irq_restore(flags);
 }

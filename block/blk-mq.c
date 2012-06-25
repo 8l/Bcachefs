@@ -327,7 +327,7 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 	struct blk_mq_hw_ctx *hctx;
 	struct blk_mq_ctx *ctx;
 	struct request_queue *q;
-	int i, last_index = 0;
+	int i;
 
 	if (!reg->nr_hw_queues || !reg->ops->queue_rq || !reg->ops->map_queue)
 		return ERR_PTR(-EINVAL);
@@ -373,10 +373,9 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 		__ctx->cpu = i;
 		INIT_LIST_HEAD(&__ctx->rq_list);
 		INIT_LIST_HEAD(&__ctx->timeout);
-		last_index = i;
 	}
 
-	q->nr_queues = last_index;
+	q->nr_queues = i;
 	q->nr_hw_queues = reg->nr_hw_queues;
 
 	/*

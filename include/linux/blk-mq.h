@@ -33,7 +33,8 @@ struct blk_mq_hw_ctx {
 
 	unsigned int		nr_ctx;
 	struct blk_mq_ctx	**ctxs;
-	unsigned long		ctx_map;
+	unsigned int 		nr_ctx_map;
+	unsigned long		*ctx_map;
 
 	atomic_t		run_count;
 
@@ -104,6 +105,17 @@ void blk_mq_end_io(struct request *rq, int error);
 		__ret += sum;						\
 	__ret;								\
 })
+
+static inline bool blk_mq_hctx_map_has_bit_set(struct blk_mq_hw_ctx *hctx)
+{
+	unsigned int i;
+
+	for (i = 0; i < hctx->nr_ctx_map; i++)
+		if (hctx->ctx_map[i])
+			return true;
+
+	return false;
+}
 
 static inline unsigned int __blk_mq_in_flight(struct request_queue *q, int sync)
 {

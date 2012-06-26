@@ -166,8 +166,8 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		spin_unlock(&hctx->lock);
 	}
 
-	for_each_set_bit(bit, &hctx->ctx_map, hctx->nr_ctx) {
-		clear_bit(bit, &hctx->ctx_map);
+	for_each_set_bit(bit, hctx->ctx_map, hctx->nr_ctx) {
+		clear_bit(bit, hctx->ctx_map);
 		ctx = hctx->ctxs[bit];
 		BUG_ON(bit != ctx->cpu);
 
@@ -218,7 +218,8 @@ void blk_mq_run_queues(struct request_queue *q, bool async)
 	int i;
 
 	queue_for_each_hw_ctx(q, hctx, i) {
-		if (!hctx->ctx_map && list_empty(&hctx->pending))
+		if (!blk_mq_hctx_map_has_bit_set(hctx) &&
+		    list_empty(&hctx->pending))
 			continue;
 
 		if (!async)
@@ -247,8 +248,8 @@ static void __blk_mq_insert_request(struct blk_mq_hw_ctx *hctx,
 {
 	list_add_tail(&rq->queuelist, &ctx->rq_list);
 
-	if (!test_bit(ctx->cpu, &hctx->ctx_map))
-		set_bit(ctx->cpu, &hctx->ctx_map);
+	if (!test_bit(ctx->cpu, hctx->ctx_map))
+		set_bit(ctx->cpu, hctx->ctx_map);
 
 	/*
 	 * We do this early, to ensure we are on the right CPU.
@@ -382,6 +383,8 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 	 * Initialize hardware queues
 	 */
 	queue_for_each_hw_ctx(q, hctx, i) {
+		unsigned int num_maps;
+
 		INIT_DELAYED_WORK(&hctx->delayed_work, blk_mq_work_fn);
 		spin_lock_init(&hctx->lock);
 		INIT_LIST_HEAD(&hctx->pending);
@@ -390,8 +393,14 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 		hctx->flags = reg->flags;
 
 		/* FIXME: alloc failure handling */
-		hctx->ctxs = kmalloc_node(hctx->nr_ctx * sizeof(void *),
+		hctx->ctxs = kmalloc_node(hctx->nr_ctx *
+				sizeof(void *), GFP_KERNEL, reg->numa_node);
+
+		num_maps = (nr_cpu_ids + BITS_PER_LONG - 1) / BITS_PER_LONG;
+		hctx->ctx_map = kmalloc_node(num_maps * sizeof(unsigned long),
 						GFP_KERNEL, reg->numa_node);
+		hctx->nr_ctx_map = num_maps;
+
 		hctx->nr_ctx = 0;
 	}
 
@@ -414,6 +423,7 @@ void blk_mq_free_queue(struct request_queue *q)
 
 	queue_for_each_hw_ctx(q, hctx, i) {
 		cancel_delayed_work_sync(&hctx->delayed_work);
+		kfree(hctx->ctx_map);
 		kfree(hctx->ctxs);
 	}
 

@@ -375,7 +375,7 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 		INIT_LIST_HEAD(&__ctx->timeout);
 	}
 
-	q->nr_queues = i;
+	q->nr_queues = nr_cpu_ids;
 	q->nr_hw_queues = reg->nr_hw_queues;
 
 	/*

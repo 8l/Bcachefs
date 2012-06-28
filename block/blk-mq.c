@@ -9,15 +9,13 @@
 #include <linux/workqueue.h>
 #include <linux/smp.h>
 #include <linux/llist.h>
+#include <linux/cpu.h>
 
 #include <linux/blk-mq.h>
 #include "blk.h"
 
-#undef BLK_MQ_IPI_REDIRECT
-
-#ifdef BLK_MQ_IPI_REDIRECT
 static DEFINE_PER_CPU(struct llist_head, ipi_lists);
-#endif
+static bool do_ipi_redirect = false;
 
 static struct request *blk_mq_alloc_request(struct request_queue *q,
 					    struct blk_mq_ctx *ctx,
@@ -60,8 +58,6 @@ static void __blk_mq_end_io(struct request *rq, int error)
 	blk_mq_free_request(rq);
 }
 
-#if defined(BLK_MQ_IPI_REDIRECT)
-/* FIXME: remember to add CPU hot-unplug support */
 static void ipi_end_io(void *data)
 {
 	struct llist_head *list = &per_cpu(ipi_lists, smp_processor_id());
@@ -78,8 +74,12 @@ static void ipi_end_io(void *data)
 void blk_mq_end_io(struct request *rq, int error)
 {
 	struct blk_mq_ctx *ctx = rq->mq_ctx;
-	int cpu = get_cpu();
+	int cpu;
 
+	if (do_ipi_redirect)
+		return __blk_mq_end_io(rq, error);
+
+	cpu = get_cpu();
 	if (cpu == ctx->cpu)
 		__blk_mq_end_io(rq, error);
 	else {
@@ -97,12 +97,6 @@ void blk_mq_end_io(struct request *rq, int error)
 
 	put_cpu();
 }
-#else
-void blk_mq_end_io(struct request *rq, int error)
-{
-	__blk_mq_end_io(rq, error);
-}
-#endif
 EXPORT_SYMBOL(blk_mq_end_io);
 
 static void blk_mq_start_request(struct request *rq)
@@ -476,13 +470,37 @@ void blk_mq_free_queue(struct request_queue *q)
 }
 EXPORT_SYMBOL(blk_mq_free_queue);
 
+static int __cpuinit blk_mq_cpu_notify(struct notifier_block *self,
+				       unsigned long action, void *hcpu)
+{
+	if (action == CPU_DEAD || action == CPU_DEAD_FROZEN) {
+		int cpu = (unsigned long) hcpu;
+		struct llist_node *node;
+		struct request *rq;
+
+		local_irq_disable();
+
+		node = llist_del_first(&per_cpu(ipi_lists, cpu));
+		llist_for_each_entry(rq, node, ll_list)
+			__blk_mq_end_io(rq, rq->errors);
+
+		local_irq_enable();
+	}
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block __cpuinitdata blk_mq_cpu_notifier = {
+	.notifier_call	= blk_mq_cpu_notify,
+};
+
 int blk_mq_init(void)
 {
-#ifdef BLK_MQ_IPI_REDIRECT
 	unsigned int i;
 
 	for_each_possible_cpu(i)
 		init_llist_head(&per_cpu(ipi_lists, i));
-#endif
+
+	register_hotcpu_notifier(&blk_mq_cpu_notifier);
 	return 0;
 }

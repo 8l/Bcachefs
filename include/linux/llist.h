@@ -143,6 +143,25 @@ static inline struct llist_node *llist_next(struct llist_node *node)
 }
 
 /**
+ * __llist_add - add a new entry non-atomically
+ * @new:	new entry to be added
+ * @head:	the head for your lock-less list
+ *
+ * Returns true if the list was empty prior to adding this entry. This variant
+ * is for use on local lists that aren't visible to others.
+ */
+static inline bool __llist_add(struct llist_node *new, struct llist_head *head)
+{
+	struct llist_node *entry;
+
+	entry = head->first;
+	new->next = head->first;
+	head->first = new;
+
+	return new->next == NULL;
+}
+
+/**
  * llist_add - add a new entry
  * @new:	new entry to be added
  * @head:	the head for your lock-less list

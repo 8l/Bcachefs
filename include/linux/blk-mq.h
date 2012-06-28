@@ -14,6 +14,7 @@ struct blk_mq_ctx {
 
 	/* incremented at dispatch time */
 	unsigned long		rq_dispatched[2];
+	unsigned long		rq_merged;
 
 	/* incremented at completion time */
 	unsigned long		____cacheline_aligned_in_smp rq_completed[2];
@@ -24,7 +25,7 @@ struct blk_mq_ctx {
 struct blk_mq_hw_ctx {
 	spinlock_t		lock;
 
-	struct list_head	pending;
+	struct llist_head	dispatch;
 	struct delayed_work	delayed_work;
 
 	unsigned long		flags;

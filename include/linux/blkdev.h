@@ -8,6 +8,7 @@
 #include <linux/major.h>
 #include <linux/genhd.h>
 #include <linux/list.h>
+#include <linux/llist.h>
 #include <linux/timer.h>
 #include <linux/workqueue.h>
 #include <linux/pagemap.h>
@@ -93,7 +94,10 @@ enum rq_cmd_type_bits {
  * as well!
  */
 struct request {
-	struct list_head queuelist;
+	union {
+		struct list_head queuelist;
+		struct llist_node ll_list;
+	};
 	struct call_single_data csd;
 
 	struct request_queue *q;

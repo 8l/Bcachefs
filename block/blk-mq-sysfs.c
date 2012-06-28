@@ -109,9 +109,27 @@ static ssize_t blk_mq_sysfs_dispatched_show(struct blk_mq_ctx *ctx, char *page)
 	return sprintf(page, "%lu %lu\n", ctx->rq_dispatched[1], ctx->rq_dispatched[0]);
 }
 
+static ssize_t blk_mq_sysfs_merged_show(struct blk_mq_ctx *ctx, char *page)
+{
+	return sprintf(page, "%lu\n", ctx->rq_merged);
+}
+
 static ssize_t blk_mq_sysfs_completed_show(struct blk_mq_ctx *ctx, char *page)
 {
 	return sprintf(page, "%lu %lu\n", ctx->rq_completed[1], ctx->rq_completed[0]);
+}
+
+static ssize_t sysfs_llist_show(char *page, struct llist_node *entry, char *msg)
+{
+	char *start_page = page;
+	struct request *rq;
+
+	page += sprintf(page, "%s:\n", msg);
+
+	llist_for_each_entry(rq, entry, ll_list)
+		page += sprintf(page, "\t%p\n", rq);
+
+	return page - start_page;
 }
 
 static ssize_t sysfs_list_show(char *page, struct list_head *list, char *msg)
@@ -162,12 +180,16 @@ static ssize_t blk_mq_hw_sysfs_dispatched_show(struct blk_mq_hw_ctx *hctx,
 
 static ssize_t blk_mq_hw_sysfs_rq_list_show(struct blk_mq_hw_ctx *hctx, char *page)
 {
-	return sysfs_list_show(page, &hctx->pending, "HCTX pending");
+	return sysfs_llist_show(page, hctx->dispatch.first, "HCTX pending");
 }
 
 static struct blk_mq_ctx_sysfs_entry blk_mq_sysfs_dispatched = {
 	.attr = {.name = "dispatched", .mode = S_IRUGO },
 	.show = blk_mq_sysfs_dispatched_show,
+};
+static struct blk_mq_ctx_sysfs_entry blk_mq_sysfs_merged = {
+	.attr = {.name = "merged", .mode = S_IRUGO },
+	.show = blk_mq_sysfs_merged_show,
 };
 static struct blk_mq_ctx_sysfs_entry blk_mq_sysfs_completed = {
 	.attr = {.name = "completed", .mode = S_IRUGO },
@@ -180,6 +202,7 @@ static struct blk_mq_ctx_sysfs_entry blk_mq_sysfs_rq_list = {
 
 static struct attribute *default_ctx_attrs[] = {
 	&blk_mq_sysfs_dispatched.attr,
+	&blk_mq_sysfs_merged.attr,
 	&blk_mq_sysfs_completed.attr,
 	&blk_mq_sysfs_rq_list.attr,
 	NULL,

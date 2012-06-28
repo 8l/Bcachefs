@@ -8,6 +8,7 @@
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 #include <linux/smp.h>
+#include <linux/llist.h>
 
 #include <linux/blk-mq.h>
 #include "blk.h"
@@ -109,8 +110,11 @@ static void blk_mq_rq_timer(unsigned long data)
 
 	queue_for_each_ctx(q, ctx, i) {
 		spin_lock(&ctx->lock);
-		list_for_each_entry_safe(rq, tmp, &ctx->timeout, timeout_list)
+		list_for_each_entry_safe(rq, tmp, &ctx->timeout, timeout_list) {
+			if (!test_bit(REQ_ATOM_STARTED, &rq->atomic_flags))
+				continue;
 			blk_rq_check_expired(rq, &next, &next_set);
+		}
 		spin_unlock(&ctx->lock);
 	}
 
@@ -135,11 +139,15 @@ static bool blk_mq_attempt_merge(struct request_queue *q,
 
 		el_ret = blk_try_merge(rq, bio);
 		if (el_ret == ELEVATOR_BACK_MERGE) {
-			if (bio_attempt_back_merge(q, rq, bio))
+			if (bio_attempt_back_merge(q, rq, bio)) {
+				ctx->rq_merged++;
 				return true;
+			}
 		} else if (el_ret == ELEVATOR_FRONT_MERGE) {
-			if (bio_attempt_front_merge(q, rq, bio))
+			if (bio_attempt_front_merge(q, rq, bio)) {
+				ctx->rq_merged++;
 				return true;
+			}
 		}
 	}
 
@@ -155,16 +163,13 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 {
 	struct request_queue *q = hctx->queue;
 	struct blk_mq_ctx *ctx;
-	LIST_HEAD(rq_list);
+	struct request *rq;
+	struct llist_node *first, *last = NULL;
+	LLIST_HEAD(rq_list);
+	LIST_HEAD(tmp);
 	int bit, queued;
 
 	hctx->run++;
-
-	if (!list_empty(&hctx->pending)) {
-		spin_lock(&hctx->lock);
-		list_splice_init(&hctx->pending, &rq_list);
-		spin_unlock(&hctx->lock);
-	}
 
 	for_each_set_bit(bit, hctx->ctx_map, hctx->nr_ctx) {
 		clear_bit(bit, hctx->ctx_map);
@@ -172,16 +177,34 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		BUG_ON(bit != ctx->cpu);
 
 		spin_lock(&ctx->lock);
-		list_splice_tail_init(&ctx->rq_list, &rq_list);
+		list_splice_tail_init(&ctx->rq_list, &tmp);
 		spin_unlock(&ctx->lock);
+
+		while (!list_empty(&tmp)) {
+			rq = list_entry(tmp.prev, struct request, queuelist);
+			list_del(&rq->queuelist);
+			rq->ll_list.next = NULL;
+			__llist_add(&rq->ll_list, &rq_list);
+
+			if (!last)
+				last = &rq->ll_list;
+		}
 	}
 
+	if (!llist_empty(&rq_list))
+		llist_add_batch(rq_list.first, last, &hctx->dispatch);
+
 	queued = 0;
-	while (!list_empty(&rq_list)) {
-		struct request *rq;
+	first = llist_del_all(&hctx->dispatch);
+
+	while (first) {
+		struct llist_node *entry;
 		int ret;
 
-		rq = list_entry(rq_list.next, struct request, queuelist);
+		entry = first;
+		first = first->next;
+
+		rq = llist_entry(entry, struct request, ll_list);
 		blk_mq_start_request(rq);
 
 		ret = q->mq_ops->queue_rq(hctx, rq);
@@ -205,11 +228,15 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	else if (queued < (1 << (BLK_MQ_MAX_DISPATCH_ORDER - 1)))
 		hctx->dispatched[ilog2(queued) + 1]++;
 
+#if 0
 	if (!list_empty(&rq_list)) {
 		spin_lock(&hctx->lock);
 		list_splice(&rq_list, &hctx->pending);
 		spin_unlock(&hctx->lock);
 	}
+#else
+	BUG_ON(first);
+#endif
 }
 
 void blk_mq_run_queues(struct request_queue *q, bool async)
@@ -219,7 +246,7 @@ void blk_mq_run_queues(struct request_queue *q, bool async)
 
 	queue_for_each_hw_ctx(q, hctx, i) {
 		if (!blk_mq_hctx_map_has_bit_set(hctx) &&
-		    list_empty(&hctx->pending))
+		    llist_empty(&hctx->dispatch))
 			continue;
 
 		if (!async)
@@ -387,7 +414,7 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 
 		INIT_DELAYED_WORK(&hctx->delayed_work, blk_mq_work_fn);
 		spin_lock_init(&hctx->lock);
-		INIT_LIST_HEAD(&hctx->pending);
+		init_llist_head(&hctx->dispatch);
 		atomic_set(&hctx->run_count, 0);
 		hctx->queue = q;
 		hctx->flags = reg->flags;

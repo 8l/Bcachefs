@@ -13,6 +13,12 @@
 #include <linux/blk-mq.h>
 #include "blk.h"
 
+#undef BLK_MQ_IPI_REDIRECT
+
+#ifdef BLK_MQ_IPI_REDIRECT
+static DEFINE_PER_CPU(struct llist_head, ipi_lists);
+#endif
+
 static struct request *blk_mq_alloc_request(struct request_queue *q,
 					    struct blk_mq_ctx *ctx,
 					    unsigned int rw_flags)
@@ -54,14 +60,18 @@ static void __blk_mq_end_io(struct request *rq, int error)
 	blk_mq_free_request(rq);
 }
 
-#undef BLK_MQ_IPI_REDIRECT
-
 #if defined(BLK_MQ_IPI_REDIRECT)
 static void ipi_end_io(void *data)
 {
-	struct request *rq = data;
+	struct llist_head *list = &per_cpu(ipi_lists, smp_processor_id());
+	struct llist_node *entry;
+	struct request *rq;
 
-	__blk_mq_end_io(rq, rq->errors);
+	while ((entry = llist_del_first(list)) != NULL) {
+		rq = llist_entry(entry, struct request, ll_list);
+
+		__blk_mq_end_io(rq, rq->errors);
+	}
 }
 
 void blk_mq_end_io(struct request *rq, int error)
@@ -75,10 +85,13 @@ void blk_mq_end_io(struct request *rq, int error)
 		struct call_single_data *data = &rq->csd;
 
 		rq->errors = error;
-		data->func = ipi_end_io;
-		data->info = rq;
-		data->flags = 0;
-		__smp_call_function_single(cpu, data, 0);
+		rq->ll_list.next = NULL;
+
+		if (llist_add(&rq->ll_list, &per_cpu(ipi_lists, cpu))) {
+			data->func = ipi_end_io;
+			data->flags = 0;
+			__smp_call_function_single(cpu, data, 0);
+		}
 	}
 
 	put_cpu();
@@ -461,3 +474,14 @@ void blk_mq_free_queue(struct request_queue *q)
 	q->queue_hw_ctx = NULL;
 }
 EXPORT_SYMBOL(blk_mq_free_queue);
+
+int blk_mq_init(void)
+{
+#ifdef BLK_MQ_IPI_REDIRECT
+	unsigned int i;
+
+	for_each_possible_cpu(i)
+		init_llist_head(&per_cpu(ipi_lists, i));
+#endif
+	return 0;
+}

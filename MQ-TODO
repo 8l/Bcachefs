@@ -1,8 +1,6 @@
 TODO list for multiqueue/new-queue. In no particular order.
 -----------------------------------------------------------
 
-- Batch IPI signalling to re-direct IOs at lower cost
-
 - Better switching scheme for deciding when to run
   queues inline and when to punt to kblockd.
 

@@ -61,6 +61,7 @@ static void __blk_mq_end_io(struct request *rq, int error)
 }
 
 #if defined(BLK_MQ_IPI_REDIRECT)
+/* FIXME: remember to add CPU hot-unplug support */
 static void ipi_end_io(void *data)
 {
 	struct llist_head *list = &per_cpu(ipi_lists, smp_processor_id());

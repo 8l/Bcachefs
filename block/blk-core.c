@@ -1138,7 +1138,12 @@ EXPORT_SYMBOL(blk_get_request);
 struct request *blk_make_request(struct request_queue *q, struct bio *bio,
 				 gfp_t gfp_mask)
 {
-	struct request *rq = blk_get_request(q, bio_data_dir(bio), gfp_mask);
+	struct request *rq;
+
+	if (q->mq_ops)
+		rq = blk_mq_alloc_request(q, bio_data_dir(bio), gfp_mask);
+	else
+		rq = blk_get_request(q, bio_data_dir(bio), gfp_mask);
 
 	if (unlikely(!rq))
 		return ERR_PTR(-ENOMEM);

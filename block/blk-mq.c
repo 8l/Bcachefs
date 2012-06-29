@@ -40,9 +40,9 @@ static void blk_mq_hctx_mark_pending(struct blk_mq_hw_ctx *hctx,
 		set_bit(ctx->index, hctx->ctx_map);
 }
 
-static struct request *blk_mq_alloc_request(struct request_queue *q,
-					    struct blk_mq_ctx *ctx,
-					    unsigned int rw_flags)
+static struct request *__blk_mq_alloc_request(struct request_queue *q,
+					      struct blk_mq_ctx *ctx,
+					      unsigned int rw_flags)
 {
 	struct request *rq;
 
@@ -52,6 +52,17 @@ static struct request *blk_mq_alloc_request(struct request_queue *q,
 	rq->cmd_flags = rw_flags;
 	ctx->rq_dispatched[rw_is_sync(rw_flags)]++;
 
+	return rq;
+}
+
+struct request *blk_mq_alloc_request(struct request_queue *q, int rw, gfp_t gfp)
+{
+	struct blk_mq_ctx *ctx;
+	struct request *rq;
+
+	ctx = per_cpu_ptr(q->queue_ctx, get_cpu());
+	rq = __blk_mq_alloc_request(q, ctx, rw);
+	put_cpu();
 	return rq;
 }
 
@@ -356,6 +367,19 @@ static void __blk_mq_insert_request(struct blk_mq_hw_ctx *hctx,
 	blk_mq_add_timer(rq);
 }
 
+void blk_mq_insert_request(struct request_queue *q, struct request *rq)
+{
+	struct blk_mq_hw_ctx *hctx;
+	struct blk_mq_ctx *ctx;
+
+	ctx = rq->mq_ctx;
+	hctx = q->mq_ops->map_queue(q, ctx);
+
+	spin_lock(&ctx->lock);
+	__blk_mq_insert_request(hctx, ctx, rq);
+	spin_unlock(&ctx->lock);
+}
+
 void blk_mq_insert_requests(struct request_queue *q, struct list_head *list)
 {
 	struct blk_mq_hw_ctx *hctx;
@@ -400,7 +424,7 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 		if (is_sync)
 			rw_flags |= REQ_SYNC;
 
-		rq = blk_mq_alloc_request(q, ctx, rw_flags);
+		rq = __blk_mq_alloc_request(q, ctx, rw_flags);
 
 		init_request_from_bio(rq, bio);
 		__blk_mq_insert_request(hctx, ctx, rq);

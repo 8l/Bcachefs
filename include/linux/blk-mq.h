@@ -6,11 +6,11 @@
 struct blk_mq_ctx {
 	spinlock_t		lock;
 
-	unsigned int		cpu;
-
 	struct list_head	rq_list;
 
 	struct list_head	timeout;
+
+	unsigned int		index;
 
 	/* incremented at dispatch time */
 	unsigned long		rq_dispatched[2];
@@ -106,17 +106,6 @@ void blk_mq_end_io(struct request *rq, int error);
 		__ret += sum;						\
 	__ret;								\
 })
-
-static inline bool blk_mq_hctx_map_has_bit_set(struct blk_mq_hw_ctx *hctx)
-{
-	unsigned int i;
-
-	for (i = 0; i < hctx->nr_ctx_map; i++)
-		if (hctx->ctx_map[i])
-			return true;
-
-	return false;
-}
 
 static inline unsigned int __blk_mq_in_flight(struct request_queue *q, int sync)
 {

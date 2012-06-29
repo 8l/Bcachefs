@@ -17,6 +17,30 @@
 static DEFINE_PER_CPU(struct llist_head, ipi_lists);
 static bool do_ipi_redirect = false;
 
+/*
+ * Check if any of the ctx's have pending work in this hardware queue
+ */
+static bool blk_mq_hctx_has_pending(struct blk_mq_hw_ctx *hctx)
+{
+	unsigned int i;
+
+	for (i = 0; i < hctx->nr_ctx_map; i++)
+		if (hctx->ctx_map[i])
+			return true;
+
+	return false;
+}
+
+/*
+ * Mark this ctx as having pending work in this hardware queue
+ */
+static void blk_mq_hctx_mark_pending(struct blk_mq_hw_ctx *hctx,
+				     struct blk_mq_ctx *ctx)
+{
+	if (!test_bit(ctx->index, hctx->ctx_map))
+		set_bit(ctx->index, hctx->ctx_map);
+}
+
 static struct request *blk_mq_alloc_request(struct request_queue *q,
 					    struct blk_mq_ctx *ctx,
 					    unsigned int rw_flags)
@@ -88,7 +112,7 @@ void blk_mq_end_io(struct request *rq, int error)
 		return __blk_mq_end_io(rq, error);
 
 	cpu = get_cpu();
-	if (cpu == ctx->cpu)
+	if (cpu == ctx->index)
 		__blk_mq_end_io(rq, error);
 	else {
 		struct call_single_data *data = &rq->csd;
@@ -206,7 +230,7 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	for_each_set_bit(bit, hctx->ctx_map, hctx->nr_ctx) {
 		clear_bit(bit, hctx->ctx_map);
 		ctx = hctx->ctxs[bit];
-		BUG_ON(bit != ctx->cpu);
+		BUG_ON(bit != ctx->index);
 
 		spin_lock(&ctx->lock);
 		list_splice_tail_init(&ctx->rq_list, &tmp);
@@ -293,7 +317,7 @@ void blk_mq_run_queues(struct request_queue *q, bool async)
 	int i;
 
 	queue_for_each_hw_ctx(q, hctx, i) {
-		if (!blk_mq_hctx_map_has_bit_set(hctx) &&
+		if (!blk_mq_hctx_has_pending(hctx) &&
 		    llist_empty(&hctx->dispatch))
 			continue;
 
@@ -322,9 +346,7 @@ static void __blk_mq_insert_request(struct blk_mq_hw_ctx *hctx,
 				    struct request *rq)
 {
 	list_add_tail(&rq->queuelist, &ctx->rq_list);
-
-	if (!test_bit(ctx->cpu, hctx->ctx_map))
-		set_bit(ctx->cpu, hctx->ctx_map);
+	blk_mq_hctx_mark_pending(hctx, ctx);
 
 	/*
 	 * We do this early, to ensure we are on the right CPU.
@@ -449,7 +471,7 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 
 		memset(__ctx, 0, sizeof(*__ctx));
 		spin_lock_init(&__ctx->lock);
-		__ctx->cpu = i;
+		__ctx->index = i;
 		INIT_LIST_HEAD(&__ctx->rq_list);
 		INIT_LIST_HEAD(&__ctx->timeout);
 	}

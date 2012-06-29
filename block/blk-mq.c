@@ -58,6 +58,9 @@ static void __blk_mq_end_io(struct request *rq, int error)
 	blk_mq_free_request(rq);
 }
 
+/*
+ * Called with interrupts disabled.
+ */
 static void ipi_end_io(void *data)
 {
 	struct llist_head *list = &per_cpu(ipi_lists, smp_processor_id());
@@ -71,12 +74,17 @@ static void ipi_end_io(void *data)
 	}
 }
 
+/*
+ * End IO on this request on a multiqueue enabled driver. We'll either do
+ * it directly inline, or punt to a local IPI handler on the matching
+ * remote CPU.
+ */
 void blk_mq_end_io(struct request *rq, int error)
 {
 	struct blk_mq_ctx *ctx = rq->mq_ctx;
 	int cpu;
 
-	if (do_ipi_redirect)
+	if (!do_ipi_redirect)
 		return __blk_mq_end_io(rq, error);
 
 	cpu = get_cpu();
@@ -99,11 +107,13 @@ void blk_mq_end_io(struct request *rq, int error)
 }
 EXPORT_SYMBOL(blk_mq_end_io);
 
+/*
+ * FIXME: we currently don't add requests to the ctx timeout list
+ */
 static void blk_mq_start_request(struct request *rq)
 {
 	struct request_queue *q = rq->q;
 
-	list_del_init(&rq->queuelist);
 	rq->deadline = jiffies + q->rq_timeout;
 	set_bit(REQ_ATOM_STARTED, &rq->atomic_flags);
 }
@@ -130,6 +140,11 @@ static void blk_mq_rq_timer(unsigned long data)
 		mod_timer(&q->timeout, round_jiffies_up(next));
 }
 
+/*
+ * Reverse check our software queue for entries that we could potentially
+ * merge with. Currently includes a hand-wavy stop count of 8, to not spend
+ * too much time checking for merges.
+ */
 static bool blk_mq_attempt_merge(struct request_queue *q,
 				 struct blk_mq_ctx *ctx, struct bio *bio)
 {
@@ -167,6 +182,12 @@ static void blk_mq_add_timer(struct request *rq)
 	__blk_add_timer(rq, &rq->mq_ctx->timeout);
 }
 
+/*
+ * Run this hardware queue, pulling any software queues mapped to it in.
+ * Note that this function currently has various problems around ordering
+ * of IO. In particular, we'd like FIFO behaviour on handling existing
+ * items on the hctx->dispatch list. Ignore that for now.
+ */
 void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 {
 	struct request_queue *q = hctx->queue;
@@ -179,6 +200,9 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 
 	hctx->run++;
 
+	/*
+	 * Touch any software queue that has pending entries.
+	 */
 	for_each_set_bit(bit, hctx->ctx_map, hctx->nr_ctx) {
 		clear_bit(bit, hctx->ctx_map);
 		ctx = hctx->ctxs[bit];
@@ -188,6 +212,12 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		list_splice_tail_init(&ctx->rq_list, &tmp);
 		spin_unlock(&ctx->lock);
 
+		/*
+		 * Reverse-add the entries to a lockless list, using the
+		 * non-cmpxchg variant for adding the entries. It's a local
+		 * list on the stack, so we need not care about others
+		 * fiddling with it.
+		 */
 		while (!list_empty(&tmp)) {
 			rq = list_entry(tmp.prev, struct request, queuelist);
 			list_del(&rq->queuelist);
@@ -199,12 +229,21 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		}
 	}
 
+	/*
+	 * If we found entries above, batch add them to the dispatch list.
+	 */
 	if (!llist_empty(&rq_list))
 		llist_add_batch(rq_list.first, last, &hctx->dispatch);
 
+	/*
+	 * Delete and return all entries from our dispatch list
+	 */
 	queued = 0;
 	first = llist_del_all(&hctx->dispatch);
 
+	/*
+	 * Now process all the entries, sending them to the driver.
+	 */
 	while (first) {
 		struct llist_node *entry;
 		int ret;
@@ -243,6 +282,7 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		spin_unlock(&hctx->lock);
 	}
 #else
+	/* FIXME: handle requeues */
 	BUG_ON(first);
 #endif
 }
@@ -351,6 +391,9 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 		kblockd_schedule_delayed_work(q, &hctx->delayed_work, 2);
 }
 
+/*
+ * Default mapping to a software queue, since we use one per CPU
+ */
 struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *q,
 						 struct blk_mq_ctx *ctx)
 {
@@ -473,6 +516,9 @@ EXPORT_SYMBOL(blk_mq_free_queue);
 static int __cpuinit blk_mq_cpu_notify(struct notifier_block *self,
 				       unsigned long action, void *hcpu)
 {
+	/*
+	 * If the CPU goes away, ensure that we run any pending completions.
+	 */
 	if (action == CPU_DEAD || action == CPU_DEAD_FROZEN) {
 		int cpu = (unsigned long) hcpu;
 		struct llist_node *node;

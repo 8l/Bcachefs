@@ -299,16 +299,16 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	else if (queued < (1 << (BLK_MQ_MAX_DISPATCH_ORDER - 1)))
 		hctx->dispatched[ilog2(queued) + 1]++;
 
-#if 0
-	if (!list_empty(&rq_list)) {
-		spin_lock(&hctx->lock);
-		list_splice(&rq_list, &hctx->pending);
-		spin_unlock(&hctx->lock);
+	/*
+	 * Any items that need requeuing? Find last entry, batch re-add.
+	 */
+	if (first) {
+		last = NULL;
+		while (first->next)
+			last = first->next;
+
+		llist_add_batch(first, last, &hctx->dispatch);
 	}
-#else
-	/* FIXME: handle requeues */
-	BUG_ON(first);
-#endif
 }
 
 void blk_mq_run_queues(struct request_queue *q, bool async)

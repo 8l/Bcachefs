@@ -564,7 +564,7 @@ static struct notifier_block __cpuinitdata blk_mq_cpu_notifier = {
 	.notifier_call	= blk_mq_cpu_notify,
 };
 
-int blk_mq_init(void)
+int __init blk_mq_init(void)
 {
 	unsigned int i;
 

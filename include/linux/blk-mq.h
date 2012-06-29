@@ -11,6 +11,7 @@ struct blk_mq_ctx {
 	struct list_head	timeout;
 
 	unsigned int		index;
+	unsigned int		ipi_redirect;
 
 	/* incremented at dispatch time */
 	unsigned long		rq_dispatched[2];
@@ -62,6 +63,7 @@ enum {
 
 	BLK_MQ_F_SHOULD_MERGE	= 1 << 0,
 	BLK_MQ_F_SHOULD_SORT	= 1 << 1,
+	BLK_MQ_F_SHOULD_IPI	= 1 << 2,
 };
 
 struct blk_mq_reg {

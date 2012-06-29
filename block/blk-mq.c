@@ -15,7 +15,6 @@
 #include "blk.h"
 
 static DEFINE_PER_CPU(struct llist_head, ipi_lists);
-static bool do_ipi_redirect = false;
 
 /*
  * Check if any of the ctx's have pending work in this hardware queue
@@ -108,7 +107,7 @@ void blk_mq_end_io(struct request *rq, int error)
 	struct blk_mq_ctx *ctx = rq->mq_ctx;
 	int cpu;
 
-	if (!do_ipi_redirect)
+	if (!ctx->ipi_redirect)
 		return __blk_mq_end_io(rq, error);
 
 	cpu = get_cpu();

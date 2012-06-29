@@ -183,6 +183,40 @@ static ssize_t blk_mq_hw_sysfs_rq_list_show(struct blk_mq_hw_ctx *hctx, char *pa
 	return sysfs_llist_show(page, hctx->dispatch.first, "HCTX pending");
 }
 
+static ssize_t blk_mq_hw_sysfs_ipi_show(struct blk_mq_hw_ctx *hctx, char *page)
+{
+	ssize_t ret;
+
+	spin_lock_irq(&hctx->lock);
+	ret = sprintf(page, "%u\n", !!(hctx->flags & BLK_MQ_F_SHOULD_IPI));
+	spin_unlock_irq(&hctx->lock);
+
+	return ret;
+}
+
+static ssize_t blk_mq_hw_sysfs_ipi_store(struct blk_mq_hw_ctx *hctx,
+					 const char *page, size_t len)
+{
+	char *p = (char *) page;
+	struct blk_mq_ctx *ctx;
+	unsigned long ret;
+	unsigned int i;
+
+	ret = simple_strtoul(p, &p, 10);
+
+	spin_lock_irq(&hctx->lock);
+	if (ret)
+		hctx->flags |= BLK_MQ_F_SHOULD_IPI;
+	else
+		hctx->flags &= ~BLK_MQ_F_SHOULD_IPI;
+	spin_unlock_irq(&hctx->lock);
+
+	hctx_for_each_ctx(hctx, ctx, i)
+		ctx->ipi_redirect = !!ret;
+
+	return len;
+}
+
 static struct blk_mq_ctx_sysfs_entry blk_mq_sysfs_dispatched = {
 	.attr = {.name = "dispatched", .mode = S_IRUGO },
 	.show = blk_mq_sysfs_dispatched_show,
@@ -224,12 +258,18 @@ static struct blk_mq_hw_ctx_sysfs_entry blk_mq_hw_sysfs_pending = {
 	.attr = {.name = "pending", .mode = S_IRUGO },
 	.show = blk_mq_hw_sysfs_rq_list_show,
 };
+static struct blk_mq_hw_ctx_sysfs_entry blk_mq_hw_sysfs_ipi = {
+	.attr = {.name = "ipi_redirect", .mode = S_IRUGO | S_IWUGO},
+	.show = blk_mq_hw_sysfs_ipi_show,
+	.store = blk_mq_hw_sysfs_ipi_store,
+};
 
 static struct attribute *default_hw_ctx_attrs[] = {
 	&blk_mq_hw_sysfs_queued.attr,
 	&blk_mq_hw_sysfs_run.attr,
 	&blk_mq_hw_sysfs_dispatched.attr,
 	&blk_mq_hw_sysfs_pending.attr,
+	&blk_mq_hw_sysfs_ipi.attr,
 	NULL,
 };
 

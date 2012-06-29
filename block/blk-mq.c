@@ -307,7 +307,10 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		while (first->next)
 			last = first->next;
 
-		llist_add_batch(first, last, &hctx->dispatch);
+		if (last)
+			llist_add_batch(first, last, &hctx->dispatch);
+		else
+			llist_add(first, &hctx->dispatch);
 	}
 }
 

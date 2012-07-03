@@ -1365,7 +1365,7 @@ bool bio_attempt_front_merge(struct request_queue *q, struct request *req,
 }
 
 /**
- * attempt_plug_merge - try to merge with %current's plugged list
+ * blk_attempt_plug_merge - try to merge with %current's plugged list
  * @q: request_queue new bio is being queued at
  * @bio: new bio being queued
  * @request_count: out parameter for number of traversed plugged requests
@@ -1381,8 +1381,8 @@ bool bio_attempt_front_merge(struct request_queue *q, struct request *req,
  * reliable access to the elevator outside queue lock.  Only check basic
  * merging parameters without querying the elevator.
  */
-static bool attempt_plug_merge(struct request_queue *q, struct bio *bio,
-			       unsigned int *request_count)
+bool blk_attempt_plug_merge(struct request_queue *q, struct bio *bio,
+			    unsigned int *request_count)
 {
 	struct blk_plug *plug;
 	struct request *rq;
@@ -1456,7 +1456,7 @@ void blk_queue_bio(struct request_queue *q, struct bio *bio)
 	 * Check if we can merge with the plugged list before grabbing
 	 * any locks.
 	 */
-	if (attempt_plug_merge(q, bio, &request_count))
+	if (blk_attempt_plug_merge(q, bio, &request_count))
 		return;
 
 	spin_lock_irq(q->queue_lock);

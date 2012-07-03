@@ -24,7 +24,8 @@ struct blk_mq_ctx {
 };
 
 struct blk_mq_hw_ctx {
-	spinlock_t		lock;
+	spinlock_t		__lock;
+	spinlock_t		*lock;
 
 	struct llist_head	dispatch;
 	struct delayed_work	delayed_work;
@@ -37,8 +38,6 @@ struct blk_mq_hw_ctx {
 	struct blk_mq_ctx	**ctxs;
 	unsigned int 		nr_ctx_map;
 	unsigned long		*ctx_map;
-
-	atomic_t		run_count;
 
 	unsigned long		queued;
 	unsigned long		run;
@@ -64,6 +63,7 @@ enum {
 	BLK_MQ_F_SHOULD_MERGE	= 1 << 0,
 	BLK_MQ_F_SHOULD_SORT	= 1 << 1,
 	BLK_MQ_F_SHOULD_IPI	= 1 << 2,
+	BLK_MQ_F_SHOULD_LOCK	= 1 << 3, /* lock on queue_rq invocation */
 };
 
 struct blk_mq_reg {
@@ -75,7 +75,7 @@ struct blk_mq_reg {
 	unsigned int		flags;		/* BLK_MQ_F_* */
 };
 
-struct request_queue *blk_mq_init_queue(struct blk_mq_reg *);
+struct request_queue *blk_mq_init_queue(struct blk_mq_reg *, spinlock_t *);
 void blk_mq_free_queue(struct request_queue *);
 int blk_mq_register_disk(struct gendisk *);
 void blk_mq_unregister_disk(struct gendisk *);

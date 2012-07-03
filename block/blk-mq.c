@@ -228,6 +228,7 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	struct blk_mq_ctx *ctx;
 	struct request *rq;
 	struct llist_node *first, *last = NULL;
+	unsigned long flags;
 	LLIST_HEAD(rq_list);
 	LIST_HEAD(tmp);
 	int bit, queued;
@@ -278,6 +279,9 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	/*
 	 * Now process all the entries, sending them to the driver.
 	 */
+	if (hctx->flags & BLK_MQ_F_SHOULD_LOCK)
+		spin_lock_irqsave(hctx->lock, flags);
+
 	while (first) {
 		struct llist_node *entry;
 		int ret;
@@ -287,6 +291,9 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 
 		rq = llist_entry(entry, struct request, ll_list);
 		blk_mq_start_request(rq);
+
+		if (!first)
+			rq->cmd_flags |= REQ_END;
 
 		ret = q->mq_ops->queue_rq(hctx, rq);
 		switch (ret) {
@@ -303,6 +310,9 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 			break;
 		}
 	}
+
+	if (hctx->flags & BLK_MQ_F_SHOULD_LOCK)
+		spin_unlock_irqrestore(hctx->lock, flags);
 
 	if (!queued)
 		hctx->dispatched[0]++;
@@ -385,6 +395,9 @@ void blk_mq_insert_requests(struct request_queue *q, struct list_head *list)
 	struct blk_mq_hw_ctx *hctx;
 	struct blk_mq_ctx *ctx;
 
+	if (list_empty(list))
+		return;
+
 	ctx = per_cpu_ptr(q->queue_ctx, smp_processor_id());
 	hctx = q->mq_ops->map_queue(q, ctx);
 	
@@ -397,6 +410,24 @@ void blk_mq_insert_requests(struct request_queue *q, struct list_head *list)
 		__blk_mq_insert_request(hctx, ctx, rq);
 	}
 	spin_unlock(&ctx->lock);
+
+	blk_mq_run_hw_queue(hctx);
+}
+
+static struct request *blk_mq_bio_to_request(struct request_queue *q,
+					     struct blk_mq_ctx *ctx,
+					     struct bio *bio)
+{
+	unsigned int rw_flags;
+	struct request *rq;
+
+	rw_flags = bio_data_dir(bio);
+	if (rw_is_sync(bio->bi_rw))
+		rw_flags |= REQ_SYNC;
+
+	rq = __blk_mq_alloc_request(q, ctx, rw_flags);
+	init_request_from_bio(rq, bio);
+	return rq;
 }
 
 static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
@@ -405,8 +436,13 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 	struct blk_mq_ctx *ctx;
 	int is_sync = rw_is_sync(bio->bi_rw);
 	struct request *rq;
+	unsigned int request_count = 0;
+	struct blk_plug *plug;
 
 	blk_queue_bounce(q, &bio);
+
+	if (blk_attempt_plug_merge(q, bio, &request_count))
+		return;
 
 	preempt_disable();
 	ctx = per_cpu_ptr(q->queue_ctx, smp_processor_id());
@@ -414,19 +450,19 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 
 	hctx->queued++;
 
+	plug = current->plug;
+	if (plug) {
+		rq = blk_mq_bio_to_request(q, ctx, bio);
+		list_add_tail(&rq->queuelist, &plug->list);
+		preempt_enable();
+		return;
+	}
+
 	spin_lock(&ctx->lock);
 
 	if (!(hctx->flags & BLK_MQ_F_SHOULD_MERGE) ||
 	    !blk_mq_attempt_merge(q, ctx, bio)) {
-		unsigned int rw_flags;
-
-		rw_flags = bio_data_dir(bio);
-		if (is_sync)
-			rw_flags |= REQ_SYNC;
-
-		rq = __blk_mq_alloc_request(q, ctx, rw_flags);
-
-		init_request_from_bio(rq, bio);
+		rq = blk_mq_bio_to_request(q, ctx, bio);
 		__blk_mq_insert_request(hctx, ctx, rq);
 	}
 
@@ -449,7 +485,8 @@ struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *q,
 }
 EXPORT_SYMBOL(blk_mq_map_single_queue);
 
-struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
+struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
+					spinlock_t *lock)
 {
 	struct blk_mq_hw_ctx *hctx;
 	struct blk_mq_ctx *ctx;
@@ -512,11 +549,15 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 		unsigned int num_maps;
 
 		INIT_DELAYED_WORK(&hctx->delayed_work, blk_mq_work_fn);
-		spin_lock_init(&hctx->lock);
+		spin_lock_init(&hctx->__lock);
 		init_llist_head(&hctx->dispatch);
-		atomic_set(&hctx->run_count, 0);
 		hctx->queue = q;
 		hctx->flags = reg->flags;
+
+		if (!lock)
+			hctx->lock = &hctx->__lock;
+		else
+			hctx->lock = lock;
 
 		/* FIXME: alloc failure handling */
 		hctx->ctxs = kmalloc_node(hctx->nr_ctx *

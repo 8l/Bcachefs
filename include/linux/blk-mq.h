@@ -39,10 +39,17 @@ struct blk_mq_hw_ctx {
 	unsigned int 		nr_ctx_map;
 	unsigned long		*ctx_map;
 
+	struct request		*rqs;
+	unsigned long		*rq_map;
+	wait_queue_head_t	rq_wait;
+
 	unsigned long		queued;
 	unsigned long		run;
 #define BLK_MQ_MAX_DISPATCH_ORDER	10
 	unsigned long		dispatched[BLK_MQ_MAX_DISPATCH_ORDER];
+
+	unsigned int		queue_depth;
+	unsigned int		numa_node;
 
 	struct kobject		kobj;
 };
@@ -64,6 +71,8 @@ enum {
 	BLK_MQ_F_SHOULD_SORT	= 1 << 1,
 	BLK_MQ_F_SHOULD_IPI	= 1 << 2,
 	BLK_MQ_F_SHOULD_LOCK	= 1 << 3, /* lock on queue_rq invocation */
+
+	BLK_MQ_MAX_DEPTH	= 256,
 };
 
 struct blk_mq_reg {

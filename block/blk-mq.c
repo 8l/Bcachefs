@@ -40,19 +40,64 @@ static void blk_mq_hctx_mark_pending(struct blk_mq_hw_ctx *hctx,
 		set_bit(ctx->index, hctx->ctx_map);
 }
 
-static struct request *__blk_mq_alloc_request(struct request_queue *q,
-					      struct blk_mq_ctx *ctx,
-					      unsigned int rw_flags)
+static struct request *__blk_mq_alloc_rq_nowait(struct blk_mq_hw_ctx *hctx)
 {
 	struct request *rq;
+	unsigned int tag;
 
-	rq = kmem_cache_alloc(request_cachep, GFP_ATOMIC);
-	blk_rq_init(q, rq);
-	rq->mq_ctx = ctx;
-	rq->cmd_flags = rw_flags;
-	ctx->rq_dispatched[rw_is_sync(rw_flags)]++;
+	do {
+		tag = find_first_zero_bit(hctx->rq_map, hctx->queue_depth);
+		if (tag >= hctx->queue_depth)
+			return NULL;
+	} while (test_and_set_bit_lock(tag, hctx->rq_map));
+
+	rq = &hctx->rqs[tag];
+	rq->tag = tag;
 
 	return rq;
+}
+
+static struct request *__blk_mq_alloc_request(struct request_queue *q,
+					      struct blk_mq_ctx *ctx,
+					      unsigned int rw_flags, gfp_t gfp,
+					      bool has_lock)
+{
+	struct blk_mq_hw_ctx *hctx;
+	struct request *rq = NULL;
+	DEFINE_WAIT(wait);
+
+	hctx = q->mq_ops->map_queue(q, ctx);
+
+	rq = __blk_mq_alloc_rq_nowait(hctx);
+	if (rq) {
+got_rq:
+		rq->mq_ctx = ctx;
+		rq->cmd_flags = rw_flags;
+		ctx->rq_dispatched[rw_is_sync(rw_flags)]++;
+
+		return rq;
+	}
+
+	if (!(gfp & __GFP_WAIT))
+		return NULL;
+
+	if (has_lock)
+		spin_unlock(&ctx->lock);
+
+	do {
+		prepare_to_wait(&hctx->rq_wait, &wait, TASK_UNINTERRUPTIBLE);
+		rq = __blk_mq_alloc_rq_nowait(hctx);
+		if (rq)
+			break;
+
+		io_schedule();
+	} while (!rq);
+
+	if (has_lock)
+		spin_lock(&ctx->lock);
+
+	finish_wait(&hctx->rq_wait, &wait);
+	goto got_rq;
 }
 
 struct request *blk_mq_alloc_request(struct request_queue *q, int rw, gfp_t gfp)
@@ -61,7 +106,7 @@ struct request *blk_mq_alloc_request(struct request_queue *q, int rw, gfp_t gfp)
 	struct request *rq;
 
 	ctx = per_cpu_ptr(q->queue_ctx, get_cpu());
-	rq = __blk_mq_alloc_request(q, ctx, rw);
+	rq = __blk_mq_alloc_request(q, ctx, rw, gfp, false);
 	put_cpu();
 	return rq;
 }
@@ -69,9 +114,18 @@ struct request *blk_mq_alloc_request(struct request_queue *q, int rw, gfp_t gfp)
 static void blk_mq_free_request(struct request *rq)
 {
 	struct blk_mq_ctx *ctx = rq->mq_ctx;
+	struct blk_mq_hw_ctx *hctx;
+	struct request_queue *q = rq->q;
+	const int tag = rq->tag;
 
 	ctx->rq_completed[rq_is_sync(rq)]++;
-	kmem_cache_free(request_cachep, rq);
+
+	hctx = q->mq_ops->map_queue(q, ctx);
+	blk_rq_init(hctx->queue, rq);
+	clear_bit_unlock(tag, hctx->rq_map);
+
+	if (waitqueue_active(&hctx->rq_wait))
+		wake_up(&hctx->rq_wait);
 }
 
 static void __blk_mq_end_io(struct request *rq, int error)
@@ -418,7 +472,7 @@ void blk_mq_insert_requests(struct request_queue *q, struct list_head *list)
 
 static struct request *blk_mq_bio_to_request(struct request_queue *q,
 					     struct blk_mq_ctx *ctx,
-					     struct bio *bio)
+					     struct bio *bio, bool has_lock)
 {
 	unsigned int rw_flags;
 	struct request *rq;
@@ -427,8 +481,10 @@ static struct request *blk_mq_bio_to_request(struct request_queue *q,
 	if (rw_is_sync(bio->bi_rw))
 		rw_flags |= REQ_SYNC;
 
-	rq = __blk_mq_alloc_request(q, ctx, rw_flags);
-	init_request_from_bio(rq, bio);
+	rq = __blk_mq_alloc_request(q, ctx, rw_flags, GFP_ATOMIC | __GFP_WAIT, has_lock);
+	if (rq)
+		init_request_from_bio(rq, bio);
+
 	return rq;
 }
 
@@ -446,17 +502,15 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 	if (blk_attempt_plug_merge(q, bio, &request_count))
 		return;
 
-	preempt_disable();
-	ctx = per_cpu_ptr(q->queue_ctx, smp_processor_id());
+	ctx = per_cpu_ptr(q->queue_ctx, raw_smp_processor_id());
 	hctx = q->mq_ops->map_queue(q, ctx);
 
 	hctx->queued++;
 
 	plug = current->plug;
 	if (plug) {
-		rq = blk_mq_bio_to_request(q, ctx, bio);
+		rq = blk_mq_bio_to_request(q, ctx, bio, false);
 		list_add_tail(&rq->queuelist, &plug->list);
-		preempt_enable();
 		return;
 	}
 
@@ -464,12 +518,11 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 
 	if (!(hctx->flags & BLK_MQ_F_SHOULD_MERGE) ||
 	    !blk_mq_attempt_merge(q, ctx, bio)) {
-		rq = blk_mq_bio_to_request(q, ctx, bio);
+		rq = blk_mq_bio_to_request(q, ctx, bio, true);
 		__blk_mq_insert_request(hctx, ctx, rq);
 	}
 
 	spin_unlock(&ctx->lock);
-	preempt_enable();
 
 	if (is_sync)
 		blk_mq_run_hw_queue(hctx);
@@ -487,6 +540,31 @@ struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *q,
 }
 EXPORT_SYMBOL(blk_mq_map_single_queue);
 
+static int blk_mq_init_rq_map(struct blk_mq_hw_ctx *hctx)
+{
+	unsigned int num_maps;
+	int i;
+
+	hctx->rqs = kmalloc_node(hctx->queue_depth * sizeof(struct request),
+					GFP_KERNEL, hctx->numa_node);
+	if (!hctx->rqs)
+		return -ENOMEM;
+
+	num_maps = ALIGN(hctx->queue_depth, BITS_PER_LONG) / BITS_PER_LONG;
+	hctx->rq_map = kzalloc_node(num_maps * sizeof(unsigned long),
+					GFP_KERNEL, hctx->numa_node);
+	if (!hctx->rq_map) {
+		kfree(hctx->rqs);
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < hctx->queue_depth; i++)
+		blk_rq_init(hctx->queue, &hctx->rqs[i]);
+
+	init_waitqueue_head(&hctx->rq_wait);
+	return 0;
+}
+
 struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 					spinlock_t *lock)
 {
@@ -499,7 +577,11 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 		return ERR_PTR(-EINVAL);
 
 	if (!reg->queue_depth)
-		reg->queue_depth = BLKDEV_MAX_RQ;
+		reg->queue_depth = BLK_MQ_MAX_DEPTH;
+	else if (reg->queue_depth > BLK_MQ_MAX_DEPTH) {
+		printk(KERN_ERR "blk-mq: queuedepth too large (%u)\n", reg->queue_depth);
+		reg->queue_depth = BLK_MQ_MAX_DEPTH;
+	}
 
 	ctx = alloc_percpu(struct blk_mq_ctx);
 	if (!ctx)
@@ -555,6 +637,8 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 		init_llist_head(&hctx->dispatch);
 		hctx->queue = q;
 		hctx->flags = reg->flags;
+		hctx->queue_depth = reg->queue_depth;
+		hctx->numa_node = reg->numa_node;
 
 		if (!lock)
 			hctx->lock = &hctx->__lock;
@@ -562,10 +646,13 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 			hctx->lock = lock;
 
 		/* FIXME: alloc failure handling */
+		blk_mq_init_rq_map(hctx);
+
+		/* FIXME: alloc failure handling */
 		hctx->ctxs = kmalloc_node(hctx->nr_ctx *
 				sizeof(void *), GFP_KERNEL, reg->numa_node);
 
-		num_maps = (nr_cpu_ids + BITS_PER_LONG - 1) / BITS_PER_LONG;
+		num_maps = ALIGN(nr_cpu_ids, BITS_PER_LONG) / BITS_PER_LONG;
 		hctx->ctx_map = kmalloc_node(num_maps * sizeof(unsigned long),
 						GFP_KERNEL, reg->numa_node);
 		hctx->nr_ctx_map = num_maps;
@@ -594,6 +681,8 @@ void blk_mq_free_queue(struct request_queue *q)
 		cancel_delayed_work_sync(&hctx->delayed_work);
 		kfree(hctx->ctx_map);
 		kfree(hctx->ctxs);
+		kfree(hctx->rqs);
+		kfree(hctx->rq_map);
 	}
 
 	free_percpu(q->queue_ctx);

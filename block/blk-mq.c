@@ -228,7 +228,7 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	struct blk_mq_ctx *ctx;
 	struct request *rq;
 	struct llist_node *first, *last = NULL;
-	unsigned long flags;
+	unsigned long flags = 0;
 	LLIST_HEAD(rq_list);
 	LIST_HEAD(tmp);
 	int bit, queued;

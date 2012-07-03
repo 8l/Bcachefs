@@ -8,8 +8,6 @@ struct blk_mq_ctx {
 
 	struct list_head	rq_list;
 
-	struct list_head	timeout;
-
 	unsigned int		index;
 	unsigned int		ipi_redirect;
 
@@ -60,6 +58,7 @@ typedef struct blk_mq_hw_ctx *(map_queue_fn) (struct request_queue *, struct blk
 struct blk_mq_ops {
 	queue_rq_fn		*queue_rq;
 	map_queue_fn		*map_queue;
+	rq_timed_out_fn		*timeout;
 };
 
 enum {
@@ -80,7 +79,7 @@ struct blk_mq_reg {
 	unsigned int		nr_hw_queues;
 	unsigned int		queue_depth;
 	int			numa_node;
-	unsigned int		should_sort;
+	unsigned int		timeout;
 	unsigned int		flags;		/* BLK_MQ_F_* */
 };
 

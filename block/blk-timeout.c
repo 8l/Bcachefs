@@ -179,7 +179,8 @@ void __blk_add_timer(struct request *req, struct list_head *timeout_list)
 		req->timeout = q->rq_timeout;
 
 	req->deadline = jiffies + req->timeout;
-	list_add_tail(&req->timeout_list, timeout_list);
+	if (timeout_list)
+		list_add_tail(&req->timeout_list, timeout_list);
 
 	/*
 	 * If the timer isn't already pending or this timeout is earlier

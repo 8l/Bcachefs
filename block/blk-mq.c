@@ -132,6 +132,9 @@ static void __blk_mq_end_io(struct request *rq, int error)
 {
 	struct bio *bio = rq->bio;
 
+	if (blk_mark_rq_complete(rq))
+		return;
+
 	while (bio) {
 		struct bio *next = bio->bi_next;
 
@@ -139,9 +142,6 @@ static void __blk_mq_end_io(struct request *rq, int error)
 		bio_endio(bio, error);
 		bio = next;
 	}
-
-	if (!list_empty(&rq->timeout_list))
-		list_del_init(&rq->timeout_list);
 
 	blk_mq_free_request(rq);
 }
@@ -206,23 +206,31 @@ static void blk_mq_start_request(struct request *rq)
 	set_bit(REQ_ATOM_STARTED, &rq->atomic_flags);
 }
 
+static void blk_mq_hw_ctx_check_timeout(struct blk_mq_hw_ctx *hctx,
+					unsigned long *next,
+					unsigned int *next_set)
+{
+	unsigned int i;
+
+	for_each_set_bit(i, hctx->rq_map, hctx->queue_depth) {
+		struct request *rq = &hctx->rqs[i];
+
+		if (!test_bit(REQ_ATOM_STARTED, &rq->atomic_flags))
+			continue;
+
+		blk_rq_check_expired(rq, next, next_set);
+	}
+}
+
 static void blk_mq_rq_timer(unsigned long data)
 {
 	struct request_queue *q = (struct request_queue *) data;
-	struct request *rq, *tmp;
+	struct blk_mq_hw_ctx *hctx;
 	unsigned long next = 0;
-	struct blk_mq_ctx *ctx;
 	int i, next_set = 0;
 
-	queue_for_each_ctx(q, ctx, i) {
-		spin_lock(&ctx->lock);
-		list_for_each_entry_safe(rq, tmp, &ctx->timeout, timeout_list) {
-			if (!test_bit(REQ_ATOM_STARTED, &rq->atomic_flags))
-				continue;
-			blk_rq_check_expired(rq, &next, &next_set);
-		}
-		spin_unlock(&ctx->lock);
-	}
+	queue_for_each_hw_ctx(q, hctx, i)
+		blk_mq_hw_ctx_check_timeout(hctx, &next, &next_set);
 
 	if (next_set)
 		mod_timer(&q->timeout, round_jiffies_up(next));
@@ -269,7 +277,7 @@ static bool blk_mq_attempt_merge(struct request_queue *q,
 
 static void blk_mq_add_timer(struct request *rq)
 {
-	__blk_add_timer(rq, &rq->mq_ctx->timeout);
+	__blk_add_timer(rq, NULL);
 }
 
 /*
@@ -608,6 +616,8 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 	q->queue_hw_ctx = hctx;
 
 	blk_queue_make_request(q, blk_mq_make_request);
+	blk_queue_rq_timed_out(q, reg->ops->timeout);
+	blk_queue_rq_timeout(q, reg->timeout);
 	q->mq_ops = reg->ops;
 
 	for_each_possible_cpu(i) {
@@ -620,7 +630,6 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 		spin_lock_init(&__ctx->lock);
 		__ctx->index = i;
 		INIT_LIST_HEAD(&__ctx->rq_list);
-		INIT_LIST_HEAD(&__ctx->timeout);
 	}
 
 	q->nr_queues = nr_cpu_ids;

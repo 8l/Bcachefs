@@ -200,11 +200,13 @@ static bool blk_mq_attempt_merge(struct request_queue *q,
 				ctx->rq_merged++;
 				return true;
 			}
+			break;
 		} else if (el_ret == ELEVATOR_FRONT_MERGE) {
 			if (bio_attempt_front_merge(q, rq, bio)) {
 				ctx->rq_merged++;
 				return true;
 			}
+			break;
 		}
 	}
 

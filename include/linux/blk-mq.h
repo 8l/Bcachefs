@@ -96,7 +96,7 @@ struct request *blk_mq_alloc_request(struct request_queue *q, int rw, gfp_t gfp)
 
 struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *q, struct blk_mq_ctx *);
 
-void blk_mq_end_io(struct request *rq, int error);
+void blk_mq_end_io(struct blk_mq_hw_ctx *hctx, struct request *rq, int error);
 
 #define queue_for_each_hw_ctx(q, hctx, i)				\
 	for ((i) = 0, hctx = &(q)->queue_hw_ctx[0];			\

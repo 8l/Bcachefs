@@ -11,6 +11,9 @@
 #include <linux/llist.h>
 #include <linux/cpu.h>
 
+#define CREATE_TRACE_POINTS
+#include <trace/events/block.h>
+
 #include <linux/blk-mq.h>
 #include "blk.h"
 
@@ -90,6 +93,7 @@ got_rq:
 		if (rq)
 			break;
 
+		trace_block_sleeprq(q, NULL, rw_flags & 1);
 		io_schedule();
 	} while (!rq);
 
@@ -134,6 +138,8 @@ static void __blk_mq_end_io(struct request *rq, int error)
 
 	if (blk_mark_rq_complete(rq))
 		return;
+
+	trace_block_rq_complete(rq->q, rq);
 
 	while (bio) {
 		struct bio *next = bio->bi_next;
@@ -201,6 +207,8 @@ EXPORT_SYMBOL(blk_mq_end_io);
 static void blk_mq_start_request(struct request *rq)
 {
 	struct request_queue *q = rq->q;
+
+	trace_block_rq_issue(q, rq);
 
 	rq->deadline = jiffies + q->rq_timeout;
 	set_bit(REQ_ATOM_STARTED, &rq->atomic_flags);
@@ -489,6 +497,8 @@ static struct request *blk_mq_bio_to_request(struct request_queue *q,
 	if (rw_is_sync(bio->bi_rw))
 		rw_flags |= REQ_SYNC;
 
+	trace_block_getrq(q, bio, rw_flags & 1);
+
 	rq = __blk_mq_alloc_request(q, ctx, rw_flags, GFP_ATOMIC | __GFP_WAIT, has_lock);
 	if (rq)
 		init_request_from_bio(rq, bio);
@@ -518,6 +528,8 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 	plug = current->plug;
 	if (plug) {
 		rq = blk_mq_bio_to_request(q, ctx, bio, false);
+		if (list_empty(&plug->list))
+			trace_block_plug(q);
 		list_add_tail(&rq->queuelist, &plug->list);
 		return;
 	}

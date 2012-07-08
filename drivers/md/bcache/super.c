@@ -886,7 +886,7 @@ static void cached_dev_detach_finish(struct work_struct *w)
 	BUG_ON(!atomic_read(&dc->disk.detaching));
 	BUG_ON(atomic_read(&dc->count));
 
-	sysfs_remove_link(&dc->disk.kobj, dc->disk.name);
+	sysfs_remove_link(&dc->disk.c->kobj, dc->disk.name);
 	sysfs_remove_link(&dc->disk.kobj, "cache");
 
 	mutex_lock(&register_lock);

@@ -1787,7 +1787,7 @@ static const char *register_cache(struct cache_sb *sb, struct page *sb_page,
 		ca->discard = CACHE_DISCARD(&ca->sb);
 
 	err = "error creating kobject";
-	if (kobject_add(&ca->kobj, &disk_to_dev(bdev->bd_disk)->kobj, "bcache"))
+	if (kobject_add(&ca->kobj, &part_to_dev(bdev->bd_part)->kobj, "bcache"))
 		goto err;
 
 	err = register_cache_set(ca);

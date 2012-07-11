@@ -131,6 +131,7 @@ static void refill_dirty(struct closure *cl)
 	if (!atomic_read(&dc->has_dirty)) {
 		SET_BDEV_STATE(&dc->sb, BDEV_STATE_CLEAN);
 		bch_write_bdev_super(dc, NULL);
+
 		up_write(&dc->writeback_lock);
 		closure_return(cl);
 	}
@@ -143,16 +144,15 @@ static void refill_dirty(struct closure *cl)
 	bch_refill_keybuf(dc->disk.c, buf, &end);
 
 	if (bkey_cmp(&buf->last_scanned, &end) >= 0 && searched_from_start) {
-		/* Searched the entire btree - delay for awhile */
+		/* Searched the entire btree  - delay awhile */
 
 		if (RB_EMPTY_ROOT(&buf->keys)) {
 			atomic_set(&dc->has_dirty, 0);
 			cached_dev_put(dc);
 		}
 
-		up_write(&dc->writeback_lock);
-		closure_delay(&dc->writeback, dc->writeback_delay * HZ);
-		continue_at(cl, refill_dirty, dirty_wq);
+		if (!atomic_read(&dc->disk.detaching))
+			closure_delay(&dc->writeback, dc->writeback_delay * HZ);
 	}
 
 	up_write(&dc->writeback_lock);
@@ -166,7 +166,9 @@ static void refill_dirty(struct closure *cl)
 void bch_writeback_queue(struct cached_dev *dc)
 {
 	if (closure_trylock(&dc->writeback.cl, &dc->disk.cl)) {
-		closure_delay(&dc->writeback, dc->writeback_delay * HZ);
+		if (!atomic_read(&dc->disk.detaching))
+			closure_delay(&dc->writeback, dc->writeback_delay * HZ);
+
 		continue_at(&dc->writeback.cl, refill_dirty, dirty_wq);
 	}
 }

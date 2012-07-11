@@ -309,69 +309,82 @@ bug:
 
 #ifdef CONFIG_DEBUG_FS
 
-static int bch_btree_dump(struct btree *b, struct btree_op *op, struct seq_file *f,
-			  const char *tabs, uint64_t *prev, uint64_t *sectors)
+/* XXX: cache set refcounting */
+
+struct dump_iterator {
+	char			buf[PAGE_SIZE];
+	size_t			bytes;
+	struct cache_set	*c;
+	struct keybuf		keys;
+};
+
+static bool dump_pred(struct keybuf *buf, struct bkey *k)
 {
-	struct bkey *k;
-	char buf[30];
-	uint64_t last, biggest = 0;
+	return true;
+}
 
-	for_each_key(b, k) {
-		int j = (uint64_t *) k - _t->data->d;
-		if (!j)
-			last = *prev;
+static ssize_t bch_dump_read(struct file *file, char __user *buf,
+			     size_t size, loff_t *ppos)
+{
+	struct dump_iterator *i = file->private_data;
+	ssize_t ret = 0;
 
-		if (last > KEY_OFFSET(k))
-			seq_printf(f, "Key skipped backwards\n");
+	while (size) {
+		struct keybuf_key *w;
+		unsigned bytes = min(i->bytes, size);
 
-		if (!b->level && j &&
-		    last != KEY_START(k))
-			seq_printf(f, "<hole>\n");
-		else if (b->level && !bch_ptr_bad(b, k))
-			btree(dump, k, b, op, f, tabs - 1, &last, sectors);
+		int err = copy_to_user(buf, i->buf, bytes);
+		if (err)
+			return err;
 
-		seq_printf(f, "%s%zi %4i: %s %s\n",
-			   tabs, _t - b->sets, j, pkey(k), buf);
+		ret	 += bytes;
+		buf	 += bytes;
+		size	 -= bytes;
+		i->bytes -= bytes;
+		memmove(i->buf, i->buf + bytes, i->bytes);
 
-		if (!b->level && !buf[0])
-			*sectors += KEY_SIZE(k);
+		if (i->bytes)
+			break;
 
-		last = KEY_OFFSET(k);
-		biggest = max(biggest, last);
+		w = bch_keybuf_next_rescan(i->c, &i->keys, &MAX_KEY);
+		if (!w)
+			break;
+
+		i->bytes = snprintf(i->buf, PAGE_SIZE, "%s\n", pkey(&w->key));
+		bch_keybuf_del(&i->keys, w);
 	}
-	*prev = biggest;
+
+	return ret;
+}
+
+static int bch_dump_open(struct inode *inode, struct file *file)
+{
+	struct cache_set *c = inode->i_private;
+	struct dump_iterator *i;
+
+	i = kzalloc(sizeof(struct dump_iterator), GFP_KERNEL);
+	if (!i)
+		return -ENOMEM;
+
+	file->private_data = i;
+	i->c = c;
+	bch_keybuf_init(&i->keys, dump_pred);
+	i->keys.last_scanned = KEY(0, 0, 0);
 
 	return 0;
 }
 
-static int debug_seq_show(struct seq_file *f, void *data)
+static int bch_dump_release(struct inode *inode, struct file *file)
 {
-	static const char *tabs = "\t\t\t\t\t";
-	uint64_t last = 0, sectors = 0;
-	struct cache_set *c = f->private;
-
-	struct btree_op op;
-	bch_btree_op_init_stack(&op);
-
-	btree_root(dump, c, &op, f, &tabs[4], &last, &sectors);
-
-	seq_printf(f, "%s\n" "%llu Mb found\n",
-		   pkey(&c->root->key), sectors / 2048);
-
-	closure_sync(&op.cl);
+	kfree(file->private_data);
 	return 0;
-}
-
-static int debug_seq_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, debug_seq_show, inode->i_private);
 }
 
 static const struct file_operations cache_set_debug_ops = {
 	.owner		= THIS_MODULE,
-	.open		= debug_seq_open,
-	.read		= seq_read,
-	.release	= single_release
+	.open		= bch_dump_open,
+	.read		= bch_dump_read,
+	.release	= bch_dump_release
 };
 
 void bch_debug_init_cache_set(struct cache_set *c)

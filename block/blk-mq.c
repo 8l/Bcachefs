@@ -635,7 +635,7 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 	for_each_possible_cpu(i) {
 		struct blk_mq_ctx *__ctx = per_cpu_ptr(ctx, i);
 
-		hctx = q->mq_ops->map_queue(q, ctx);
+		hctx = q->mq_ops->map_queue(q, __ctx);
 		hctx->nr_ctx++;
 
 		memset(__ctx, 0, sizeof(*__ctx));

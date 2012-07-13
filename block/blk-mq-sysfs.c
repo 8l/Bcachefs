@@ -332,6 +332,9 @@ int blk_mq_register_disk(struct gendisk *disk)
 		if (ret)
 			break;
 
+		if (!hctx->nr_ctx)
+			continue;
+
 		hctx_for_each_ctx(hctx, ctx, j) {
 			kobject_init(&ctx->kobj, &blk_mq_ctx_ktype);
 			ret = kobject_add(&ctx->kobj, &hctx->kobj, "%u", j);

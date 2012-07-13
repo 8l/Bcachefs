@@ -632,6 +632,9 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 	blk_queue_rq_timeout(q, reg->timeout);
 	q->mq_ops = reg->ops;
 
+	q->nr_queues = nr_cpu_ids;
+	q->nr_hw_queues = reg->nr_hw_queues;
+
 	for_each_possible_cpu(i) {
 		struct blk_mq_ctx *__ctx = per_cpu_ptr(ctx, i);
 
@@ -643,9 +646,6 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 		__ctx->index = i;
 		INIT_LIST_HEAD(&__ctx->rq_list);
 	}
-
-	q->nr_queues = nr_cpu_ids;
-	q->nr_hw_queues = reg->nr_hw_queues;
 
 	/*
 	 * Initialize hardware queues

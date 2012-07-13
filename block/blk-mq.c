@@ -624,16 +624,17 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 	setup_timer(&q->timeout, blk_mq_rq_timer, (unsigned long) q);
 	blk_queue_rq_timeout(q, 30000);
 
+	q->nr_queues = nr_cpu_ids;
+	q->nr_hw_queues = reg->nr_hw_queues;
+
 	q->queue_ctx = ctx;
 	q->queue_hw_ctx = hctx;
+
+	q->mq_ops = reg->ops;
 
 	blk_queue_make_request(q, blk_mq_make_request);
 	blk_queue_rq_timed_out(q, reg->ops->timeout);
 	blk_queue_rq_timeout(q, reg->timeout);
-	q->mq_ops = reg->ops;
-
-	q->nr_queues = nr_cpu_ids;
-	q->nr_hw_queues = reg->nr_hw_queues;
 
 	for_each_possible_cpu(i) {
 		struct blk_mq_ctx *__ctx = per_cpu_ptr(ctx, i);

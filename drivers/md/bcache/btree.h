@@ -1,6 +1,103 @@
 #ifndef _BCACHE_BTREE_H
 #define _BCACHE_BTREE_H
 
+/*
+ * THE BTREE:
+ *
+ * At a high level, bcache's btree is relatively standard b+ tree. All keys and
+ * pointers are in the leaves; interior nodes only have pointers to the child
+ * nodes.
+ *
+ * In the interior nodes, a struct bkey always points to a child btree node, and
+ * the key is the highest key in the child node - except that the highest key in
+ * an interior node is always MAX_KEY. The size field refers to the size on disk
+ * of the child node - this would allow us to have variable sized btree nodes
+ * (handy for keeping the depth of the btree 1 by expanding just the root).
+ *
+ * Btree nodes are themselves log structured, but this is hidden fairly
+ * thoroughly. Btree nodes on disk will in practice have extents that overlap
+ * (because they were written at different times), but in memory we never have
+ * overlapping extents - when we read in a btree node from disk, the first thing
+ * we do is resort all the sets of keys with a mergesort, and in the same pass
+ * we check for overlapping extents and adjust them appropriately.
+ *
+ * struct btree_op is a central interface to the btree code. It's used for
+ * specifying read vs. write locking, and the embedded closure is used for
+ * waiting on IO or reserve memory.
+ *
+ * BTREE CACHE:
+ *
+ * Btree nodes are cached in memory; traversing the btree might require reading
+ * in btree nodes which is handled mostly transparently.
+ *
+ * bch_get_bucket() looks up a btree node in the cache and reads it in from disk
+ * if necessary. This function is almost never called directly though - the
+ * btree() macro is used to get a btree node, call some function on it, and
+ * unlock the node after the function returns.
+ *
+ * The root is special cased - it's taken out of the cache's lru (thus pinning
+ * it in memory), so we can find the root of the btree by just dereferencing a
+ * pointer instead of looking it up in the cache. This makes locking a bit
+ * tricky, since the root pointer is protected by the lock in the btree node it
+ * points to - the btree_root() macro handles this.
+ *
+ * In various places we must be able to allocate memory for multiple btree nodes
+ * in order to make forward progress. To do this we use the btree cache itself
+ * as a reserve; if __get_free_pages() fails, we'll find a node in the btree
+ * cache we can reuse. We can't allow more than one thread to be doing this at a
+ * time, so there's a lock, implemented by a pointer to the btree_op closure -
+ * this allows the btree_root() macro to implicitly release this lock.
+ *
+ * BTREE IO:
+ *
+ * Btree nodes never have to be explicitly read in; bch_get_bucket() handles
+ * this.
+ *
+ * For writing, we have two btree_write structs embeddded in struct btree - one
+ * write in flight, and one being set up, and we toggle between them.
+ *
+ * Writing is done with a single function -  bch_btree_write() really serves two
+ * different purposes and should be broken up into two different functions. When
+ * passing now = false, it merely indicates that the node is now dirty - calling
+ * it ensures that the dirty keys will be written at some point in the future.
+ *
+ * When passing now = true, bch_btree_write() causes a write to happen
+ * "immediately" (if there was already a write in flight, it'll cause the write
+ * to happen as soon as the previous write completes). It returns immediately
+ * though - but it takes a refcount on the closure in struct btree_op you passed
+ * to it, so a closure_sync() later can be used to wait for the write to
+ * complete.
+ *
+ * This is handy because btree_split() and garbage collection can issue writes
+ * in parallel, reducing the amount of time they have to hold write locks.
+ *
+ * LOCKING:
+ *
+ * When traversing the btree, we may need write locks starting at some level -
+ * inserting a key into the btree will typically only require a write lock on
+ * the leaf node.
+ *
+ * This is specified with the lock field in struct btree_op; lock = 0 means we
+ * take write locks at level <= 0, i.e. only leaf nodes. bch_get_bucket()
+ * checks this field and returns the node with the appropriate lock held.
+ *
+ * If, after traversing the btree, the insertion code discovers it has to split
+ * then it must restart from the root and take new locks - to do this it changes
+ * the lock field and returns -EINTR, which causes the btree_root() macro to
+ * loop.
+ *
+ * Handling cache misses require a different mechanism for upgrading to a write
+ * lock. We do cache lookups with only a read lock held, but if we get a cache
+ * miss and we wish to insert this data into the cache, we have to insert a
+ * placeholder key to detect races - otherwise, we could race with a write and
+ * overwrite the data that was just written to the cache with stale data from
+ * the backing device.
+ *
+ * For this we use a sequence number that write locks and unlocks increment - to
+ * insert the check key it unlocks the btree node and then takes a write lock,
+ * and fails if the sequence number doesn't match.
+ */
+
 #include "bset.h"
 #include "debug.h"
 

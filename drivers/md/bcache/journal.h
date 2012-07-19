@@ -1,6 +1,52 @@
 #ifndef _BCACHE_JOURNAL_H
 #define _BCACHE_JOURNAL_H
 
+/*
+ * THE JOURNAL:
+ *
+ * The journal is treated as a circular buffer of buckets - a journal entry
+ * never spans two buckets. This means (not implemented yet) we can resize the
+ * journal at runtime, and will be needed for bcache on raw flash support.
+ *
+ * Journal entries contain a list of keys, ordered by the time they were
+ * inserted; thus journal replay just has to reinsert the keys.
+ *
+ * We also keep some things in the journal header that are logically part of the
+ * superblock - all the things that are frequently updated. This is for future
+ * bcache on raw flash support; the superblock (which will become another
+ * journal) can't be moved or wear leveled, so it contains just enough
+ * information to find the main journal, and the superblock only has to be
+ * rewritten when we want to move/wear level the main journal.
+ *
+ * Currently, we don't journal BTREE_REPLACE operations - this will hopefully be
+ * fixed eventually. This isn't a bug - BTREE_REPLACE is used for insertions
+ * from cache misses, which don't have to be journaled, and for writeback and
+ * moving gc we work around it by flushing the btree to disk before updating the
+ * gc information. But it is a potential issue with incremental garbage
+ * collection, and it's fragile.
+ *
+ * OPEN JOURNAL ENTRIES:
+ *
+ * Each journal entry contains, in the header, the sequence number of the last
+ * journal entry still open - i.e. that has keys that haven't been flushed to
+ * disk in the btree.
+ *
+ * We track this by maintaining a refcount for every open journal entry, in a
+ * fifo; the size of the fifo tells us the number of open journal entries, and
+ * when the atomic_t at the end of the fifo goes to 0 we can pop it off.
+ *
+ * We take a refcount on a journal entry when we add some keys to a journal
+ * entry that we're going to insert (held by struct btree_op), and then when we
+ * insert those keys into the btree the btree write we're setting up takes a
+ * copy of that refcount (held by struct btree_write). That refcount is dropped
+ * when the btree write completes.
+ *
+ * A struct btree_write can only hold a refcount on a single journal entry, but
+ * might contain keys for many journal entries - we handle this by making sure
+ * it always has a refcount on the _oldest_ journal entry of all the journal
+ * entries it has keys for.
+ */
+
 #define BCACHE_JSET_VERSION_UUIDv1	1
 /* Always latest UUID format */
 #define BCACHE_JSET_VERSION_UUID	1

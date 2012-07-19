@@ -1846,11 +1846,6 @@ merged:
 
 bool bch_btree_insert_keys(struct btree *b, struct btree_op *op)
 {
-	/* If a read generates a cache miss, and a write to the same location
-	 * finishes before the new data is added to the cache, the write will
-	 * be overwritten with stale data. We can catch this by never
-	 * overwriting good data if it came from a read.
-	 */
 	bool ret = false;
 	struct bkey *k;
 	unsigned oldsize = bch_count_data(b);

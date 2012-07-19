@@ -1,5 +1,6 @@
 #ifndef _BCACHE_REQUEST_H_
 #define _BCACHE_REQUEST_H_
+
 #include <linux/cgroup.h>
 
 struct search {

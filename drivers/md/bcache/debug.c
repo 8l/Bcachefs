@@ -81,6 +81,40 @@ struct keyprint_hack bch_pbtree(const struct btree *b)
 	return r;
 }
 
+#if defined(CONFIG_BCACHE_DEBUG) || defined(CONFIG_BCACHE_EDEBUG)
+
+static bool skipped_backwards(struct btree *b, struct bkey *k)
+{
+	return bkey_cmp(k, (!b->level)
+			? &START_KEY(bkey_next(k))
+			: bkey_next(k)) > 0;
+}
+
+static void dump_bset(struct btree *b, struct bset *i)
+{
+	for (struct bkey *k = i->start; k < end(i); k = bkey_next(k)) {
+		printk(KERN_ERR "block %zu key %zi/%u: %s", index(i, b),
+		       (uint64_t *) k - i->d, i->keys, pkey(k));
+
+		for (unsigned j = 0; j < KEY_PTRS(k); j++) {
+			size_t n = PTR_BUCKET_NR(b->c, k, j);
+			printk(" bucket %zu", n);
+
+			if (n >= b->c->sb.first_bucket && n < b->c->sb.nbuckets)
+				printk(" prio %i",
+				       PTR_BUCKET(b->c, k, j)->prio);
+		}
+
+		printk(" %s\n", bch_ptr_status(b->c, k));
+
+		if (bkey_next(k) < end(i) &&
+		    skipped_backwards(b, k))
+			printk(KERN_ERR "Key skipped backwards\n");
+	}
+}
+
+#endif
+
 #ifdef CONFIG_BCACHE_DEBUG
 
 void bch_btree_verify(struct btree *b, struct bset *new)
@@ -203,36 +237,6 @@ unsigned bch_count_data(struct btree *b)
 		for_each_key(b, k)
 			ret += KEY_SIZE(k);
 	return ret;
-}
-
-static bool skipped_backwards(struct btree *b, struct bkey *k)
-{
-	return bkey_cmp(k, (!b->level)
-			? &START_KEY(bkey_next(k))
-			: bkey_next(k)) > 0;
-}
-
-static void dump_bset(struct btree *b, struct bset *i)
-{
-	for (struct bkey *k = i->start; k < end(i); k = bkey_next(k)) {
-		printk(KERN_ERR "block %zu key %zi/%u: %s", index(i, b),
-		       (uint64_t *) k - i->d, i->keys, pkey(k));
-
-		for (unsigned j = 0; j < KEY_PTRS(k); j++) {
-			size_t n = PTR_BUCKET_NR(b->c, k, j);
-			printk(" bucket %zu", n);
-
-			if (n >= b->c->sb.first_bucket && n < b->c->sb.nbuckets)
-				printk(" prio %i",
-				       PTR_BUCKET(b->c, k, j)->prio);
-		}
-
-		printk(" %s\n", bch_ptr_status(b->c, k));
-
-		if (bkey_next(k) < end(i) &&
-		    skipped_backwards(b, k))
-			printk(KERN_ERR "Key skipped backwards\n");
-	}
 }
 
 static void vdump_bucket_and_panic(struct btree *b, const char *fmt,

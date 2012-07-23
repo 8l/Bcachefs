@@ -227,7 +227,7 @@ static void bio_invalidate(struct closure *cl)
 		bch_keylist_add(&op->keys, &KEY(op->inode, bio->bi_sector, len));
 	}
 
-	op->bio_insert_done = true;
+	op->insert_data_done = true;
 	bio_put(bio);
 out:
 	continue_at(cl, bch_journal, bcache_wq);
@@ -412,7 +412,7 @@ static bool bch_alloc_sectors(struct bkey *k, unsigned sectors,
 	return true;
 }
 
-static void bio_insert_error(struct closure *cl)
+static void bch_insert_data_error(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 
@@ -442,7 +442,7 @@ static void bio_insert_error(struct closure *cl)
 	bch_journal(cl);
 }
 
-static void bio_insert_endio(struct bio *bio, int error)
+static void bch_insert_data_endio(struct bio *bio, int error)
 {
 	struct closure *cl = bio->bi_private;
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
@@ -453,7 +453,7 @@ static void bio_insert_endio(struct bio *bio, int error)
 		if (s->writeback)
 			s->error = error;
 		else if (s->write)
-			set_closure_fn(cl, bio_insert_error, bcache_wq);
+			set_closure_fn(cl, bch_insert_data_error, bcache_wq);
 		else
 			set_closure_fn(cl, NULL, NULL);
 	}
@@ -461,7 +461,7 @@ static void bio_insert_endio(struct bio *bio, int error)
 	bch_bbio_endio(op->c, bio, error, "writing data to cache");
 }
 
-static void bio_insert_loop(struct closure *cl)
+static void bch_insert_data_loop(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 	struct search *s = container_of(op, struct search, op);
@@ -475,7 +475,7 @@ static void bio_insert_loop(struct closure *cl)
 		bch_queue_gc(op->c);
 	}
 
-	bio->bi_end_io	= bio_insert_endio;
+	bio->bi_end_io	= bch_insert_data_endio;
 	bio->bi_private = cl;
 
 	do {
@@ -500,7 +500,7 @@ static void bio_insert_loop(struct closure *cl)
 		n = bio_split(bio, KEY_SIZE(k), GFP_NOIO, split);
 		if (!n) {
 			__bkey_put(op->c, k);
-			continue_at(cl, bio_insert_loop, bcache_wq);
+			continue_at(cl, bch_insert_data_loop, bcache_wq);
 		}
 
 		if (s->writeback) {
@@ -523,7 +523,7 @@ static void bio_insert_loop(struct closure *cl)
 		bch_submit_bbio(n, op->c, k, 0);
 	} while (n != bio);
 
-	op->bio_insert_done = true;
+	op->insert_data_done = true;
 	continue_at(cl, bch_journal, bcache_wq);
 err:
 	/* bch_alloc_sectors() blocks if s->writeback = true */
@@ -549,7 +549,7 @@ err:
 		 * From a cache miss, we can just insert the keys for the data
 		 * we have written or bail out if we didn't do anything.
 		 */
-		op->bio_insert_done = true;
+		op->insert_data_done = true;
 
 		if (!bch_keylist_empty(&op->keys))
 			continue_at(cl, bch_journal, bcache_wq);
@@ -558,13 +558,13 @@ err:
 	}
 }
 
-void bch_bio_insert(struct closure *cl)
+void bch_insert_data(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 
 	bch_keylist_init(&op->keys);
 	bio_get(op->cache_bio);
-	bio_insert_loop(cl);
+	bch_insert_data_loop(cl);
 }
 
 void bch_btree_insert_async(struct closure *cl)
@@ -574,14 +574,14 @@ void bch_btree_insert_async(struct closure *cl)
 
 	if (bch_btree_insert(op, op->c)) {
 		s->error		= -ENOMEM;
-		op->bio_insert_done	= true;
+		op->insert_data_done	= true;
 	}
 
-	if (op->bio_insert_done) {
+	if (op->insert_data_done) {
 		bch_keylist_free(&op->keys);
 		closure_return(cl);
 	} else
-		continue_at(cl, bio_insert_loop, bcache_wq);
+		continue_at(cl, bch_insert_data_loop, bcache_wq);
 }
 
 /* Common code for the make_request functions */
@@ -842,7 +842,7 @@ static void request_read_done(struct closure *cl)
 
 	if (s->op.cache_bio && !atomic_read(&s->op.c->closing)) {
 		s->op.type = BTREE_REPLACE;
-		closure_call(bch_bio_insert, &s->op.cl, cl);
+		closure_call(bch_insert_data, &s->op.cl, cl);
 	}
 
 	continue_at(cl, cached_dev_read_complete, NULL);
@@ -1012,7 +1012,7 @@ static void request_write(struct cached_dev *dc, struct search *s)
 		bch_writeback_add(dc, bio_sectors(bio));
 	}
 out:
-	closure_call(bch_bio_insert, &s->op.cl, cl);
+	closure_call(bch_insert_data, &s->op.cl, cl);
 	continue_at(cl, cached_dev_write_complete, NULL);
 skip:
 	s->op.skip = true;
@@ -1281,7 +1281,7 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 		s->writeback	= true;
 		s->op.cache_bio	= bio;
 
-		closure_call(bch_bio_insert, &s->op.cl, cl);
+		closure_call(bch_insert_data, &s->op.cl, cl);
 	} else {
 		/* No data - probably a cache flush */
 		if (s->op.flush_journal)

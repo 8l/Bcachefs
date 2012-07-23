@@ -30,7 +30,7 @@ struct search {
 
 void bch_cache_read_endio(struct bio *, int);
 int bch_get_congested(struct cache_set *);
-void bch_bio_insert(struct closure *cl);
+void bch_insert_data(struct closure *cl);
 void bch_btree_insert_async(struct closure *);
 void bch_cache_read_endio(struct bio *, int);
 

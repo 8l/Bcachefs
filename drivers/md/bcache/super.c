@@ -445,7 +445,7 @@ static int __uuid_write(struct cache_set *c)
 
 	lockdep_assert_held(&register_lock);
 
-	if (bch_pop_bucket_set(c, GC_MARK_BTREE, 0, &k.key, 1, &cl))
+	if (bch_bucket_alloc_set(c, GC_MARK_BTREE, 0, &k.key, 1, &cl))
 		return 1;
 
 	SET_KEY_SIZE(&k.key, c->sb.bucket_size);
@@ -1523,8 +1523,9 @@ static void run_cache_set(struct cache_set *c)
 		/*
 		 * First place it's safe to allocate: btree_check() and
 		 * btree_gc_finish() have to run before we have buckets to
-		 * allocate, and pop_bucket() might cause a journal entry to be
-		 * written so bcache_journal_next() has to be called first
+		 * allocate, and bch_bucket_alloc_set() might cause a journal
+		 * entry to be written so bcache_journal_next() has to be called
+		 * first.
 		 *
 		 * If the uuids were in the old format we have to rewrite them
 		 * before the next journal entry is written:

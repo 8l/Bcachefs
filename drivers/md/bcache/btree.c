@@ -987,7 +987,7 @@ static void btree_node_free(struct btree *b, struct btree_op *op)
 			    PTR_BUCKET(b->c, &b->key, i));
 	}
 
-	bch_unpop_bucket(b->c, &b->key);
+	bch_bucket_free(b->c, &b->key);
 	mca_bucket_free(b);
 	mutex_unlock(&b->c->bucket_lock);
 }
@@ -1000,7 +1000,7 @@ struct btree *bch_btree_node_alloc(struct cache_set *c, int level,
 
 	mutex_lock(&c->bucket_lock);
 retry:
-	if (__bch_pop_bucket_set(c, GC_MARK_BTREE, 0, &k.key, 1, cl))
+	if (__bch_bucket_alloc_set(c, GC_MARK_BTREE, 0, &k.key, 1, cl))
 		goto err;
 
 	SET_KEY_SIZE(&k.key, c->btree_pages * PAGE_SECTORS);
@@ -1023,7 +1023,7 @@ retry:
 	mutex_unlock(&c->bucket_lock);
 	return b;
 err_free:
-	bch_unpop_bucket(c, &k.key);
+	bch_bucket_free(c, &k.key);
 	__bkey_put(c, &k.key);
 err:
 	mutex_unlock(&c->bucket_lock);
@@ -1148,8 +1148,9 @@ static struct btree *btree_gc_alloc(struct btree *b, struct bkey *k,
 {
 	/*
 	 * We block priorities from being written for the duration of garbage
-	 * collection, so we can't sleep in btree_alloc() -> pop_bucket(), or
-	 * we'd risk deadlock - so we don't pass it our closure.
+	 * collection, so we can't sleep in btree_alloc() ->
+	 * bch_bucket_alloc_set(), or we'd risk deadlock - so we don't pass it
+	 * our closure.
 	 */
 	struct btree *n = btree_node_alloc_replacement(b, NULL);
 

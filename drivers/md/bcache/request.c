@@ -350,8 +350,8 @@ static bool bch_alloc_sectors(struct bkey *k, unsigned sectors,
 	while (!(b = pick_data_bucket(c, k, s->task, &alloc.key))) {
 		spin_unlock(&c->data_bucket_lock);
 
-		if (bch_pop_bucket_set(c, GC_MARK_RECLAIMABLE, s->op.write_prio,
-				       &alloc.key, 1, w))
+		if (bch_bucket_alloc_set(c, GC_MARK_RECLAIMABLE,
+					 s->op.write_prio, &alloc.key, 1, w))
 			return false;
 
 		spin_lock(&c->data_bucket_lock);
@@ -360,7 +360,7 @@ static bool bch_alloc_sectors(struct bkey *k, unsigned sectors,
 	/*
 	 * If we had to allocate, we might race and not need to allocate the
 	 * second time we call find_data_bucket(). If we allocated a bucket but
-	 * didn't use it, drop the refcount pop_bucket_set() took:
+	 * didn't use it, drop the refcount bch_bucket_alloc_set() took:
 	 */
 	if (KEY_PTRS(&alloc.key))
 		__bkey_put(c, &alloc.key);

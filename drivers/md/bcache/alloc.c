@@ -49,14 +49,14 @@
  * time around, and we garbage collect or rewrite the priorities sooner than we
  * would have otherwise.
  *
- * pop_bucket() allocates a single bucket from a specific cache.
+ * bch_bucket_alloc() allocates a single bucket from a specific cache.
  *
- * pop_bucket_set() allocates one or more buckets from different caches out of a
- * cache set.
+ * bch_bucket_alloc_set() allocates one or more buckets from different caches
+ * out of a cache set.
  *
  * free_some_buckets() drives all the processes described above. It's called
- * from pop_bucket() and a few other places that need to make sure free buckets
- * are ready.
+ * from bch_bucket_alloc() and a few other places that need to make sure free
+ * buckets are ready.
  *
  * invalidate_buckets_(lru|fifo)() find buckets that are available to be
  * invalidated, and then invalidate them and stick them on the free_inc list -
@@ -496,8 +496,8 @@ void bch_free_some_buckets(struct cache *ca)
 		bch_prio_write(ca);
 }
 
-static long pop_bucket(struct cache *ca, int mark,
-		       uint16_t write_prio, struct closure *cl)
+static long bch_bucket_alloc(struct cache *ca, int mark,
+			     uint16_t write_prio, struct closure *cl)
 {
 	long r = -1;
 	unsigned watermark;
@@ -562,7 +562,7 @@ again:
 	return -1;
 }
 
-void bch_unpop_bucket(struct cache_set *c, struct bkey *k)
+void bch_bucket_free(struct cache_set *c, struct bkey *k)
 {
 	for (unsigned i = 0; i < KEY_PTRS(k); i++) {
 		struct bucket *b = PTR_BUCKET(c, k, i);
@@ -573,8 +573,8 @@ void bch_unpop_bucket(struct cache_set *c, struct bkey *k)
 	}
 }
 
-int __bch_pop_bucket_set(struct cache_set *c, int mark, uint16_t write_prio,
-			 struct bkey *k, int n, struct closure *cl)
+int __bch_bucket_alloc_set(struct cache_set *c, int mark, uint16_t write_prio,
+			   struct bkey *k, int n, struct closure *cl)
 {
 	lockdep_assert_held(&c->bucket_lock);
 	BUG_ON(!n || n > c->caches_loaded || n > 8);
@@ -585,7 +585,7 @@ int __bch_pop_bucket_set(struct cache_set *c, int mark, uint16_t write_prio,
 
 	for (int i = 0; i < n; i++) {
 		struct cache *ca = c->cache_by_alloc[i];
-		long b = pop_bucket(ca, mark, write_prio, cl);
+		long b = bch_bucket_alloc(ca, mark, write_prio, cl);
 
 		if (b == -1)
 			goto err;
@@ -599,17 +599,17 @@ int __bch_pop_bucket_set(struct cache_set *c, int mark, uint16_t write_prio,
 
 	return 0;
 err:
-	bch_unpop_bucket(c, k);
+	bch_bucket_free(c, k);
 	__bkey_put(c, k);
 	return -1;
 }
 
-int bch_pop_bucket_set(struct cache_set *c, int mark, uint16_t write_prio,
-		       struct bkey *k, int n, struct closure *cl)
+int bch_bucket_alloc_set(struct cache_set *c, int mark, uint16_t write_prio,
+			 struct bkey *k, int n, struct closure *cl)
 {
 	int ret;
 	mutex_lock(&c->bucket_lock);
-	ret = __bch_pop_bucket_set(c, mark, write_prio, k, n, cl);
+	ret = __bch_bucket_alloc_set(c, mark, write_prio, k, n, cl);
 	mutex_unlock(&c->bucket_lock);
 	return ret;
 }

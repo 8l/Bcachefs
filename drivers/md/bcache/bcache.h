@@ -1109,11 +1109,11 @@ void bch_rescale_priorities(struct cache_set *, int);
 bool bch_bucket_add_unused(struct cache *, struct bucket *);
 bool bch_can_save_prios(struct cache *);
 void bch_free_some_buckets(struct cache *);
-void bch_unpop_bucket(struct cache_set *, struct bkey *);
-int __bch_pop_bucket_set(struct cache_set *, int, uint16_t,
-		     struct bkey *, int, struct closure *);
-int bch_pop_bucket_set(struct cache_set *, int, uint16_t,
-		   struct bkey *, int, struct closure *);
+void bch_bucket_free(struct cache_set *, struct bkey *);
+int __bch_bucket_alloc_set(struct cache_set *, int, uint16_t,
+			   struct bkey *, int, struct closure *);
+int bch_bucket_alloc_set(struct cache_set *, int, uint16_t,
+			 struct bkey *, int, struct closure *);
 
 __printf(2, 3)
 bool bch_cache_set_error(struct cache_set *, const char *, ...);

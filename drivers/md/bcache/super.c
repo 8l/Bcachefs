@@ -1494,7 +1494,7 @@ static void run_cache_set(struct cache_set *c)
 			goto err;
 
 		err = "error reading btree root";
-		c->root = bch_get_bucket(c, k, j->btree_level, &op);
+		c->root = bch_btree_node_get(c, k, j->btree_level, &op);
 		if (IS_ERR_OR_NULL(c->root))
 			goto err;
 
@@ -1553,7 +1553,7 @@ static void run_cache_set(struct cache_set *c)
 			goto err_unlock_gc;
 
 		err = "cannot allocate new btree root";
-		c->root = bch_btree_alloc(c, 0, &op.cl);
+		c->root = bch_btree_node_alloc(c, 0, &op.cl);
 		if (IS_ERR_OR_NULL(c->root))
 			goto err_unlock_gc;
 

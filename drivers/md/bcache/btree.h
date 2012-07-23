@@ -30,8 +30,8 @@
  * Btree nodes are cached in memory; traversing the btree might require reading
  * in btree nodes which is handled mostly transparently.
  *
- * bch_get_bucket() looks up a btree node in the cache and reads it in from disk
- * if necessary. This function is almost never called directly though - the
+ * bch_btree_node_get() looks up a btree node in the cache and reads it in from
+ * disk if necessary. This function is almost never called directly though - the
  * btree() macro is used to get a btree node, call some function on it, and
  * unlock the node after the function returns.
  *
@@ -50,7 +50,7 @@
  *
  * BTREE IO:
  *
- * Btree nodes never have to be explicitly read in; bch_get_bucket() handles
+ * Btree nodes never have to be explicitly read in; bch_btree_node_get() handles
  * this.
  *
  * For writing, we have two btree_write structs embeddded in struct btree - one
@@ -78,7 +78,7 @@
  * the leaf node.
  *
  * This is specified with the lock field in struct btree_op; lock = 0 means we
- * take write locks at level <= 0, i.e. only leaf nodes. bch_get_bucket()
+ * take write locks at level <= 0, i.e. only leaf nodes. bch_btree_node_get()
  * checks this field and returns the node with the appropriate lock held.
  *
  * If, after traversing the btree, the insertion code discovers it has to split
@@ -339,7 +339,7 @@ static inline void rw_unlock(bool w, struct btree *b)
 ({									\
 	int _r, l = (b)->level - 1;					\
 	bool _w = l <= (op)->lock;					\
-	struct btree *_b = bch_get_bucket((b)->c, k, l, op);		\
+	struct btree *_b = bch_btree_node_get((b)->c, k, l, op);	\
 	if (!IS_ERR(_b)) {						\
 		_r = bch_btree_ ## f(_b, op, ##__VA_ARGS__);		\
 		rw_unlock(_w, _b);					\
@@ -380,8 +380,8 @@ void bch_btree_write(struct btree *b, bool now, struct btree_op *op);
 
 void bch_cannibalize_unlock(struct cache_set *, struct closure *);
 void bch_btree_set_root(struct btree *);
-struct btree *bch_btree_alloc(struct cache_set *, int, struct closure *);
-struct btree *bch_get_bucket(struct cache_set *, struct bkey *,
+struct btree *bch_btree_node_alloc(struct cache_set *, int, struct closure *);
+struct btree *bch_btree_node_get(struct cache_set *, struct bkey *,
 				int, struct btree_op *);
 
 bool bch_btree_insert_keys(struct btree *, struct btree_op *);

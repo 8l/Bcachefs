@@ -335,20 +335,34 @@ static inline void rw_unlock(bool w, struct btree *b)
  * going to have to split), set op->lock and return -EINTR; btree_root() will
  * call you again and you'll have the correct lock.
  */
-#define btree(f, k, b, op, ...)						\
+
+/**
+ * btree - recurse down the btree on a specified key
+ * @fn:		function to call, which will be passed the child node
+ * @key:	key to recurse on
+ * @b:		parent btree node
+ * @op:		pointer to struct btree_op
+ */
+#define btree(fn, key, b, op, ...)					\
 ({									\
 	int _r, l = (b)->level - 1;					\
 	bool _w = l <= (op)->lock;					\
-	struct btree *_b = bch_btree_node_get((b)->c, k, l, op);	\
+	struct btree *_b = bch_btree_node_get((b)->c, key, l, op);	\
 	if (!IS_ERR(_b)) {						\
-		_r = bch_btree_ ## f(_b, op, ##__VA_ARGS__);		\
+		_r = bch_btree_ ## fn(_b, op, ##__VA_ARGS__);		\
 		rw_unlock(_w, _b);					\
 	} else								\
 		_r = PTR_ERR(_b);					\
 	_r;								\
 })
 
-#define btree_root(f, c, op, ...)					\
+/**
+ * btree_root - call a function on the root of the btree
+ * @fn:		function to call, which will be passed the child node
+ * @c:		cache set
+ * @op:		pointer to struct btree_op
+ */
+#define btree_root(fn, c, op, ...)					\
 ({									\
 	int _r = -EINTR;						\
 	do {								\
@@ -357,7 +371,7 @@ static inline void rw_unlock(bool w, struct btree *b)
 		rw_lock(_w, _b, _b->level);				\
 		if (_b == (c)->root &&					\
 		    _w == insert_lock(op, _b))				\
-			_r = bch_btree_ ## f(_b, op, ##__VA_ARGS__);	\
+			_r = bch_btree_ ## fn(_b, op, ##__VA_ARGS__);	\
 		rw_unlock(_w, _b);					\
 		bch_cannibalize_unlock(c, &(op)->cl);		\
 	} while (_r == -EINTR);						\

@@ -883,6 +883,16 @@ err:
 	return b;
 }
 
+/**
+ * bch_btree_node_get - find a btree node in the cache and lock it, reading it
+ * in from disk if necessary.
+ *
+ * If IO is necessary, it uses the closure embedded in struct btree_op to wait;
+ * if that closure is in non blocking mode, will return -EAGAIN.
+ *
+ * The btree node will have either a read or a write lock held, depending on
+ * level and op->lock.
+ */
 struct btree *bch_btree_node_get(struct cache_set *c, struct bkey *k,
 				 int level, struct btree_op *op)
 {

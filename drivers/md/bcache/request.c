@@ -558,6 +558,25 @@ err:
 	}
 }
 
+/**
+ * bch_insert_data - stick some data in the cache
+ *
+ * This is the starting point for any data to end up in a cache device; it could
+ * be from a normal write, or a writeback write, or a write to a flash only
+ * volume - it's also used by the moving garbage collector to compact data in
+ * mostly empty buckets.
+ *
+ * It first writes the data to the cache, creating a list of keys to be inserted
+ * (if the data had to be fragmented there will be multiple keys); after the
+ * data is written it calls bch_journal, and after the keys have been added to
+ * the next journal write they're inserted into the btree.
+ *
+ * It inserts the data in op->cache_bio; bi_sector is used for the key offset,
+ * and op->inode is used for the key inode.
+ *
+ * If op->skip is true, instead of inserting the data it invalidates the region
+ * of the cache represented by op->cache_bio and op->inode.
+ */
 void bch_insert_data(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);

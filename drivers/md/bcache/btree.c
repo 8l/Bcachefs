@@ -2215,7 +2215,8 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 		unsigned sectors = min_t(uint64_t, INT_MAX,
 					 KEY_OFFSET(k) - bio->bi_sector);
 
-		n = bio_split(bio, sectors, GFP_NOIO, s->d->bio_split);
+		n = bio_split(bio, sectors, current->bio_list
+			      ? GFP_NOWAIT : GFP_NOIO, s->d->bio_split);
 		if (!n)
 			return -EAGAIN;
 

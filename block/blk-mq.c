@@ -39,8 +39,8 @@ static bool blk_mq_hctx_has_pending(struct blk_mq_hw_ctx *hctx)
 static void blk_mq_hctx_mark_pending(struct blk_mq_hw_ctx *hctx,
 				     struct blk_mq_ctx *ctx)
 {
-	if (!test_bit(ctx->index, hctx->ctx_map))
-		set_bit(ctx->index, hctx->ctx_map);
+	if (!test_bit(ctx->index_hw, hctx->ctx_map))
+		set_bit(ctx->index_hw, hctx->ctx_map);
 }
 
 static struct request *__blk_mq_alloc_rq_nowait(struct blk_mq_hw_ctx *hctx)
@@ -61,9 +61,9 @@ static struct request *__blk_mq_alloc_rq_nowait(struct blk_mq_hw_ctx *hctx)
 }
 
 static struct request *__blk_mq_alloc_request(struct request_queue *q,
-					      struct blk_mq_ctx *ctx,
-					      unsigned int rw_flags, gfp_t gfp,
-					      bool has_lock)
+							struct blk_mq_ctx *ctx,
+							unsigned int rw_flags, gfp_t gfp,
+							bool has_lock)
 {
 	struct blk_mq_hw_ctx *hctx;
 	struct request *rq = NULL;
@@ -313,7 +313,7 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	for_each_set_bit(bit, hctx->ctx_map, hctx->nr_ctx) {
 		clear_bit(bit, hctx->ctx_map);
 		ctx = hctx->ctxs[bit];
-		BUG_ON(bit != ctx->index);
+		BUG_ON(bit != ctx->index_hw);
 
 		spin_lock(&ctx->lock);
 		list_splice_tail_init(&ctx->rq_list, &tmp);
@@ -687,6 +687,7 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 	 */
 	queue_for_each_ctx(q, ctx, i) {
 		hctx = q->mq_ops->map_queue(q, ctx);
+		ctx->index_hw = hctx->nr_ctx;
 		hctx->ctxs[hctx->nr_ctx++] = ctx;
 	}
 

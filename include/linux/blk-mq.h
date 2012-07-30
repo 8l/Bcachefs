@@ -9,6 +9,7 @@ struct blk_mq_ctx {
 	struct list_head	rq_list;
 
 	unsigned int		index;
+	unsigned int		index_hw;
 	unsigned int		ipi_redirect;
 
 	/* incremented at dispatch time */

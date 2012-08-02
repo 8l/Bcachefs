@@ -112,6 +112,7 @@ struct request *blk_mq_alloc_request(struct request_queue *q, int rw, gfp_t gfp)
 	ctx = per_cpu_ptr(q->queue_ctx, get_cpu());
 	rq = __blk_mq_alloc_request(q, ctx, rw, gfp, false);
 	put_cpu();
+
 	return rq;
 }
 
@@ -190,6 +191,11 @@ void blk_mq_end_io(struct blk_mq_hw_ctx *hctx, struct request *rq, int error)
 		rq->errors = error;
 		rq->ll_list.next = NULL;
 
+		/*
+		 * If the list is non-empty, an existing IPI must already
+		 * be "in flight". If that is the case, we need not schedule
+		 * a new one.
+		 */
 		if (llist_add(&rq->ll_list, &per_cpu(ipi_lists, cpu))) {
 			data->func = ipi_end_io;
 			data->flags = 0;
@@ -201,15 +207,17 @@ void blk_mq_end_io(struct blk_mq_hw_ctx *hctx, struct request *rq, int error)
 }
 EXPORT_SYMBOL(blk_mq_end_io);
 
-/*
- * FIXME: we currently don't add requests to the ctx timeout list
- */
 static void blk_mq_start_request(struct request *rq)
 {
 	struct request_queue *q = rq->q;
 
 	trace_block_rq_issue(q, rq);
 
+	/*
+	 * Just mark start time and set the started bit. Due to memory
+	 * ordering, we know we'll see the correct deadline as long as
+	 * REQ_ATOMIC_STARTED is seen.
+	 */
 	rq->deadline = jiffies + q->rq_timeout;
 	set_bit(REQ_ATOM_STARTED, &rq->atomic_flags);
 }
@@ -220,6 +228,13 @@ static void blk_mq_hw_ctx_check_timeout(struct blk_mq_hw_ctx *hctx,
 {
 	unsigned int i;
 
+	/*
+	 * Timeout checks the busy map. If a bit is set, that request is
+	 * currently allocated. It may not be in flight yet (this is where
+	 * the REQ_ATOMIC_STARTED flag comes in). The requests are
+	 * statically allocated, so we know it's always safe to access the
+	 * memory associated with a bit offset into ->rqs[].
+	 */
 	for_each_set_bit(i, hctx->rq_map, hctx->queue_depth) {
 		struct request *rq = &hctx->rqs[i];
 
@@ -525,6 +540,11 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 
 	hctx->queued++;
 
+	/*
+	 * A task plug currently exists. Since this is completely lockless,
+	 * utilize that to temporarily store requests until the task is
+	 * either done or scheduled away.
+	 */
 	plug = current->plug;
 	if (plug) {
 		rq = blk_mq_bio_to_request(q, ctx, bio, false);
@@ -544,6 +564,11 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 
 	spin_unlock(&ctx->lock);
 
+	/*
+	 * For a SYNC request, send it to the hardware immediately. For an
+	 * ASYNC request, just ensure that we run it later on. The latter
+	 * allows for merging opportunities and more efficient dispatching.
+	 */
 	if (is_sync)
 		blk_mq_run_hw_queue(hctx);
 	else

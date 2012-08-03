@@ -11,7 +11,6 @@
 #include <linux/llist.h>
 #include <linux/cpu.h>
 
-#define CREATE_TRACE_POINTS
 #include <trace/events/block.h>
 
 #include <linux/blk-mq.h>

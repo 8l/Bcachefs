@@ -9,4 +9,8 @@ TODO list for multiqueue/new-queue. In no particular order.
   time. If someone else is already running the queue, we need
   not do anything. (partially done)
 
+- Barrier support
+
+- Add token based mq aware IO scheduler
+
 /Jens

@@ -209,7 +209,8 @@ bsearch:
 		for (unsigned i = 0; i < ca->sb.njournal_buckets; i++)
 			if (ja->seq[i] > seq) {
 				seq = ja->seq[i];
-				ja->cur = ja->last = i;
+				ja->cur_idx = ja->discard_idx =
+					ja->last_idx = i;
 
 			}
 	}
@@ -302,6 +303,8 @@ int bch_journal_replay(struct cache_set *s, struct list_head *list,
 
 			BUG_ON(!bch_keylist_empty(&op->keys));
 			keys++;
+
+			cond_resched();
 		}
 
 		if (i->pin)
@@ -377,6 +380,69 @@ found:
 
 #define last_seq(j)	((j)->seq - fifo_used(&(j)->pin) + 1)
 
+static void journal_discard_endio(struct bio *bio, int error)
+{
+	struct journal_device *ja =
+		container_of(bio, struct journal_device, discard_bio);
+	struct cache *ca = container_of(ja, struct cache, journal);
+
+	atomic_set(&ja->discard_in_flight, DISCARD_DONE);
+
+	closure_wake_up(&ca->set->journal.wait);
+	closure_put(&ca->set->cl);
+}
+
+static void journal_discard_work(struct work_struct *work)
+{
+	struct journal_device *ja =
+		container_of(work, struct journal_device, discard_work);
+
+	submit_bio(0, &ja->discard_bio);
+}
+
+static void do_journal_discard(struct cache *ca)
+{
+	struct journal_device *ja = &ca->journal;
+	struct bio *bio = &ja->discard_bio;
+
+	if (!ca->discard) {
+		ja->discard_idx = ja->last_idx;
+		return;
+	}
+
+	switch (atomic_read(&ja->discard_in_flight) == DISCARD_IN_FLIGHT) {
+	case DISCARD_IN_FLIGHT:
+		return;
+
+	case DISCARD_DONE:
+		ja->discard_idx = (ja->discard_idx + 1) %
+			ca->sb.njournal_buckets;
+
+		atomic_set(&ja->discard_in_flight, DISCARD_READY);
+		/* fallthrough */
+
+	case DISCARD_READY:
+		if (ja->discard_idx == ja->last_idx)
+			return;
+
+		atomic_set(&ja->discard_in_flight, DISCARD_IN_FLIGHT);
+
+		bio_init(bio);
+		bio->bi_sector		= bucket_to_sector(ca->set,
+							   ca->sb.d[ja->discard_idx]);
+		bio->bi_bdev		= ca->bdev;
+		bio->bi_rw		= REQ_WRITE|REQ_DISCARD;
+		bio->bi_max_vecs	= 1;
+		bio->bi_io_vec		= bio->bi_inline_vecs;
+		bio->bi_size		= bucket_bytes(ca);
+		bio->bi_end_io		= journal_discard_endio;
+
+		closure_get(&ca->set->cl);
+		INIT_WORK(&ja->discard_work, journal_discard_work);
+		schedule_work(&ja->discard_work);
+	}
+}
+
 static void journal_reclaim(struct cache_set *c)
 {
 	struct bkey *k = &c->journal.key;
@@ -390,33 +456,39 @@ static void journal_reclaim(struct cache_set *c)
 
 	last_seq = last_seq(&c->journal);
 
+	/* Update last_idx */
+
 	for_each_cache(ca, c) {
 		struct journal_device *ja = &ca->journal;
 
-		while (ja->last != ja->cur &&
-		       ja->seq[ja->last] < last_seq)
-			if (++ja->last == ca->sb.njournal_buckets)
-				ja->last = 0;
+		while (ja->last_idx != ja->cur_idx &&
+		       ja->seq[ja->last_idx] < last_seq)
+			ja->last_idx = (ja->last_idx + 1) %
+				ca->sb.njournal_buckets;
 	}
+
+	for_each_cache(ca, c)
+		do_journal_discard(ca);
 
 	if (c->journal.blocks_free)
 		return;
 
 	/*
-	 * Now we allocate:
+	 * Allocate:
 	 * XXX: Sort by free journal space
 	 */
 
 	for_each_cache(ca, c) {
 		struct journal_device *ja = &ca->journal;
-		unsigned next = (ja->cur + 1) % ca->sb.njournal_buckets;
+		unsigned next = (ja->cur_idx + 1) % ca->sb.njournal_buckets;
 
-		if (next == ja->last)
+		/* No space available on this device */
+		if (next == ja->discard_idx)
 			continue;
 
-		ja->cur = next;
+		ja->cur_idx = next;
 		k->ptr[n++] = PTR(0,
-				  bucket_to_sector(c, ca->sb.d[ja->cur]),
+				  bucket_to_sector(c, ca->sb.d[ja->cur_idx]),
 				  ca->sb.nr_this_dev);
 	}
 
@@ -546,7 +618,7 @@ static void journal_write_unlocked(struct closure *cl)
 
 		SET_PTR_OFFSET(k, i, PTR_OFFSET(k, i) + sectors);
 
-		ca->journal.seq[ca->journal.cur] = w->data->seq;
+		ca->journal.seq[ca->journal.cur_idx] = w->data->seq;
 	}
 
 	atomic_dec_bug(&fifo_back(&c->journal.pin));

@@ -192,9 +192,6 @@ static void discard_work(struct work_struct *w)
 
 static void do_discard(struct cache *ca)
 {
-	struct request_queue *q = bdev_get_queue(ca->bdev);
-	int s = q->limits.logical_block_size;
-
 	lockdep_assert_held(&ca->set->bucket_lock);
 
 	while (ca->discard &&
@@ -212,7 +209,6 @@ static void do_discard(struct cache *ca)
 		closure_get(&ca->set->cl);
 
 		bio_init(&d->bio);
-		memset(&d->bv, 0, sizeof(struct bio_vec));
 		bio_set_prio(&d->bio, IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0));
 
 		d->bio.bi_sector	= bucket_to_sector(ca->set, d->bucket);
@@ -220,17 +216,8 @@ static void do_discard(struct cache *ca)
 		d->bio.bi_rw		= REQ_WRITE|REQ_DISCARD;
 		d->bio.bi_max_vecs	= 1;
 		d->bio.bi_io_vec	= d->bio.bi_inline_vecs;
+		d->bio.bi_size		= bucket_bytes(ca);
 		d->bio.bi_end_io	= discard_endio;
-
-		if (bio_add_pc_page(q, &d->bio, ca->discard_page, s, 0) < s) {
-			printk(KERN_DEBUG "bcache: bio_add_pc_page failed\n");
-			ca->discard = 0;
-			fifo_push(&ca->free, d->bucket);
-			list_add(&d->list, &ca->discards);
-			break;
-		}
-
-		d->bio.bi_size = bucket_bytes(ca);
 
 		schedule_work(&d->work);
 	}

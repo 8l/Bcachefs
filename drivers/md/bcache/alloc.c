@@ -533,14 +533,11 @@ again:
 		 fifo_used(&ca->free_inc), fifo_used(&ca->unused));
 
 	if (cl) {
-		if (closure_blocking(cl))
-			mutex_unlock(&ca->set->bucket_lock);
-
-		closure_wait_event(&ca->set->bucket_wait, cl,
-				   atomic_read(&ca->prio_written) > 0 ||
-				   bch_can_save_prios(ca));
+		closure_wait(&ca->set->bucket_wait, cl);
 
 		if (closure_blocking(cl)) {
+			mutex_unlock(&ca->set->bucket_lock);
+			closure_sync(cl);
 			mutex_lock(&ca->set->bucket_lock);
 			goto again;
 		}

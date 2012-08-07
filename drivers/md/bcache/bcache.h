@@ -510,6 +510,9 @@ struct cache {
 
 	unsigned		watermark[WATERMARK_MAX];
 
+	struct closure		alloc;
+	struct workqueue_struct	*alloc_workqueue;
+
 	struct closure		prio;
 	struct prio_set		*disk_buckets;
 
@@ -522,12 +525,6 @@ struct cache {
 	 */
 	uint64_t		*prio_buckets;
 	uint64_t		*prio_last_buckets;
-
-	/* > 0: buckets in free_inc have been marked as free
-	 * = 0: buckets in free_inc can't be used until priorities are written
-	 * < 0: priority write in progress
-	 */
-	atomic_t		prio_written;
 
 	/*
 	 * free: Buckets that are ready to be used
@@ -575,6 +572,7 @@ struct cache {
 	 * whenever there's work to do and is called by free_some_buckets() and
 	 * when a discard finishes.
 	 */
+	atomic_t		discards_in_flight;
 	struct list_head	discards;
 	struct page		*discard_page;
 
@@ -610,9 +608,14 @@ struct gc_stat {
  * CACHE_SET_STOPPING always gets set first when we're closing down a cache set;
  * we'll continue to run normally for awhile with CACHE_SET_STOPPING set (i.e.
  * flushing dirty data).
+ *
+ * CACHE_SET_STOPPING_2 gets set at the last phase, when it's time to shut down the
+ * allocation thread.
  */
 #define CACHE_SET_UNREGISTERING		0
 #define	CACHE_SET_STOPPING		1
+#define	CACHE_SET_STOPPING_2		2
+
 struct cache_set {
 	struct closure		cl;
 
@@ -643,6 +646,9 @@ struct cache_set {
 
 	/* For the btree cache */
 	struct shrinker		shrink;
+
+	/* For the allocator itself */
+	wait_queue_head_t	alloc_wait;
 
 	/* For the btree cache and anything allocation related */
 	struct mutex		bucket_lock;
@@ -1123,7 +1129,7 @@ void bch_submit_bbio(struct bio *, struct cache_set *, struct bkey *, unsigned);
 uint8_t bch_inc_gen(struct cache *, struct bucket *);
 void bch_rescale_priorities(struct cache_set *, int);
 bool bch_bucket_add_unused(struct cache *, struct bucket *);
-void bch_free_some_buckets(struct cache *);
+void bch_allocator_thread(struct closure *);
 
 long bch_bucket_alloc(struct cache *, unsigned, struct closure *);
 void bch_bucket_free(struct cache_set *, struct bkey *);

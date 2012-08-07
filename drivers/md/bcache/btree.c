@@ -272,7 +272,7 @@ static void btree_complete_write(struct btree *b, struct btree_write *w)
 {
 	if (w->prio_blocked &&
 	    !atomic_sub_return(w->prio_blocked, &b->c->prio_blocked))
-		closure_wake_up(&b->c->bucket_wait);
+		wake_up(&b->c->alloc_wait);
 
 	if (w->journal) {
 		atomic_dec_bug(w->journal);
@@ -1409,9 +1409,6 @@ static void btree_gc_start(struct cache_set *c)
 
 	mutex_lock(&c->bucket_lock);
 
-	for_each_cache(ca, c)
-		bch_free_some_buckets(ca);
-
 	c->gc_mark_valid = 0;
 	c->gc_done = ZERO_KEY;
 
@@ -1543,6 +1540,7 @@ static void bch_btree_gc(struct closure *cl)
 	blktrace_msg_all(c, "Finished gc");
 
 	trace_bcache_gc_end(c->sb.set_uuid);
+	wake_up(&c->alloc_wait);
 	closure_wake_up(&c->bucket_wait);
 
 	continue_at(cl, bch_moving_gc, bch_gc_wq);

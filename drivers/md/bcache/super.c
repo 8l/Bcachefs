@@ -504,15 +504,10 @@ static struct uuid_entry *uuid_find_empty(struct cache_set *c)
  * header points to the first bucket, the first bucket points to the second
  * bucket, et cetera.
  *
- * This code is primarily used by the allocation code; periodically (whenever
- * it runs out of buckets to allocate from) the allocation code will invalidate
- * some buckets, but it can't use those buckets until their new gens are safely
- * on disk.
- *
- * So it calls prio_write(), which does a bunch of work and eventually stores
- * the pointer to the new first prio bucket in the current open journal entry
- * header; when that journal entry is written, we can mark the buckets that have
- * been invalidated as being ready for use by toggling c->prio_written.
+ * This code is used by the allocation code; periodically (whenever it runs out
+ * of buckets to allocate from) the allocation code will invalidate some
+ * buckets, but it can't use those buckets until their new gens are safely on
+ * disk.
  */
 
 static void prio_endio(struct bio *bio, int error)
@@ -526,7 +521,10 @@ static void prio_endio(struct bio *bio, int error)
 
 static void prio_io(struct cache *ca, uint64_t bucket, unsigned long rw)
 {
+	struct closure *cl = &ca->prio;
 	struct bio *bio = bch_bbio_alloc(ca->set);
+
+	closure_init_stack(cl);
 
 	bio->bi_sector	= bucket * ca->sb.bucket_size;
 	bio->bi_bdev	= ca->bdev;
@@ -537,17 +535,32 @@ static void prio_io(struct cache *ca, uint64_t bucket, unsigned long rw)
 	bio->bi_private = ca;
 	bio_map(bio, ca->disk_buckets);
 
-	closure_bio_submit(bio, &ca->prio);
+	closure_bio_submit(bio, cl);
+	closure_sync(cl);
 }
 
 #define buckets_free(c)	"free %zu, free_inc %zu, unused %zu",		\
 	fifo_used(&c->free), fifo_used(&c->free_inc), fifo_used(&c->unused)
 
-void do_prio_write(struct closure *cl)
+void bch_prio_write(struct cache *ca)
 {
-	struct cache *ca = container_of(cl, struct cache, prio);
+	struct closure cl;
+	closure_init_stack(&cl);
 
-	set_closure_blocking(cl);
+	lockdep_assert_held(&ca->set->bucket_lock);
+
+	for (struct bucket *b = ca->buckets;
+	     b < ca->buckets + ca->sb.nbuckets; b++)
+		b->disk_gen = b->gen;
+
+	ca->disk_buckets->seq++;
+
+	atomic_long_add(ca->sb.bucket_size * prio_buckets(ca),
+			&ca->meta_sectors_written);
+
+	pr_debug("free %zu, free_inc %zu, unused %zu", fifo_used(&ca->free),
+		 fifo_used(&ca->free_inc), fifo_used(&ca->unused));
+	blktrace_msg(ca, "Starting priorities: " buckets_free(ca));
 
 	for (int i = prio_buckets(ca) - 1; i >= 0; --i) {
 		long bucket;
@@ -565,23 +578,21 @@ void do_prio_write(struct closure *cl)
 		p->magic	= pset_magic(ca);
 		p->csum		= crc64(&p->magic, bucket_bytes(ca) - 8);
 
-		mutex_lock(&ca->set->bucket_lock);
-		bucket = bch_bucket_alloc(ca, WATERMARK_PRIO, cl);
-		mutex_unlock(&ca->set->bucket_lock);
-
+		bucket = bch_bucket_alloc(ca, WATERMARK_PRIO, &cl);
 		BUG_ON(bucket == -1);
 
+		mutex_unlock(&ca->set->bucket_lock);
 		prio_io(ca, bucket, REQ_WRITE);
-		closure_sync(cl);
-
 		mutex_lock(&ca->set->bucket_lock);
+
 		ca->prio_buckets[i] = bucket;
 		atomic_dec_bug(&ca->buckets[bucket].pin);
-		mutex_unlock(&ca->set->bucket_lock);
 	}
 
-	bch_journal_meta(ca->set, cl);
-	closure_sync(cl);
+	mutex_unlock(&ca->set->bucket_lock);
+
+	bch_journal_meta(ca->set, &cl);
+	closure_sync(&cl);
 
 	mutex_lock(&ca->set->bucket_lock);
 
@@ -593,50 +604,6 @@ void do_prio_write(struct closure *cl)
 	 */
 	for (unsigned i = 0; i < prio_buckets(ca); i++)
 		ca->prio_last_buckets[i] = ca->prio_buckets[i];
-
-	/*
-	 * XXX: Terrible hack
-	 *
-	 * We really should be using this closure as the lock for writing
-	 * priorities, but we don't - we use ca->prio_written. So we have to
-	 * finish with the closure before we unlock bucket_lock:
-	 */
-	set_closure_fn(&ca->prio, NULL, NULL);
-	closure_set_stopped(&ca->prio);
-	closure_put(&ca->prio);
-
-	atomic_set(&ca->prio_written, 1);
-	mutex_unlock(&ca->set->bucket_lock);
-
-	closure_wake_up(&ca->set->bucket_wait);
-}
-
-void bch_prio_write(struct cache *ca)
-{
-	lockdep_assert_held(&ca->set->bucket_lock);
-	BUG_ON(atomic_read(&ca->prio_written));
-
-	closure_init(&ca->prio, &ca->set->cl);
-
-	atomic_set(&ca->prio_written, -1);
-
-	for (struct bucket *b = ca->buckets;
-	     b < ca->buckets + ca->sb.nbuckets; b++)
-		b->disk_gen = b->gen;
-
-	ca->disk_buckets->seq++;
-
-	atomic_long_add(ca->sb.bucket_size * prio_buckets(ca),
-			&ca->meta_sectors_written);
-
-	pr_debug("free %zu, free_inc %zu, unused %zu", fifo_used(&ca->free),
-		 fifo_used(&ca->free_inc), fifo_used(&ca->unused));
-	blktrace_msg(ca, "Starting priorities: " buckets_free(ca));
-
-	/*
-	 * Punt to workqueue for the rest, so we don't block free_some_buckets()
-	 */
-	continue_at(&ca->prio, do_prio_write, system_wq);
 }
 
 static void prio_read(struct cache *ca, uint64_t bucket)
@@ -644,8 +611,6 @@ static void prio_read(struct cache *ca, uint64_t bucket)
 	struct prio_set *p = ca->disk_buckets;
 	struct bucket_disk *d = p->data + prios_per_bucket(ca), *end = d;
 	unsigned bucket_nr = 0;
-
-	closure_init(&ca->prio, NULL);
 
 	for (struct bucket *b = ca->buckets;
 	     b < ca->buckets + ca->sb.nbuckets;
@@ -656,7 +621,6 @@ static void prio_read(struct cache *ca, uint64_t bucket)
 			bucket_nr++;
 
 			prio_io(ca, bucket, READ_SYNC);
-			closure_sync(&ca->prio);
 
 			if (p->csum != crc64(&p->magic, bucket_bytes(ca) - 8))
 				printk(KERN_WARNING "bcache: "
@@ -673,8 +637,6 @@ static void prio_read(struct cache *ca, uint64_t bucket)
 		b->prio = le16_to_cpu(d->prio);
 		b->gen = b->disk_gen = b->last_gc = b->gc_gen = d->gen;
 	}
-
-	continue_at(&ca->prio, NULL, NULL);
 }
 
 /* Bcache device */
@@ -1302,6 +1264,10 @@ static void cache_set_flush(struct closure *cl)
 	struct cache_set *c = container_of(cl, struct cache_set, caching);
 	struct btree *b;
 
+	/* Shut down allocator threads */
+	set_bit(CACHE_SET_STOPPING_2, &c->flags);
+	wake_up(&c->alloc_wait);
+
 	bch_cache_accounting_destroy(&c->accounting);
 
 	kobject_put(&c->internal);
@@ -1388,6 +1354,7 @@ struct cache_set *bch_cache_set_alloc(struct cache_sb *sb)
 		c->btree_pages = max_t(int, c->btree_pages / 4,
 				       BTREE_MAX_PAGES);
 
+	init_waitqueue_head(&c->alloc_wait);
 	mutex_init(&c->bucket_lock);
 	mutex_init(&c->fill_lock);
 	mutex_init(&c->sort_lock);
@@ -1509,6 +1476,10 @@ static void run_cache_set(struct cache_set *c)
 		 */
 		bch_journal_next(&c->journal);
 
+		for_each_cache(ca, c)
+			closure_call(&ca->alloc, bch_allocator_thread,
+				     system_wq, &c->cl);
+
 		/*
 		 * First place it's safe to allocate: btree_check() and
 		 * btree_gc_finish() have to run before we have buckets to
@@ -1538,8 +1509,30 @@ static void run_cache_set(struct cache_set *c)
 
 		bch_btree_gc_finish(c);
 
+		/*
+		 * We need priorities/gens to be written before the first
+		 * journal write goes down, but the allocator thread has to be
+		 * started before we can write them.
+		 *
+		 * Block priorities from being written so that we can write them
+		 * ourselves without racing with the allocator thread:
+		 */
+		atomic_inc(&c->prio_blocked);
+
+		for_each_cache(ca, c)
+			closure_call(&ca->alloc, bch_allocator_thread,
+				     ca->alloc_workqueue, &c->cl);
+
+		mutex_lock(&c->bucket_lock);
+		for_each_cache(ca, c)
+			bch_prio_write(ca);
+		mutex_unlock(&c->bucket_lock);
+
+		atomic_dec(&c->prio_blocked);
+		wake_up(&c->alloc_wait);
+
 		err = "cannot allocate new UUID bucket";
-		if (uuid_write(c))
+		if (__uuid_write(c))
 			goto err_unlock_gc;
 
 		err = "cannot allocate new btree root";
@@ -1549,21 +1542,6 @@ static void run_cache_set(struct cache_set *c)
 
 		bkey_copy_key(&c->root->key, &MAX_KEY);
 		bch_btree_write(c->root, true, &op);
-
-		mutex_lock(&c->bucket_lock);
-		for_each_cache(ca, c) {
-			bch_free_some_buckets(ca);
-			bch_prio_write(ca);
-		}
-		mutex_unlock(&c->bucket_lock);
-
-		/*
-		 * Wait for prio_write() to finish, so the SET_CACHE_SYNC()
-		 * doesn't race
-		 */
-		for_each_cache(ca, c)
-			closure_wait_event(&c->bucket_wait, &op.cl,
-				   atomic_read(&ca->prio_written) == -1);
 
 		bch_btree_set_root(c->root);
 		rw_unlock(true, c->root);
@@ -1682,6 +1660,9 @@ static void cache_free(struct kobject *kobj)
 
 	bch_cache_allocator_exit(ca);
 
+	if (ca->alloc_workqueue)
+		destroy_workqueue(ca->alloc_workqueue);
+
 	free_pages((unsigned long) ca->disk_buckets, ilog2(bucket_pages(ca)));
 	kfree(ca->prio_buckets);
 	vfree(ca->buckets);
@@ -1741,7 +1722,8 @@ static int cache_alloc(struct cache_sb *sb, struct cache *ca)
 					  ca->sb.nbuckets)) ||
 	    !(ca->prio_buckets	= kzalloc(sizeof(uint64_t) * prio_buckets(ca) *
 					  2, GFP_KERNEL)) ||
-	    !(ca->disk_buckets	= alloc_bucket_pages(GFP_KERNEL, ca)))
+	    !(ca->disk_buckets	= alloc_bucket_pages(GFP_KERNEL, ca)) ||
+	    !(ca->alloc_workqueue = alloc_workqueue("bch_allocator", 0, 1)))
 		goto err;
 
 	ca->prio_last_buckets = ca->prio_buckets + prio_buckets(ca);

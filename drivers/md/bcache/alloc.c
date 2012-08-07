@@ -394,7 +394,7 @@ static void invalidate_buckets(struct cache *ca)
 	}
 }
 
-bool bch_can_save_prios(struct cache *ca)
+static bool bch_can_save_prios(struct cache *ca)
 {
 	return ((ca->need_save_prio > 64 ||
 		 (ca->set->gc_mark_valid &&

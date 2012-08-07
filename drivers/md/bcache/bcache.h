@@ -1115,7 +1115,6 @@ void bch_submit_bbio(struct bio *, struct cache_set *, struct bkey *, unsigned);
 uint8_t bch_inc_gen(struct cache *, struct bucket *);
 void bch_rescale_priorities(struct cache_set *, int);
 bool bch_bucket_add_unused(struct cache *, struct bucket *);
-bool bch_can_save_prios(struct cache *);
 void bch_free_some_buckets(struct cache *);
 
 long bch_bucket_alloc(struct cache *, unsigned, struct closure *);

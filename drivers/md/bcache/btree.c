@@ -2081,7 +2081,6 @@ static int bch_btree_insert_recurse(struct btree *b, struct btree_op *op,
 int bch_btree_insert(struct btree_op *op, struct cache_set *c)
 {
 	int ret = 0;
-	struct cache *ca;
 	struct keylist stack_keys;
 
 	/*
@@ -2093,22 +2092,6 @@ int bch_btree_insert(struct btree_op *op, struct cache_set *c)
 	BUG_ON(bch_keylist_empty(&op->keys));
 	bch_keylist_copy(&stack_keys, &op->keys);
 	bch_keylist_init(&op->keys);
-
-	while (c->need_gc > MAX_NEED_GC) {
-		closure_lock(&c->gc, &c->cl);
-		btree_gc(&c->gc.cl);
-	}
-
-	for_each_cache(ca, c)
-		while (ca->need_save_prio > MAX_SAVE_PRIO) {
-			mutex_lock(&c->bucket_lock);
-			bch_free_some_buckets(ca);
-			mutex_unlock(&c->bucket_lock);
-
-			closure_wait_event_sync(&c->bucket_wait, &op->cl,
-				ca->need_save_prio <= MAX_SAVE_PRIO ||
-				bch_can_save_prios(ca));
-		}
 
 	while (!bch_keylist_empty(&stack_keys) ||
 	       !bch_keylist_empty(&op->keys)) {

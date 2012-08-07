@@ -543,15 +543,49 @@ static void prio_io(struct cache *ca, uint64_t bucket, unsigned long rw)
 #define buckets_free(c)	"free %zu, free_inc %zu, unused %zu",		\
 	fifo_used(&c->free), fifo_used(&c->free_inc), fifo_used(&c->unused)
 
-static void prio_write_done(struct closure *cl)
+void do_prio_write(struct closure *cl)
 {
 	struct cache *ca = container_of(cl, struct cache, prio);
 
-	pr_debug("free %zu, free_inc %zu, unused %zu", fifo_used(&ca->free),
-		 fifo_used(&ca->free_inc), fifo_used(&ca->unused));
-	blktrace_msg(ca, "Finished priorities: " buckets_free(ca));
+	set_closure_blocking(cl);
+
+	for (int i = prio_buckets(ca) - 1; i >= 0; --i) {
+		struct prio_set *p = ca->disk_buckets;
+		struct bucket_disk *d = p->data, *end = d + prios_per_bucket(ca);
+
+		for (struct bucket *b = ca->buckets + i * prios_per_bucket(ca);
+		     b < ca->buckets + ca->sb.nbuckets && d < end;
+		     b++, d++) {
+			d->prio = cpu_to_le16(b->prio);
+			d->gen = b->gen;
+		}
+
+		if (i + 1 != prio_buckets(ca))
+			p->next_bucket = ca->prio_next[i + 1];
+
+		p->next_bucket	= ca->prio_next[i + 1];
+		p->magic	= pset_magic(ca);
+		p->csum		= crc64(&p->magic, bucket_bytes(ca) - 8);
+
+		prio_io(ca, ca->prio_next[i], REQ_WRITE);
+		closure_sync(cl);
+	}
 
 	mutex_lock(&ca->set->bucket_lock);
+
+	for (unsigned i = 0; i < prio_buckets(ca); i++)
+		ca->prio_buckets[i] = ca->prio_next[i];
+
+	ca->prio_alloc = 0;
+	ca->need_save_prio = 0;
+
+	/*
+	 * We have to call bcache_journal_meta() with bucket_lock still held,
+	 * because after we set prio_buckets = prio_next things are inconsistent
+	 * until the next journal entry is updated
+	 */
+	bch_journal_meta(ca->set, cl);
+	closure_sync(cl);
 
 	/*
 	 * XXX: Terrible hack
@@ -570,62 +604,6 @@ static void prio_write_done(struct closure *cl)
 	closure_wake_up(&ca->set->bucket_wait);
 }
 
-static void prio_write_journal(struct closure *cl)
-{
-	struct cache *ca = container_of(cl, struct cache, prio);
-
-	pr_debug("free %zu, free_inc %zu, unused %zu", fifo_used(&ca->free),
-		 fifo_used(&ca->free_inc), fifo_used(&ca->unused));
-	blktrace_msg(ca, "Journalling priorities: " buckets_free(ca));
-
-	mutex_lock(&ca->set->bucket_lock);
-
-	for (unsigned i = 0; i < prio_buckets(ca); i++)
-		ca->prio_buckets[i] = ca->prio_next[i];
-
-	ca->prio_alloc = 0;
-	ca->need_save_prio = 0;
-
-	/*
-	 * We have to call bcache_journal_meta() with bucket_lock still held,
-	 * because after we set prio_buckets = prio_next things are inconsistent
-	 * until the next journal entry is updated
-	 */
-	bch_journal_meta(ca->set, cl);
-
-	mutex_unlock(&ca->set->bucket_lock);
-
-	continue_at(cl, prio_write_done, system_wq);
-}
-
-static void prio_write_bucket(struct closure *cl)
-{
-	struct cache *ca = container_of(cl, struct cache, prio);
-	struct prio_set *p = ca->disk_buckets;
-	struct bucket_disk *d = p->data, *end = d + prios_per_bucket(ca);
-
-	unsigned i = ca->prio_write++;
-
-	for (struct bucket *b = ca->buckets + i * prios_per_bucket(ca);
-	     b < ca->buckets + ca->sb.nbuckets && d < end;
-	     b++, d++) {
-		d->prio = cpu_to_le16(b->prio);
-		d->gen = b->disk_gen;
-	}
-
-	if (ca->prio_write != prio_buckets(ca))
-		p->next_bucket = ca->prio_next[ca->prio_write];
-
-	p->magic = pset_magic(ca);
-	p->csum = crc64(&p->magic, bucket_bytes(ca) - 8);
-
-	prio_io(ca, ca->prio_next[i], REQ_WRITE);
-
-	continue_at(cl, ca->prio_write == prio_buckets(ca)
-		    ? prio_write_journal
-		    : prio_write_bucket, system_wq);
-}
-
 void bch_prio_write(struct cache *ca)
 {
 	lockdep_assert_held(&ca->set->bucket_lock);
@@ -634,29 +612,32 @@ void bch_prio_write(struct cache *ca)
 
 	closure_init(&ca->prio, &ca->set->cl);
 
+	atomic_set(&ca->prio_written, -1);
+
 	for (struct bucket *b = ca->buckets;
 	     b < ca->buckets + ca->sb.nbuckets; b++)
 		b->disk_gen = b->gen;
 
-	ca->prio_write = 0;
 	ca->disk_buckets->seq++;
 
 	atomic_long_add(ca->sb.bucket_size * prio_buckets(ca),
 			&ca->meta_sectors_written);
 
-	atomic_set(&ca->prio_written, -1);
-
 	pr_debug("free %zu, free_inc %zu, unused %zu", fifo_used(&ca->free),
 		 fifo_used(&ca->free_inc), fifo_used(&ca->unused));
 	blktrace_msg(ca, "Starting priorities: " buckets_free(ca));
 
-	continue_at(&ca->prio, prio_write_bucket, system_wq);
+	/*
+	 * Punt to workqueue for the rest, so we don't block free_some_buckets()
+	 */
+	continue_at(&ca->prio, do_prio_write, system_wq);
 }
 
 static void prio_read(struct cache *ca, uint64_t bucket)
 {
 	struct prio_set *p = ca->disk_buckets;
 	struct bucket_disk *d = p->data + prios_per_bucket(ca), *end = d;
+	unsigned bucket_nr = 0;
 
 	closure_init(&ca->prio, NULL);
 
@@ -664,7 +645,7 @@ static void prio_read(struct cache *ca, uint64_t bucket)
 	     b < ca->buckets + ca->sb.nbuckets;
 	     b++, d++) {
 		if (d == end) {
-			ca->prio_buckets[ca->prio_write++] = bucket;
+			ca->prio_buckets[bucket_nr++] = bucket;
 
 			prio_io(ca, bucket, READ_SYNC);
 			closure_sync(&ca->prio);

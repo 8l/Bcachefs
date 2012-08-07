@@ -512,7 +512,6 @@ struct cache {
 	 */
 	uint64_t		*prio_buckets;
 	uint64_t		*prio_next;
-	unsigned		prio_write;
 	unsigned		prio_alloc;
 
 	/* > 0: buckets in free_inc have been marked as free

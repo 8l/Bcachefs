@@ -69,6 +69,10 @@ static int completion_nsec = 10000;
 module_param(completion_nsec, int, S_IRUGO);
 MODULE_PARM_DESC(completion_nsec, "Time in ns to complete a request in hardware. Default: 10,000ns");
 
+static int hw_queue_depth = 64;
+module_param(hw_queue_depth, int, S_IRUGO);
+MODULE_PARM_DESC(hw_queue_depth, "Queue depth for each hardware queue. Default: 64");
+
 static void null_complete_request(struct blk_mq_hw_ctx *hctx,
 				  struct request *rq)
 {
@@ -238,6 +242,7 @@ static int null_add_dev(void)
 	if (use_mq) {
 		null_mq_reg.numa_node = home_node;
 		null_mq_reg.nr_hw_queues = submit_queues;
+		null_mq_reg.queue_depth = hw_queue_depth;
 		nullb->q = blk_mq_init_queue(&null_mq_reg, &nullb->lock);
 	} else {
 		nullb->q = blk_init_queue_node(null_request_fn, &nullb->lock, home_node);

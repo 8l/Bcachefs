@@ -30,6 +30,7 @@
 #include <linux/list_sort.h>
 #include <linux/delay.h>
 #include <linux/ratelimit.h>
+#include <linux/closure.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/block.h>
@@ -52,6 +53,12 @@ static struct kmem_cache *request_cachep;
  * For queue allocation
  */
 struct kmem_cache *blk_requestq_cachep;
+
+/*
+ * For bio_split_hook
+ */
+static struct kmem_cache *bio_split_cache;
+static struct workqueue_struct *bio_split_wq;
 
 /*
  * Controlling structure to kblockd
@@ -569,6 +576,14 @@ struct request_queue *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
 	if (q->id < 0)
 		goto fail_q;
 
+	q->bio_split_hook = mempool_create_slab_pool(4, bio_split_cache);
+	if (!q->bio_split_hook)
+		goto fail_split_hook;
+
+	q->bio_split = bioset_create(4, 0);
+	if (!q->bio_split)
+		goto fail_split;
+
 	q->backing_dev_info.ra_pages =
 			(VM_MAX_READAHEAD * 1024) / PAGE_CACHE_SIZE;
 	q->backing_dev_info.state = 0;
@@ -621,6 +636,10 @@ struct request_queue *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
 
 fail_id:
 	ida_simple_remove(&blk_queue_ida, q->id);
+fail_split:
+	bioset_free(q->bio_split);
+fail_split_hook:
+	mempool_destroy(q->bio_split_hook);
 fail_q:
 	kmem_cache_free(blk_requestq_cachep, q);
 	return NULL;
@@ -1606,6 +1625,83 @@ static inline bool should_fail_request(struct hd_struct *part,
 
 #endif /* CONFIG_FAIL_MAKE_REQUEST */
 
+struct bio_split_hook {
+	struct closure		cl;
+	struct request_queue	*q;
+	struct bio		*bio;
+	bio_end_io_t		*bi_end_io;
+	void			*bi_private;
+};
+
+static void bio_submit_split_done(struct closure *cl)
+{
+	struct bio_split_hook *s = container_of(cl, struct bio_split_hook, cl);
+
+	s->bio->bi_end_io = s->bi_end_io;
+	s->bio->bi_private = s->bi_private;
+	bio_endio(s->bio, 0);
+
+	closure_debug_destroy(&s->cl);
+	mempool_free(s, s->q->bio_split_hook);
+}
+
+static void bio_submit_split_endio(struct bio *bio, int error)
+{
+	struct closure *cl = bio->bi_private;
+	struct bio_split_hook *s = container_of(cl, struct bio_split_hook, cl);
+
+	if (error)
+		clear_bit(BIO_UPTODATE, &s->bio->bi_flags);
+
+	bio_put(bio);
+	closure_put(cl);
+}
+
+static void __bio_submit_split(struct closure *cl)
+{
+	struct bio_split_hook *s = container_of(cl, struct bio_split_hook, cl);
+	struct bio *bio = s->bio, *n;
+
+	do {
+		n = bio_next_split(bio, bio_max_sectors(bio),
+				   GFP_NOIO, s->q->bio_split);
+
+		n->bi_end_io	= bio_submit_split_endio;
+		n->bi_private	= cl;
+
+		closure_get(cl);
+		generic_make_request(n);
+	} while (n != bio);
+
+	continue_at(cl, bio_submit_split_done, NULL);
+}
+
+static bool bio_submit_split(struct bio *bio)
+{
+	struct bio_split_hook *s;
+	struct request_queue *q = bdev_get_queue(bio->bi_bdev);
+
+	if (!q || !q->bio_split_hook)
+		return false;
+
+	if (!bio_has_data(bio) && !(bio->bi_rw & REQ_DISCARD))
+		return false;
+
+	if (bio_sectors(bio) <= bio_max_sectors(bio))
+		return false;
+
+	s = mempool_alloc(q->bio_split_hook, GFP_NOIO);
+
+	s->bio		= bio;
+	s->q		= q;
+	s->bi_end_io	= bio->bi_end_io;
+	s->bi_private	= bio->bi_private;
+	bio_get(bio);
+
+	closure_call(&s->cl, __bio_submit_split, NULL, NULL);
+	return true;
+}
+
 /*
  * Check whether this bio extends beyond the end of the device.
  */
@@ -1656,15 +1752,6 @@ generic_make_request_checks(struct bio *bio)
 			"nonexistent block-device %s (%Lu)\n",
 			bdevname(bio->bi_bdev, b),
 			(long long) bio->bi_sector);
-		goto end_io;
-	}
-
-	if (unlikely(!(bio->bi_rw & REQ_DISCARD) &&
-		     nr_sectors > queue_max_hw_sectors(q))) {
-		printk(KERN_ERR "bio too big device %s (%u > %u)\n",
-		       bdevname(bio->bi_bdev, b),
-		       bio_sectors(bio),
-		       queue_max_hw_sectors(q));
 		goto end_io;
 	}
 
@@ -1767,6 +1854,14 @@ void generic_make_request(struct bio *bio)
 	 * it is non-NULL, then a make_request is active, and new requests
 	 * should be added at the tail
 	 */
+
+	/*
+	 * If the device can't accept arbitrary sized bios, check if we
+	 * need to split:
+	 */
+	if (bio_submit_split(bio))
+		return;
+
 	if (current->bio_list) {
 		bio_list_add(current->bio_list, bio);
 		return;
@@ -3039,11 +3134,18 @@ int __init blk_dev_init(void)
 	if (!kblockd_workqueue)
 		panic("Failed to create kblockd\n");
 
+	bio_split_wq = alloc_workqueue("bio_split", WQ_MEM_RECLAIM, 0);
+	if (!bio_split_wq)
+		panic("Failed to create bio_split wq\n");
+
 	request_cachep = kmem_cache_create("blkdev_requests",
 			sizeof(struct request), 0, SLAB_PANIC, NULL);
 
 	blk_requestq_cachep = kmem_cache_create("blkdev_queue",
 			sizeof(struct request_queue), 0, SLAB_PANIC, NULL);
+
+	bio_split_cache = kmem_cache_create("bio_split_hook",
+			sizeof(struct bio_split_hook), 0, SLAB_PANIC, NULL);
 
 	return 0;
 }

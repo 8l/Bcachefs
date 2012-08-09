@@ -456,6 +456,50 @@ inline int bio_phys_segments(struct request_queue *q, struct bio *bio)
 }
 EXPORT_SYMBOL(bio_phys_segments);
 
+unsigned __bio_max_sectors(struct bio *bio, struct block_device *bdev,
+			   sector_t sector)
+{
+	unsigned ret = bio_sectors(bio);
+	struct request_queue *q = bdev_get_queue(bdev);
+	struct bio_vec *bv, *end = bio_iovec(bio) +
+		min_t(int, bio_segments(bio), queue_max_segments(q));
+
+	struct bvec_merge_data bvm = {
+		.bi_bdev	= bdev,
+		.bi_sector	= sector,
+		.bi_size	= 0,
+		.bi_rw		= bio->bi_rw,
+	};
+
+	if (bio->bi_rw & REQ_DISCARD)
+		return min(ret, q->limits.max_discard_sectors);
+
+	if (bio_segments(bio) > queue_max_segments(q) ||
+	    q->merge_bvec_fn) {
+		ret = 0;
+
+		for (bv = bio_iovec(bio); bv < end; bv++) {
+			if (q->merge_bvec_fn &&
+			    q->merge_bvec_fn(q, &bvm, bv) < (int) bv->bv_len)
+				break;
+
+			ret		+= bv->bv_len >> 9;
+			bvm.bi_size	+= bv->bv_len;
+		}
+
+		if (ret >= (BIO_MAX_PAGES * PAGE_SIZE) >> 9)
+			return (BIO_MAX_PAGES * PAGE_SIZE) >> 9;
+	}
+
+	ret = min(ret, queue_max_sectors(q));
+
+	WARN_ON(!ret);
+	ret = max_t(int, ret, bio_iovec(bio)->bv_len >> 9);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(__bio_max_sectors);
+
 /**
  * 	__bio_clone	-	clone a bio
  * 	@bio: destination bio

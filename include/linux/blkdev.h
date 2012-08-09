@@ -430,6 +430,9 @@ struct request_queue {
 	/* Throttle data */
 	struct throtl_data *td;
 #endif
+
+	mempool_t		*bio_split_hook;
+	struct bio_set		*bio_split;
 };
 
 #define QUEUE_FLAG_QUEUED	1	/* uses generic tag queueing */

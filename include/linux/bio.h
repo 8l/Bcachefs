@@ -263,6 +263,13 @@ extern void bio_endio(struct bio *, int);
 struct request_queue;
 extern int bio_phys_segments(struct request_queue *, struct bio *);
 
+unsigned __bio_max_sectors(struct bio *, struct block_device *, sector_t);
+
+static inline unsigned bio_max_sectors(struct bio *bio)
+{
+	return __bio_max_sectors(bio, bio->bi_bdev, bio->bi_sector);
+}
+
 extern void bio_init(struct bio *);
 extern void bio_reset(struct bio *);
 

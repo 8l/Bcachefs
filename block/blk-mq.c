@@ -60,9 +60,9 @@ static struct request *__blk_mq_alloc_rq_nowait(struct blk_mq_hw_ctx *hctx)
 }
 
 static struct request *__blk_mq_alloc_request(struct request_queue *q,
-							struct blk_mq_ctx *ctx,
-							unsigned int rw_flags, gfp_t gfp,
-							bool has_lock)
+					      struct blk_mq_ctx *ctx,
+					      unsigned int rw_flags, gfp_t gfp,
+					      bool has_lock)
 {
 	struct blk_mq_hw_ctx *hctx;
 	struct request *rq = NULL;
@@ -96,10 +96,11 @@ got_rq:
 		io_schedule();
 	} while (!rq);
 
+	finish_wait(&hctx->rq_wait, &wait);
+
 	if (has_lock)
 		spin_lock(&ctx->lock);
 
-	finish_wait(&hctx->rq_wait, &wait);
 	goto got_rq;
 }
 

@@ -27,12 +27,13 @@ struct bio *bch_bbio_alloc(struct cache_set *c)
 void __bch_submit_bbio(struct bio *bio, struct cache_set *c)
 {
 	struct bbio *b = container_of(bio, struct bbio, bio);
+	struct cache *ca = PTR_CACHE(c, &b->key, 0);
 
 	bio->bi_sector	= PTR_OFFSET(&b->key, 0);
-	bio->bi_bdev	= PTR_CACHE(c, &b->key, 0)->bdev;
+	bio->bi_bdev	= ca->bdev;
 
 	b->submit_time_us = local_clock_us();
-	closure_bio_submit(bio, bio->bi_private);
+	cache_bio_cl_submit(ca, bio, bio->bi_private);
 }
 
 void bch_submit_bbio(struct bio *bio, struct cache_set *c,

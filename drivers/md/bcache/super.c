@@ -264,7 +264,7 @@ static void __write_super(struct cache_sb *sb, struct bio *bio)
 	struct cache_sb *out = page_address(bio->bi_io_vec[0].bv_page);
 
 	bio->bi_sector	= SB_SECTOR;
-	bio->bi_rw	= REQ_SYNC|REQ_META;
+	bio->bi_rw	= REQ_WRITE|REQ_SYNC|REQ_META;
 	bio->bi_size	= SB_SIZE;
 	bio_map(bio, NULL);
 
@@ -289,8 +289,6 @@ static void __write_super(struct cache_sb *sb, struct bio *bio)
 
 	pr_debug("ver %llu, flags %llu, seq %llu",
 		 sb->version, sb->flags, sb->seq);
-
-	submit_bio(REQ_WRITE, bio);
 }
 
 void bch_write_bdev_super(struct cached_dev *dc, struct closure *parent)
@@ -305,8 +303,8 @@ void bch_write_bdev_super(struct cached_dev *dc, struct closure *parent)
 	bio->bi_end_io	= write_bdev_super_endio;
 	bio->bi_private = dc;
 
-	closure_get(cl);
 	__write_super(&dc->sb, bio);
+	closure_bio_submit(bio, cl);
 
 	closure_return(cl);
 }
@@ -342,8 +340,8 @@ static void bcache_write_super(struct cache_set *c)
 		bio->bi_end_io	= write_super_endio;
 		bio->bi_private = ca;
 
-		closure_get(cl);
 		__write_super(&ca->sb, bio);
+		cache_bio_cl_submit(ca, bio, cl);
 	}
 
 	closure_return(cl);
@@ -403,7 +401,7 @@ static void prio_io(struct cache *ca, uint64_t bucket, unsigned long rw)
 	bio->bi_private = ca;
 	bio_map(bio, ca->disk_buckets);
 
-	closure_bio_submit(bio, cl);
+	cache_bio_cl_submit(ca, bio, cl);
 	closure_sync(cl);
 }
 
@@ -1554,6 +1552,11 @@ err:
 
 /* Cache device */
 
+static void cache_default_submit(struct cache *ca, struct bio *bio)
+{
+	generic_make_request(bio);
+}
+
 static void cache_free(struct kobject *kobj)
 {
 	struct cache *ca = container_of(kobj, struct cache, kobj);
@@ -1603,15 +1606,17 @@ static int cache_alloc(struct cache_sb *sb, struct cache *ca)
 
 	memcpy(&ca->sb, sb, sizeof(struct cache_sb));
 
+	ca->submit_fn = cache_default_submit;
+
 	INIT_LIST_HEAD(&ca->discards);
 
 	bio_init(&ca->sb_bio);
 	ca->sb_bio.bi_max_vecs	= 1;
 	ca->sb_bio.bi_io_vec	= ca->sb_bio.bi_inline_vecs;
 
-	bio_init(&ca->journal.bio);
-	ca->journal.bio.bi_max_vecs = 8;
-	ca->journal.bio.bi_io_vec = ca->journal.bio.bi_inline_vecs;
+	bio_init(&ca->journal.bio.bio);
+	ca->journal.bio.bio.bi_max_vecs = 8;
+	ca->journal.bio.bio.bi_io_vec = ca->journal.bio.bio.bi_inline_vecs;
 
 	free = roundup_pow_of_two(ca->sb.nbuckets) >> 9;
 	free = max_t(size_t, free, (prio_buckets(ca) + 8) * 2);

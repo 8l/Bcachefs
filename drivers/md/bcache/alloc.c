@@ -179,7 +179,7 @@ static void do_discard(struct cache *ca, long bucket)
 	d->bio.bi_size		= bucket_bytes(ca);
 	d->bio.bi_end_io	= discard_endio;
 
-	submit_bio(0, &d->bio);
+	cache_bio_submit(ca, &d->bio);
 }
 
 /* Allocation */

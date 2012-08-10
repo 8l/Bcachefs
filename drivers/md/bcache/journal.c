@@ -109,7 +109,7 @@ static int journal_read_bucket(struct cache *ca, struct list_head *list,
 			       struct btree_op *op, unsigned bucket_index)
 {
 	struct journal_device *ja = &ca->journal;
-	struct bio *bio = &ja->bio;
+	struct bio *bio = &ja->bio.bio;
 
 	struct journal_replay *i;
 	struct jset *j, *data = ca->set->journal.w[0].data;
@@ -133,7 +133,7 @@ reread:		left = ca->sb.bucket_size - offset;
 		bio->bi_private = &op->cl;
 		bio_map(bio, data);
 
-		closure_bio_submit(bio, &op->cl);
+		cache_bio_cl_submit(ca, bio, &op->cl);
 		closure_sync(&op->cl);
 
 		/* This function could be simpler now since we no longer write
@@ -517,8 +517,9 @@ static void journal_discard_work(struct work_struct *work)
 {
 	struct journal_device *ja =
 		container_of(work, struct journal_device, discard_work);
+	struct cache *ca = container_of(ja, struct cache, journal);
 
-	submit_bio(0, &ja->discard_bio);
+	cache_bio_submit(ca, &ja->discard_bio);
 }
 
 static void do_journal_discard(struct cache *ca)
@@ -728,20 +729,23 @@ static void journal_write_unlocked(struct closure *cl)
 	w->data->csum		= csum_set(w->data);
 
 	for (unsigned i = 0; i < KEY_PTRS(k); i++) {
+		struct bbio *bbio;
+
 		ca = PTR_CACHE(c, k, i);
-		bio = &ca->journal.bio;
+		bbio = &ca->journal.bio;
+		bio = &bbio->bio;
 
 		atomic_long_add(sectors, &ca->meta_sectors_written);
 
 		bio_reset(bio);
-		bio->bi_sector	= PTR_OFFSET(k, i);
-		bio->bi_bdev	= ca->bdev;
 		bio->bi_rw	= REQ_WRITE|REQ_SYNC|REQ_META|REQ_FLUSH;
 		bio->bi_size	= sectors << 9;
 
 		bio->bi_end_io	= journal_write_endio;
 		bio->bi_private = w;
 		bio_map(bio, w->data);
+
+		bch_bkey_copy_single_ptr(&bbio->key, k, i);
 
 		trace_bcache_journal_write(bio);
 		bio_list_add(&list, bio);
@@ -757,8 +761,16 @@ static void journal_write_unlocked(struct closure *cl)
 
 	spin_unlock(&c->journal.lock);
 
-	while ((bio = bio_list_pop(&list)))
-		closure_bio_submit(bio, cl);
+	while ((bio = bio_list_pop(&list))) {
+		struct bbio *b = container_of(bio, struct bbio, bio);
+		struct cache *ca = PTR_CACHE(c, &b->key, 0);
+
+		bio->bi_sector	= PTR_OFFSET(&b->key, 0);
+		bio->bi_bdev	= ca->bdev;
+
+		b->submit_time_us = local_clock_us();
+		cache_bio_cl_submit(ca, bio, cl);
+	}
 
 	continue_at(cl, journal_write_done, NULL);
 }

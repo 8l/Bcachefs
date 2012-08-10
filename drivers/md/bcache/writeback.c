@@ -287,9 +287,11 @@ static void read_dirty_endio(struct bio *bio, int error)
 static void read_dirty_submit(struct closure *cl)
 {
 	struct dirty_io *io = container_of(cl, struct dirty_io, cl);
+	struct keybuf_key *w = io->bio.bi_private;
 
 	trace_bcache_read_dirty(&io->bio);
-	closure_bio_submit(&io->bio, cl);
+	cache_bio_cl_submit(PTR_CACHE(io->dc->disk.c, &w->key, 0),
+			    &io->bio, cl);
 
 	continue_at(cl, write_dirty, dirty_wq);
 }

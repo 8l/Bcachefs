@@ -345,6 +345,19 @@ struct prio_set {
 	} __attribute((packed)) data[];
 };
 
+struct bbio {
+	unsigned		submit_time_us;
+	union {
+		struct bkey	key;
+		uint64_t	_pad[3];
+		/*
+		 * We only need pad = 3 here because we only ever carry around a
+		 * single pointer - i.e. the pointer we're doing io to/from.
+		 */
+	};
+	struct bio		bio;
+};
+
 #include "journal.h"
 #include "stats.h"
 #include "inode.h"
@@ -523,6 +536,8 @@ struct cache {
 
 	struct kobject		kobj;
 	struct block_device	*bdev;
+
+	void (*submit_fn)(struct cache *, struct bio *);
 
 	unsigned		watermark[WATERMARK_MAX];
 
@@ -845,19 +860,6 @@ static inline bool key_merging_disabled(struct cache_set *c)
 #endif
 }
 
-struct bbio {
-	unsigned		submit_time_us;
-	union {
-		struct bkey	key;
-		uint64_t	_pad[3];
-		/*
-		 * We only need pad = 3 here because we only ever carry around a
-		 * single pointer - i.e. the pointer we're doing io to/from.
-		 */
-	};
-	struct bio		bio;
-};
-
 static inline unsigned local_clock_us(void)
 {
 	return local_clock() >> 10;
@@ -1123,6 +1125,19 @@ static inline uint8_t bucket_disk_gen(struct bucket *b)
 #define kobj_attribute_rw(n, show, store)				\
 	static struct kobj_attribute ksysfs_##n =			\
 		__ATTR(n, S_IWUSR|S_IRUSR, show, store)
+
+static inline void cache_bio_submit(struct cache *ca, struct bio *bio)
+{
+	ca->submit_fn(ca, bio);
+}
+
+static inline void cache_bio_cl_submit(struct cache *ca,
+				       struct bio *bio,
+				       struct closure *cl)
+{
+	closure_get(cl);
+	cache_bio_submit(ca, bio);
+}
 
 /* Forward declarations */
 

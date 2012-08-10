@@ -225,7 +225,7 @@ struct journal_device {
 	struct bio_vec		discard_bv;
 
 	/* Bio for journal reads/writes to this device */
-	struct bio		bio;
+	struct bbio		bio;
 	struct bio_vec		bv[8];
 };
 

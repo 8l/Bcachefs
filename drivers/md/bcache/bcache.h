@@ -189,6 +189,7 @@
 #include <linux/workqueue.h>
 
 #include "util.h"
+#include "write-buffer.h"
 
 #include <linux/dynamic_fault.h>
 
@@ -282,6 +283,8 @@ BITMASK(CACHE_REPLACEMENT,	struct cache_sb, flags, 2, 3);
 #define CACHE_REPLACEMENT_LRU	0U
 #define CACHE_REPLACEMENT_FIFO	1U
 #define CACHE_REPLACEMENT_RANDOM 2U
+
+BITMASK(CACHE_WRITE_BUFFERED,	struct cache_sb, flags, 5, 1);
 
 BITMASK(BDEV_CACHE_MODE,	struct cache_sb, flags, 0, 4);
 #define CACHE_MODE_WRITETHROUGH	0U
@@ -538,6 +541,8 @@ struct cache {
 	struct block_device	*bdev;
 
 	void (*submit_fn)(struct cache *, struct bio *);
+
+	struct write_buffer	write_buffer;
 
 	unsigned		watermark[WATERMARK_MAX];
 

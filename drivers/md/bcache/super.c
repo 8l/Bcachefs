@@ -1564,6 +1564,7 @@ static void cache_free(struct kobject *kobj)
 	if (ca->set)
 		ca->set->cache[ca->sb.nr_this_dev] = NULL;
 
+	bch_write_buffer_exit(ca);
 	bch_cache_allocator_exit(ca);
 
 	if (ca->alloc_workqueue)
@@ -1642,6 +1643,15 @@ static int cache_alloc(struct cache_sb *sb, struct cache *ca)
 
 	if (bch_cache_allocator_init(ca))
 		goto err;
+
+	if (CACHE_WRITE_BUFFERED(&ca->sb)) {
+		if (ca->sb.block_size < 8) {
+			/* Error out */
+		}
+
+		if (bch_write_buffer_init(ca))
+			goto err;
+	}
 
 	return 0;
 err:

@@ -85,7 +85,7 @@ enum {
 	BLK_MQ_F_SHOULD_IPI	= 1 << 2,
 	BLK_MQ_F_SHOULD_LOCK	= 1 << 3, /* lock on queue_rq invocation */
 
-	BLK_MQ_MAX_DEPTH	= 256,
+	BLK_MQ_MAX_DEPTH	= 2048,
 };
 
 struct request_queue *blk_mq_init_queue(struct blk_mq_reg *, spinlock_t *);

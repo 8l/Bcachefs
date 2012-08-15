@@ -603,14 +603,15 @@ static int blk_mq_init_rq_map(struct blk_mq_hw_ctx *hctx)
 	int i;
 
 	/*
-	 * We try to allocate all request structures up front. For highly fragmented memory
-	 * this might not be possible and as a result, we lower the queue depth size and
-	 * try again.
+	 * We try to allocate all request structures up front. For highly
+	 * fragmented memory this might not be possible and as a result, we
+	 * lower the queue depth size and try again.
 	 */
 	cur_qd = hctx->queue_depth;
 	while (cur_qd > 0) {
-		hctx->rqs = kmalloc_node(hctx->queue_depth * sizeof(struct request),
-					GFP_KERNEL, hctx->numa_node);
+		size_t size = hctx->queue_depth * sizeof(struct request);
+
+		hctx->rqs = kmalloc_node(size, GFP_KERNEL, hctx->numa_node);
 		if (hctx->rqs)
 			break;
 
@@ -622,7 +623,7 @@ static int blk_mq_init_rq_map(struct blk_mq_hw_ctx *hctx)
 
 	if (hctx->queue_depth != cur_qd) {
 		hctx->queue_depth = cur_qd;
-		printk(KERN_WARNING "%s: queue depth set to %u because of low memory.\n",
+		pr_warning("%s: queue depth set to %u because of low memory\n",
 					__func__, cur_qd);
 	}
 

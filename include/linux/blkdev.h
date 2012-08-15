@@ -325,7 +325,7 @@ struct request_queue {
 	unsigned int		nr_queues;
 
 	/* hw dispatch queues */
-	struct blk_mq_hw_ctx	*queue_hw_ctx;
+	struct blk_mq_hw_ctx	**queue_hw_ctx;
 	unsigned int		nr_hw_queues;
 
 	/*

@@ -581,9 +581,21 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *q,
 						 struct blk_mq_ctx *ctx)
 {
-	return &q->queue_hw_ctx[0];
+	return q->queue_hw_ctx[0];
 }
 EXPORT_SYMBOL(blk_mq_map_single_queue);
+
+struct blk_mq_hw_ctx *blk_mq_alloc_single_hw_queue(struct blk_mq_reg *reg, unsigned int hctx_index)
+{
+	return kmalloc_node(sizeof(struct blk_mq_hw_ctx), GFP_KERNEL | __GFP_ZERO, reg->numa_node);
+}
+EXPORT_SYMBOL(blk_mq_alloc_single_hw_queue);
+
+void blk_mq_free_single_hw_queue(struct blk_mq_hw_ctx *hctx, unsigned int hctx_index)
+{
+	kfree(hctx);
+}
+EXPORT_SYMBOL(blk_mq_free_single_hw_queue);
 
 static int blk_mq_init_rq_map(struct blk_mq_hw_ctx *hctx)
 {
@@ -613,6 +625,7 @@ static int blk_mq_init_rq_map(struct blk_mq_hw_ctx *hctx)
 struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 					spinlock_t *lock)
 {
+	struct blk_mq_hw_ctx **hctxs;
 	struct blk_mq_hw_ctx *hctx;
 	struct blk_mq_ctx *ctx;
 	struct request_queue *q;
@@ -620,6 +633,11 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 
 	if (!reg->nr_hw_queues || !reg->ops->queue_rq || !reg->ops->map_queue)
 		return ERR_PTR(-EINVAL);
+
+	if (!reg->ops->alloc_hctx || !reg->ops->free_hctx) {
+		reg->ops->alloc_hctx = blk_mq_alloc_single_hw_queue;
+		reg->ops->free_hctx = blk_mq_free_single_hw_queue;
+	}
 
 	if (!reg->queue_depth)
 		reg->queue_depth = BLK_MQ_MAX_DEPTH;
@@ -632,13 +650,22 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 	if (!ctx)
 		return ERR_PTR(-ENOMEM);
 
-	hctx = kmalloc_node(reg->nr_hw_queues * sizeof(*hctx), GFP_KERNEL,
-				reg->numa_node);
-	if (!hctx) {
+	hctxs = kmalloc_node(reg->nr_hw_queues * sizeof(*hctxs), GFP_KERNEL,
+			reg->numa_node);
+
+	if (!hctxs) {
 		free_percpu(ctx);
 		return ERR_PTR(-ENOMEM);
 	}
-	memset(hctx, 0, reg->nr_hw_queues * sizeof(*hctx));
+
+	for (i = 0;i < reg->nr_hw_queues; i++) {
+		hctxs[i] = reg->ops->alloc_hctx(reg, i);
+		if(!hctxs[i]) {
+			while (i--)
+				reg->ops->free_hctx(hctxs[i], i);
+			return NULL;
+		}
+	}
 
 	q = blk_alloc_queue_node(GFP_KERNEL, reg->numa_node);
 	if (!q) {
@@ -653,7 +680,7 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 	q->nr_hw_queues = reg->nr_hw_queues;
 
 	q->queue_ctx = ctx;
-	q->queue_hw_ctx = hctx;
+	q->queue_hw_ctx = hctxs;
 
 	q->mq_ops = reg->ops;
 
@@ -731,6 +758,7 @@ void blk_mq_free_queue(struct request_queue *q)
 		kfree(hctx->ctxs);
 		kfree(hctx->rqs);
 		kfree(hctx->rq_map);
+		q->mq_ops->free_hctx(hctx, i);
 	}
 
 	free_percpu(q->queue_ctx);

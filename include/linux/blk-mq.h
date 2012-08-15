@@ -53,13 +53,26 @@ struct blk_mq_hw_ctx {
 	struct kobject		kobj;
 };
 
+struct blk_mq_reg {
+	struct blk_mq_ops	*ops;
+	unsigned int		nr_hw_queues;
+	unsigned int		queue_depth;
+	int			numa_node;
+	unsigned int		timeout;
+	unsigned int		flags;		/* BLK_MQ_F_* */
+};
+
 typedef int (queue_rq_fn) (struct blk_mq_hw_ctx *, struct request *);
 typedef struct blk_mq_hw_ctx *(map_queue_fn) (struct request_queue *, struct blk_mq_ctx *);
+typedef struct blk_mq_hw_ctx *(alloc_hctx_fn) (struct blk_mq_reg *reg, unsigned int hctx_index);
+typedef void (free_hctx_fn) (struct blk_mq_hw_ctx *hctx, unsigned int hctx_index);
 
 struct blk_mq_ops {
 	queue_rq_fn		*queue_rq;
 	map_queue_fn		*map_queue;
 	rq_timed_out_fn		*timeout;
+	alloc_hctx_fn		*alloc_hctx;
+	free_hctx_fn		*free_hctx;
 };
 
 enum {
@@ -75,15 +88,6 @@ enum {
 	BLK_MQ_MAX_DEPTH	= 256,
 };
 
-struct blk_mq_reg {
-	struct blk_mq_ops	*ops;
-	unsigned int		nr_hw_queues;
-	unsigned int		queue_depth;
-	int			numa_node;
-	unsigned int		timeout;
-	unsigned int		flags;		/* BLK_MQ_F_* */
-};
-
 struct request_queue *blk_mq_init_queue(struct blk_mq_reg *, spinlock_t *);
 void blk_mq_free_queue(struct request_queue *);
 int blk_mq_register_disk(struct gendisk *);
@@ -95,13 +99,15 @@ void blk_mq_insert_requests(struct request_queue *, struct list_head *);
 void blk_mq_run_queues(struct request_queue *q, bool async);
 struct request *blk_mq_alloc_request(struct request_queue *q, int rw, gfp_t gfp);
 
-struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *q, struct blk_mq_ctx *);
+struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *, struct blk_mq_ctx *);
+struct blk_mq_hw_ctx *blk_mq_alloc_single_hw_queue(struct blk_mq_reg *, unsigned int);
+void blk_mq_free_single_hw_queue(struct blk_mq_hw_ctx *, unsigned int);
 
 void blk_mq_end_io(struct blk_mq_hw_ctx *hctx, struct request *rq, int error);
 
 #define queue_for_each_hw_ctx(q, hctx, i)				\
-	for ((i) = 0, hctx = &(q)->queue_hw_ctx[0];			\
-	     (i) < (q)->nr_hw_queues; (i)++, hctx++)
+	for ((i) = 0, hctx = (q)->queue_hw_ctx[0];			\
+	     (i) < (q)->nr_hw_queues; (i)++, hctx = (q)->queue_hw_ctx[i])
 
 #define queue_for_each_ctx(q, ctx, i)					\
 	for ((i) = 0, ctx = per_cpu_ptr((q)->queue_ctx, 0);		\

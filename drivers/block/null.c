@@ -73,6 +73,10 @@ static int hw_queue_depth = 64;
 module_param(hw_queue_depth, int, S_IRUGO);
 MODULE_PARM_DESC(hw_queue_depth, "Queue depth for each hardware queue. Default: 64");
 
+static bool use_per_node_hctx = true;
+module_param(use_per_node_hctx, bool, S_IRUGO);
+MODULE_PARM_DESC(use_per_node_hctx, "Use per-node allocation for hardware context queues. Default: true");
+
 static void null_complete_request(struct blk_mq_hw_ctx *hctx,
 				  struct request *rq)
 {
@@ -94,7 +98,7 @@ static enum hrtimer_restart null_request_timer_expired(struct hrtimer *timer)
 
 	while ((entry = llist_del_first(&cq->list)) != NULL) {
 		rq = llist_entry(entry, struct request, ll_list);
-		null_complete_request(rq->q->queue_hw_ctx, rq);
+		null_complete_request(NULL, rq);
 	}
 
 	return HRTIMER_NORESTART;
@@ -124,7 +128,7 @@ static void null_ipi_end_io(void *data)
 
 	while ((entry = llist_del_first(&cq->list)) != NULL) {
 		rq = llist_entry(entry, struct request, ll_list);
-		null_complete_request(rq->q->queue_hw_ctx, rq);
+		null_complete_request(NULL, rq);
 	}
 }
 
@@ -184,6 +188,26 @@ static int null_queue_rq(struct blk_mq_hw_ctx *hctx, struct request *rq)
 	return BLK_MQ_RQ_QUEUE_OK;
 }
 
+static struct blk_mq_hw_ctx *null_alloc_hctx(struct blk_mq_reg *reg, unsigned int hctx_index)
+{
+	return kmalloc_node(sizeof(struct blk_mq_hw_ctx),
+				GFP_KERNEL | __GFP_ZERO, hctx_index);
+}
+
+static void null_free_hctx(struct blk_mq_hw_ctx* hctx, unsigned int hctx_index)
+{
+	kfree(hctx);
+}
+
+/*
+ * Map each per-cpu software queue to a per-node hardware queue
+ */
+struct blk_mq_hw_ctx *null_queue_map_per_node(struct request_queue *q,
+					      struct blk_mq_ctx *ctx)
+{
+	return q->queue_hw_ctx[cpu_to_node(ctx->index)];
+}
+
 static struct blk_mq_ops null_mq_ops = {
 	.queue_rq       = null_queue_rq,
 	.map_queue      = blk_mq_map_single_queue,
@@ -191,7 +215,6 @@ static struct blk_mq_ops null_mq_ops = {
 
 static struct blk_mq_reg null_mq_reg = {
 	.ops		= &null_mq_ops,
-	.nr_hw_queues	= 1,
 	.queue_depth	= 64,
 	.flags		= BLK_MQ_F_SHOULD_MERGE,
 };
@@ -241,8 +264,20 @@ static int null_add_dev(void)
 
 	if (use_mq) {
 		null_mq_reg.numa_node = home_node;
-		null_mq_reg.nr_hw_queues = submit_queues;
 		null_mq_reg.queue_depth = hw_queue_depth;
+
+		if (use_per_node_hctx) {
+			null_mq_reg.ops->alloc_hctx = null_alloc_hctx;
+			null_mq_reg.ops->free_hctx = null_free_hctx;
+
+			null_mq_reg.nr_hw_queues = nr_online_nodes;
+		} else {
+			null_mq_reg.ops->alloc_hctx = blk_mq_alloc_single_hw_queue;
+			null_mq_reg.ops->free_hctx = blk_mq_free_single_hw_queue;
+
+			null_mq_reg.nr_hw_queues = submit_queues;
+		}
+
 		nullb->q = blk_mq_init_queue(&null_mq_reg, &nullb->lock);
 	} else {
 		nullb->q = blk_init_queue_node(null_request_fn, &nullb->lock, home_node);

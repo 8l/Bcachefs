@@ -631,13 +631,8 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 	struct request_queue *q;
 	int i;
 
-	if (!reg->nr_hw_queues || !reg->ops->queue_rq || !reg->ops->map_queue)
+	if (!reg->nr_hw_queues || !reg->ops->queue_rq || !reg->ops->map_queue || !reg->ops->alloc_hctx || !reg->ops->free_hctx)
 		return ERR_PTR(-EINVAL);
-
-	if (!reg->ops->alloc_hctx || !reg->ops->free_hctx) {
-		reg->ops->alloc_hctx = blk_mq_alloc_single_hw_queue;
-		reg->ops->free_hctx = blk_mq_free_single_hw_queue;
-	}
 
 	if (!reg->queue_depth)
 		reg->queue_depth = BLK_MQ_MAX_DEPTH;

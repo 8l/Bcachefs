@@ -487,7 +487,7 @@ void blk_mq_insert_requests(struct request_queue *q, struct list_head *list)
 
 	ctx = per_cpu_ptr(q->queue_ctx, smp_processor_id());
 	hctx = q->mq_ops->map_queue(q, ctx);
-	
+
 	spin_lock(&ctx->lock);
 	while (!list_empty(list)) {
 		struct request *rq;
@@ -514,7 +514,8 @@ static struct request *blk_mq_bio_to_request(struct request_queue *q,
 
 	trace_block_getrq(q, bio, rw_flags & 1);
 
-	rq = __blk_mq_alloc_request(q, ctx, rw_flags, GFP_ATOMIC | __GFP_WAIT, has_lock);
+	rq = __blk_mq_alloc_request(q, ctx, rw_flags, GFP_ATOMIC | __GFP_WAIT,
+					has_lock);
 	if (rq)
 		init_request_from_bio(rq, bio);
 
@@ -579,19 +580,22 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
  * Default mapping to a software queue, since we use one per CPU
  */
 struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *q,
-						 struct blk_mq_ctx *ctx)
+					      struct blk_mq_ctx *ctx)
 {
 	return q->queue_hw_ctx[0];
 }
 EXPORT_SYMBOL(blk_mq_map_single_queue);
 
-struct blk_mq_hw_ctx *blk_mq_alloc_single_hw_queue(struct blk_mq_reg *reg, unsigned int hctx_index)
+struct blk_mq_hw_ctx *blk_mq_alloc_single_hw_queue(struct blk_mq_reg *reg,
+						   unsigned int hctx_index)
 {
-	return kmalloc_node(sizeof(struct blk_mq_hw_ctx), GFP_KERNEL | __GFP_ZERO, reg->numa_node);
+	return kmalloc_node(sizeof(struct blk_mq_hw_ctx),
+				GFP_KERNEL | __GFP_ZERO, reg->numa_node);
 }
 EXPORT_SYMBOL(blk_mq_alloc_single_hw_queue);
 
-void blk_mq_free_single_hw_queue(struct blk_mq_hw_ctx *hctx, unsigned int hctx_index)
+void blk_mq_free_single_hw_queue(struct blk_mq_hw_ctx *hctx,
+				 unsigned int hctx_index)
 {
 	kfree(hctx);
 }
@@ -623,7 +627,7 @@ static int blk_mq_init_rq_map(struct blk_mq_hw_ctx *hctx)
 
 	if (hctx->queue_depth != cur_qd) {
 		hctx->queue_depth = cur_qd;
-		pr_warning("%s: queue depth set to %u because of low memory\n",
+		pr_warn("%s: queue depth set to %u because of low memory\n",
 					__func__, cur_qd);
 	}
 
@@ -651,13 +655,15 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 	struct request_queue *q;
 	int i;
 
-	if (!reg->nr_hw_queues || !reg->ops->queue_rq || !reg->ops->map_queue || !reg->ops->alloc_hctx || !reg->ops->free_hctx)
+	if (!reg->nr_hw_queues || !reg->ops->queue_rq ||
+	    !reg->ops->map_queue || !reg->ops->alloc_hctx ||
+	    !reg->ops->free_hctx)
 		return ERR_PTR(-EINVAL);
 
 	if (!reg->queue_depth)
 		reg->queue_depth = BLK_MQ_MAX_DEPTH;
 	else if (reg->queue_depth > BLK_MQ_MAX_DEPTH) {
-		printk(KERN_ERR "blk-mq: queuedepth too large (%u)\n", reg->queue_depth);
+		pr_err("blk-mq: queuedepth too large (%u)\n", reg->queue_depth);
 		reg->queue_depth = BLK_MQ_MAX_DEPTH;
 	}
 
@@ -668,25 +674,21 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 	hctxs = kmalloc_node(reg->nr_hw_queues * sizeof(*hctxs), GFP_KERNEL,
 			reg->numa_node);
 
-	if (!hctxs) {
-		free_percpu(ctx);
-		return ERR_PTR(-ENOMEM);
-	}
+	if (!hctxs)
+		goto err_percpu;
 
-	for (i = 0;i < reg->nr_hw_queues; i++) {
+	for (i = 0; i < reg->nr_hw_queues; i++) {
 		hctxs[i] = reg->ops->alloc_hctx(reg, i);
-		if(!hctxs[i]) {
+		if (!hctxs[i]) {
 			while (i--)
 				reg->ops->free_hctx(hctxs[i], i);
-			return NULL;
+			goto err_hctxs;
 		}
 	}
 
 	q = blk_alloc_queue_node(GFP_KERNEL, reg->numa_node);
-	if (!q) {
-		free_percpu(ctx);
-		return ERR_PTR(-ENOMEM);
-	}
+	if (!q)
+		goto err_hctxs;
 
 	setup_timer(&q->timeout, blk_mq_rq_timer, (unsigned long) q);
 	blk_queue_rq_timeout(q, 30000);
@@ -759,6 +761,11 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 	}
 
 	return q;
+err_hctxs:
+	kfree(hctxs);
+err_percpu:
+	free_percpu(ctx);
+	return ERR_PTR(-ENOMEM);
 }
 EXPORT_SYMBOL(blk_mq_init_queue);
 

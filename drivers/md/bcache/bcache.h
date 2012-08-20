@@ -600,6 +600,19 @@ struct gc_stat {
 	unsigned		in_use; /* percent */
 };
 
+/*
+ * Flag bits, for how the cache set is shutting down, and what phase it's at:
+ *
+ * CACHE_SET_UNREGISTERING means we're not just shutting down, we're detaching
+ * all the backing devices first (their cached data gets invalidated, and they
+ * won't automatically reattach).
+ *
+ * CACHE_SET_STOPPING always gets set first when we're closing down a cache set;
+ * we'll continue to run normally for awhile with CACHE_SET_STOPPING set (i.e.
+ * flushing dirty data).
+ */
+#define CACHE_SET_UNREGISTERING		0
+#define	CACHE_SET_STOPPING		1
 struct cache_set {
 	struct closure		cl;
 
@@ -609,12 +622,7 @@ struct cache_set {
 	struct dentry		*debug;
 	struct cache_accounting accounting;
 
-	/*
-	 * If nonzero, we're trying to detach from all the devices we're
-	 * caching; otherwise we're merely closing
-	 */
-	atomic_t		unregistering;
-	atomic_t		closing;
+	unsigned long		flags;
 
 	struct cache_sb		sb;
 

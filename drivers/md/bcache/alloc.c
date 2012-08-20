@@ -195,7 +195,7 @@ static void do_discard(struct cache *ca)
 	lockdep_assert_held(&ca->set->bucket_lock);
 
 	while (ca->discard &&
-	       !atomic_read(&ca->set->closing) &&
+	       !test_bit(CACHE_SET_STOPPING, &ca->set->flags) &&
 	       !list_empty(&ca->discards) &&
 	       fifo_free(&ca->free) >= MAX_IN_FLIGHT_DISCARDS) {
 		struct discard *d = list_first_entry(&ca->discards,

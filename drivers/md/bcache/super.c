@@ -739,7 +739,7 @@ static void bcache_device_detach(struct bcache_device *d)
 static void bcache_device_attach(struct bcache_device *d, struct cache_set *c,
 				 unsigned id)
 {
-	BUG_ON(atomic_read(&c->closing));
+	BUG_ON(test_bit(CACHE_SET_STOPPING, &c->flags));
 
 	d->id = id;
 	d->c = c;
@@ -915,7 +915,7 @@ static int cached_dev_attach(struct cached_dev *dc, struct cache_set *c)
 	bdevname(dc->bdev, buf);
 
 	if (dc->disk.c ||
-	    atomic_read(&c->closing) ||
+	    test_bit(CACHE_SET_STOPPING, &c->flags) ||
 	    memcmp(dc->sb.set_uuid, c->sb.set_uuid, 16))
 		return -ENOENT;
 
@@ -1203,7 +1203,7 @@ static int flash_dev_create(struct cache_set *c, uint64_t size)
 {
 	struct uuid_entry *u;
 
-	if (atomic_read(&c->closing))
+	if (test_bit(CACHE_SET_STOPPING, &c->flags))
 		return -EINTR;
 
 	u = uuid_find_empty(c);
@@ -1231,7 +1231,7 @@ bool bch_cache_set_error(struct cache_set *c, const char *fmt, ...)
 {
 	va_list args;
 
-	if (atomic_read(&c->closing))
+	if (test_bit(CACHE_SET_STOPPING, &c->flags))
 		return false;
 
 	/* XXX: we can be called from atomic context
@@ -1325,7 +1325,7 @@ static void __cache_set_unregister(struct closure *cl)
 
 	mutex_lock(&register_lock);
 
-	if (atomic_read(&c->unregistering))
+	if (test_bit(CACHE_SET_UNREGISTERING, &c->flags))
 		list_for_each_entry_safe(dc, t, &c->cached_devs, list)
 			cached_dev_detach(dc);
 
@@ -1340,13 +1340,13 @@ static void __cache_set_unregister(struct closure *cl)
 
 static void cache_set_stop(struct cache_set *c)
 {
-	if (!atomic_xchg(&c->closing, 1))
+	if (!test_and_set_bit(CACHE_SET_STOPPING, &c->flags))
 		closure_queue(&c->caching);
 }
 
 static void cache_set_unregister(struct cache_set *c)
 {
-	atomic_set(&c->unregistering, 1);
+	set_bit(CACHE_SET_UNREGISTERING, &c->flags);
 	cache_set_stop(c);
 }
 

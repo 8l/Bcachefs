@@ -863,7 +863,8 @@ static void request_read_done(struct closure *cl)
 
 	bio_complete(s);
 
-	if (s->op.cache_bio && !atomic_read(&s->op.c->closing)) {
+	if (s->op.cache_bio &&
+	    !test_bit(CACHE_SET_STOPPING, &s->op.c->flags)) {
 		s->op.type = BTREE_REPLACE;
 		closure_call(bch_insert_data, &s->op.cl, cl);
 	}

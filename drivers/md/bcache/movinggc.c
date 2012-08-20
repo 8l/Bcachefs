@@ -129,7 +129,7 @@ static void read_moving(struct closure *cl)
 
 	/* XXX: if we error, background writeback could stall indefinitely */
 
-	while (!atomic_read(&c->closing)) {
+	while (!test_bit(CACHE_SET_STOPPING, &c->flags)) {
 		w = bch_keybuf_next_rescan(c, &c->moving_gc_keys, &MAX_KEY);
 		if (!w)
 			break;

@@ -1010,7 +1010,7 @@ struct btree *bch_btree_node_alloc(struct cache_set *c, int level,
 
 	mutex_lock(&c->bucket_lock);
 retry:
-	if (__bch_bucket_alloc_set(c, GC_MARK_BTREE, 0, &k.key, 1, cl))
+	if (__bch_bucket_alloc_set(c, WATERMARK_METADATA, &k.key, 1, cl))
 		goto err;
 
 	SET_KEY_SIZE(&k.key, c->btree_pages * PAGE_SECTORS);
@@ -1080,12 +1080,12 @@ uint8_t __bch_btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 		}
 
 		cache_bug_on(GC_MARK(g) &&
-			     (GC_MARK(g) == GC_MARK_BTREE) != (level != 0), c,
-			     "inconsistent pointers: mark = %llu, level = %i",
+			     (GC_MARK(g) == GC_MARK_METADATA) != (level != 0),
+			     c, "inconsistent ptrs: mark = %llu, level = %i",
 			     GC_MARK(g), level);
 
 		if (level)
-			SET_GC_MARK(g, GC_MARK_BTREE);
+			SET_GC_MARK(g, GC_MARK_METADATA);
 		else if (KEY_DIRTY(k))
 			SET_GC_MARK(g, GC_MARK_DIRTY);
 
@@ -1446,20 +1446,22 @@ size_t bch_btree_gc_finish(struct cache_set *c)
 
 	if (c->root)
 		for (unsigned i = 0; i < KEY_PTRS(&c->root->key); i++)
-			SET_GC_MARK(PTR_BUCKET(c, &c->root->key, i), GC_MARK_BTREE);
+			SET_GC_MARK(PTR_BUCKET(c, &c->root->key, i),
+				    GC_MARK_METADATA);
 
 	for (unsigned i = 0; i < KEY_PTRS(&c->uuid_bucket); i++)
-		SET_GC_MARK(PTR_BUCKET(c, &c->uuid_bucket, i), GC_MARK_BTREE);
+		SET_GC_MARK(PTR_BUCKET(c, &c->uuid_bucket, i),
+			    GC_MARK_METADATA);
 
 	for_each_cache(ca, c) {
 		ca->invalidate_needs_gc = 0;
 
 		for (i = ca->sb.d; i < ca->sb.d + ca->sb.keys; i++)
-			SET_GC_MARK(ca->buckets + *i, GC_MARK_BTREE);
+			SET_GC_MARK(ca->buckets + *i, GC_MARK_METADATA);
 
 		for (i = ca->prio_buckets;
 		     i < ca->prio_buckets + prio_buckets(ca) * 2; i++)
-			SET_GC_MARK(ca->buckets + *i, GC_MARK_BTREE);
+			SET_GC_MARK(ca->buckets + *i, GC_MARK_METADATA);
 
 		for_each_bucket(b, ca) {
 			b->last_gc	= b->gc_gen;

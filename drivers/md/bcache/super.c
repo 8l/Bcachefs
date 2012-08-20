@@ -445,7 +445,7 @@ static int __uuid_write(struct cache_set *c)
 
 	lockdep_assert_held(&register_lock);
 
-	if (bch_bucket_alloc_set(c, GC_MARK_BTREE, 0, &k.key, 1, &cl))
+	if (bch_bucket_alloc_set(c, WATERMARK_METADATA, &k.key, 1, &cl))
 		return 1;
 
 	SET_KEY_SIZE(&k.key, c->sb.bucket_size);
@@ -550,6 +550,7 @@ void do_prio_write(struct closure *cl)
 	set_closure_blocking(cl);
 
 	for (int i = prio_buckets(ca) - 1; i >= 0; --i) {
+		long bucket;
 		struct prio_set *p = ca->disk_buckets;
 		struct bucket_disk *d = p->data, *end = d + prios_per_bucket(ca);
 
@@ -560,32 +561,38 @@ void do_prio_write(struct closure *cl)
 			d->gen = b->gen;
 		}
 
-		if (i + 1 != prio_buckets(ca))
-			p->next_bucket = ca->prio_next[i + 1];
-
-		p->next_bucket	= ca->prio_next[i + 1];
+		p->next_bucket	= ca->prio_buckets[i + 1];
 		p->magic	= pset_magic(ca);
 		p->csum		= crc64(&p->magic, bucket_bytes(ca) - 8);
 
-		prio_io(ca, ca->prio_next[i], REQ_WRITE);
+		mutex_lock(&ca->set->bucket_lock);
+		bucket = bch_bucket_alloc(ca, WATERMARK_PRIO, cl);
+		mutex_unlock(&ca->set->bucket_lock);
+
+		BUG_ON(bucket == -1);
+
+		prio_io(ca, bucket, REQ_WRITE);
 		closure_sync(cl);
+
+		mutex_lock(&ca->set->bucket_lock);
+		ca->prio_buckets[i] = bucket;
+		atomic_dec_bug(&ca->buckets[bucket].pin);
+		mutex_unlock(&ca->set->bucket_lock);
 	}
+
+	bch_journal_meta(ca->set, cl);
+	closure_sync(cl);
 
 	mutex_lock(&ca->set->bucket_lock);
 
-	for (unsigned i = 0; i < prio_buckets(ca); i++)
-		ca->prio_buckets[i] = ca->prio_next[i];
-
-	ca->prio_alloc = 0;
 	ca->need_save_prio = 0;
 
 	/*
-	 * We have to call bcache_journal_meta() with bucket_lock still held,
-	 * because after we set prio_buckets = prio_next things are inconsistent
-	 * until the next journal entry is updated
+	 * Don't want the old priorities to get garbage collected until after we
+	 * finish writing the new ones, and they're journalled
 	 */
-	bch_journal_meta(ca->set, cl);
-	closure_sync(cl);
+	for (unsigned i = 0; i < prio_buckets(ca); i++)
+		ca->prio_last_buckets[i] = ca->prio_buckets[i];
 
 	/*
 	 * XXX: Terrible hack
@@ -608,7 +615,6 @@ void bch_prio_write(struct cache *ca)
 {
 	lockdep_assert_held(&ca->set->bucket_lock);
 	BUG_ON(atomic_read(&ca->prio_written));
-	BUG_ON(ca->prio_alloc != prio_buckets(ca));
 
 	closure_init(&ca->prio, &ca->set->cl);
 
@@ -645,7 +651,9 @@ static void prio_read(struct cache *ca, uint64_t bucket)
 	     b < ca->buckets + ca->sb.nbuckets;
 	     b++, d++) {
 		if (d == end) {
-			ca->prio_buckets[bucket_nr++] = bucket;
+			ca->prio_buckets[bucket_nr] = bucket;
+			ca->prio_last_buckets[bucket_nr] = bucket;
+			bucket_nr++;
 
 			prio_io(ca, bucket, READ_SYNC);
 			closure_sync(&ca->prio);
@@ -1672,7 +1680,7 @@ static void cache_free(struct kobject *kobj)
 	if (ca->set)
 		ca->set->cache[ca->sb.nr_this_dev] = NULL;
 
-	bch_free_discards(ca);
+	bch_cache_allocator_exit(ca);
 
 	free_pages((unsigned long) ca->disk_buckets, ilog2(bucket_pages(ca)));
 	kfree(ca->prio_buckets);
@@ -1722,8 +1730,7 @@ static int cache_alloc(struct cache_sb *sb, struct cache *ca)
 	ca->journal.bio.bi_io_vec = ca->journal.bio.bi_inline_vecs;
 
 	free = roundup_pow_of_two(ca->sb.nbuckets) >> 9;
-	free = max_t(size_t, free, 16);
-	free = max_t(size_t, free, prio_buckets(ca) + 4);
+	free = max_t(size_t, free, (prio_buckets(ca) + 8) * 2);
 
 	if (!init_fifo(&ca->free,	free, GFP_KERNEL) ||
 	    !init_fifo(&ca->free_inc,	free << 2, GFP_KERNEL) ||
@@ -1737,13 +1744,13 @@ static int cache_alloc(struct cache_sb *sb, struct cache *ca)
 	    !(ca->disk_buckets	= alloc_bucket_pages(GFP_KERNEL, ca)))
 		goto err;
 
-	ca->prio_next = ca->prio_buckets + prio_buckets(ca);
+	ca->prio_last_buckets = ca->prio_buckets + prio_buckets(ca);
 
 	memset(ca->buckets, 0, ca->sb.nbuckets * sizeof(struct bucket));
 	for_each_bucket(b, ca)
 		atomic_set(&b->pin, 0);
 
-	if (bch_alloc_discards(ca))
+	if (bch_cache_allocator_init(ca))
 		goto err;
 
 	return 0;

@@ -348,10 +348,13 @@ static bool bch_alloc_sectors(struct bkey *k, unsigned sectors,
 	spin_lock(&c->data_bucket_lock);
 
 	while (!(b = pick_data_bucket(c, k, s->task, &alloc.key))) {
+		unsigned watermark = s->op.write_prio
+			? WATERMARK_MOVINGGC
+			: WATERMARK_NONE;
+
 		spin_unlock(&c->data_bucket_lock);
 
-		if (bch_bucket_alloc_set(c, GC_MARK_RECLAIMABLE,
-					 s->op.write_prio, &alloc.key, 1, w))
+		if (bch_bucket_alloc_set(c, watermark, &alloc.key, 1, w))
 			return false;
 
 		spin_lock(&c->data_bucket_lock);

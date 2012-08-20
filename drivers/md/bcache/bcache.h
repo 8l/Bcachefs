@@ -210,7 +210,7 @@ struct bucket {
 BITMASK(GC_MARK,	 struct bucket, gc_mark, 0, 2);
 #define GC_MARK_RECLAIMABLE	0
 #define GC_MARK_DIRTY		1
-#define GC_MARK_BTREE		2
+#define GC_MARK_METADATA	2
 BITMASK(GC_SECTORS_USED, struct bucket, gc_mark, 2, 14);
 
 struct bkey {
@@ -491,6 +491,14 @@ struct cached_dev {
 	unsigned		writeback_rate_d_smooth;
 };
 
+enum alloc_watermarks {
+	WATERMARK_PRIO,
+	WATERMARK_METADATA,
+	WATERMARK_MOVINGGC,
+	WATERMARK_NONE,
+	WATERMARK_MAX
+};
+
 struct cache {
 	struct cache_set	*set;
 	struct cache_sb		sb;
@@ -499,6 +507,8 @@ struct cache {
 
 	struct kobject		kobj;
 	struct block_device	*bdev;
+
+	unsigned		watermark[WATERMARK_MAX];
 
 	struct closure		prio;
 	struct prio_set		*disk_buckets;
@@ -511,8 +521,7 @@ struct cache {
 	 * allocated for the next prio write.
 	 */
 	uint64_t		*prio_buckets;
-	uint64_t		*prio_next;
-	unsigned		prio_alloc;
+	uint64_t		*prio_last_buckets;
 
 	/* > 0: buckets in free_inc have been marked as free
 	 * = 0: buckets in free_inc can't be used until priorities are written
@@ -1108,10 +1117,13 @@ void bch_rescale_priorities(struct cache_set *, int);
 bool bch_bucket_add_unused(struct cache *, struct bucket *);
 bool bch_can_save_prios(struct cache *);
 void bch_free_some_buckets(struct cache *);
+
+long bch_bucket_alloc(struct cache *, unsigned, struct closure *);
 void bch_bucket_free(struct cache_set *, struct bkey *);
-int __bch_bucket_alloc_set(struct cache_set *, int, uint16_t,
+
+int __bch_bucket_alloc_set(struct cache_set *, unsigned,
 			   struct bkey *, int, struct closure *);
-int bch_bucket_alloc_set(struct cache_set *, int, uint16_t,
+int bch_bucket_alloc_set(struct cache_set *, unsigned,
 			 struct bkey *, int, struct closure *);
 
 __printf(2, 3)
@@ -1124,12 +1136,13 @@ extern struct workqueue_struct *bcache_wq, *bch_gc_wq;
 extern const char * const bch_cache_modes[];
 
 struct cache_set *bch_cache_set_alloc(struct cache_sb *);
-void bch_free_discards(struct cache *);
-int bch_alloc_discards(struct cache *);
 void bch_btree_cache_free(struct cache_set *);
 int bch_btree_cache_alloc(struct cache_set *);
 void bch_writeback_init_cached_dev(struct cached_dev *);
 void bch_moving_init_cache_set(struct cache_set *);
+
+void bch_cache_allocator_exit(struct cache *ca);
+int bch_cache_allocator_init(struct cache *ca);
 
 void bch_debug_exit(void);
 int bch_debug_init(struct kobject *);

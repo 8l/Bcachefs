@@ -346,7 +346,7 @@ static void read_dirty(struct closure *cl)
 
 		pr_debug("%s", pkey(&w->key));
 
-		closure_call(read_dirty_submit, &io->cl, &dc->disk.cl);
+		closure_call(&io->cl, read_dirty_submit, NULL, &dc->disk.cl);
 
 		delay = writeback_delay(dc, KEY_SIZE(&w->key));
 

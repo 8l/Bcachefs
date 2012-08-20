@@ -1496,7 +1496,7 @@ size_t bch_btree_gc_finish(struct cache_set *c)
 	return available;
 }
 
-static void btree_gc(struct closure *cl)
+static void bch_btree_gc(struct closure *cl)
 {
 	struct cache_set *c = container_of(cl, struct cache_set, gc.cl);
 	int ret;
@@ -1524,7 +1524,7 @@ static void btree_gc(struct closure *cl)
 		blktrace_msg_all(c, "Stopped gc");
 		printk(KERN_WARNING "bcache: gc failed!\n");
 
-		continue_at(cl, btree_gc, bch_gc_wq);
+		continue_at(cl, bch_btree_gc, bch_gc_wq);
 	}
 
 	/* Possibly wait for new UUIDs or whatever to hit disk */
@@ -1550,8 +1550,7 @@ static void btree_gc(struct closure *cl)
 
 void bch_queue_gc(struct cache_set *c)
 {
-	if (closure_trylock(&c->gc.cl, &c->cl))
-		continue_at(&c->gc.cl, btree_gc, bch_gc_wq);
+	closure_trylock_call(&c->gc.cl, bch_btree_gc, bch_gc_wq, &c->cl);
 }
 
 /* Initial partial gc */

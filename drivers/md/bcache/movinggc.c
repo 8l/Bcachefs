@@ -156,7 +156,7 @@ static void read_moving(struct closure *cl)
 
 		pr_debug("%s", pkey(&w->key));
 
-		closure_call(read_moving_submit, &io->s.cl, &c->gc.cl);
+		closure_call(&io->s.cl, read_moving_submit, NULL, &c->gc.cl);
 
 		if (atomic_inc_return(&c->in_flight) >= 64) {
 			closure_wait_event(&c->moving_gc_wait, cl,

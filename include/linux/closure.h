@@ -651,18 +651,20 @@ do {									\
 	return;								\
 } while (0)
 
-static inline void closure_call(closure_fn fn, struct closure *cl,
+static inline void closure_call(struct closure *cl, closure_fn fn,
+				struct workqueue_struct *wq,
 				struct closure *parent)
 {
 	closure_init(cl, parent);
-	fn(cl);
+	continue_at_nobarrier(cl, fn, wq);
 }
 
-static inline void closure_trylock_call(closure_fn fn, struct closure *cl,
+static inline void closure_trylock_call(struct closure *cl, closure_fn fn,
+					struct workqueue_struct *wq,
 					struct closure *parent)
 {
 	if (closure_trylock(cl, parent))
-		fn(cl);
+		continue_at_nobarrier(cl, fn, wq);
 }
 
 #endif /* _LINUX_CLOSURE_H */

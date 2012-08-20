@@ -2197,11 +2197,7 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 		unsigned sectors = min_t(uint64_t, INT_MAX,
 					 KEY_OFFSET(k) - bio->bi_sector);
 
-		n = bio_split(bio, sectors, current->bio_list
-			      ? GFP_NOWAIT : GFP_NOIO, s->d->bio_split);
-		if (!n)
-			return -EAGAIN;
-
+		n = bio_next_split(bio, sectors, GFP_NOIO, s->d->bio_split);
 		if (n == bio)
 			op->lookup_done = true;
 
@@ -2221,7 +2217,8 @@ static int submit_partial_cache_hit(struct btree *b, struct btree_op *op,
 		bch_bkey_copy_single_ptr(bio_key, k, ptr);
 		SET_PTR_OFFSET(bio_key, 0, sector);
 
-		n->bi_end_io = bch_cache_read_endio;
+		n->bi_end_io	= bch_cache_read_endio;
+		n->bi_private	= &s->cl;
 
 		trace_bcache_cache_hit(n);
 		__bch_submit_bbio(n, b->c);

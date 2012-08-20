@@ -478,9 +478,6 @@ static void bch_insert_data_loop(struct closure *cl)
 		bch_queue_gc(op->c);
 	}
 
-	bio->bi_end_io	= bch_insert_data_endio;
-	bio->bi_private = cl;
-
 	do {
 		struct bkey *k;
 		struct bio_set *split = s->d
@@ -500,12 +497,10 @@ static void bch_insert_data_loop(struct closure *cl)
 		if (!bch_alloc_sectors(k, bio_sectors(bio), s))
 			goto err;
 
-		n = bio_split(bio, KEY_SIZE(k), current->bio_list
-			      ? GFP_NOWAIT : GFP_NOIO, split);
-		if (!n) {
-			__bkey_put(op->c, k);
-			continue_at(cl, bch_insert_data_loop, bcache_wq);
-		}
+		n = bio_next_split(bio, KEY_SIZE(k), GFP_NOIO, split);
+
+		n->bi_end_io	= bch_insert_data_endio;
+		n->bi_private	= cl;
 
 		if (s->writeback) {
 			SET_KEY_DIRTY(k, true);
@@ -898,13 +893,12 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
 	struct bio *miss;
 
-	miss = bio_split(bio, sectors, current->bio_list
-			 ? GFP_NOWAIT : GFP_NOIO, s->d->bio_split);
-	if (!miss)
-		return -EAGAIN;
-
+	miss = bio_next_split(bio, sectors, GFP_NOIO, s->d->bio_split);
 	if (miss == bio)
 		s->op.lookup_done = true;
+
+	miss->bi_end_io		= request_endio;
+	miss->bi_private	= &s->cl;
 
 	if (s->cache_miss || s->op.skip)
 		goto out_submit;
@@ -1026,8 +1020,6 @@ static void request_write(struct cached_dev *dc, struct search *s)
 	if (!s->writeback) {
 		s->op.cache_bio = bio_clone_bioset(bio, GFP_NOIO,
 						   dc->disk.bio_split);
-		if (!s->op.cache_bio)
-			goto skip;
 
 		trace_bcache_writethrough(s->orig_bio);
 		closure_bio_submit(bio, cl);

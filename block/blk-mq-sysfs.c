@@ -187,9 +187,9 @@ static ssize_t blk_mq_hw_sysfs_ipi_show(struct blk_mq_hw_ctx *hctx, char *page)
 {
 	ssize_t ret;
 
-	spin_lock_irq(hctx->lock);
+	spin_lock_irq(&hctx->lock);
 	ret = sprintf(page, "%u\n", !!(hctx->flags & BLK_MQ_F_SHOULD_IPI));
-	spin_unlock_irq(hctx->lock);
+	spin_unlock_irq(&hctx->lock);
 
 	return ret;
 }
@@ -204,12 +204,12 @@ static ssize_t blk_mq_hw_sysfs_ipi_store(struct blk_mq_hw_ctx *hctx,
 
 	ret = simple_strtoul(p, &p, 10);
 
-	spin_lock_irq(hctx->lock);
+	spin_lock_irq(&hctx->lock);
 	if (ret)
 		hctx->flags |= BLK_MQ_F_SHOULD_IPI;
 	else
 		hctx->flags &= ~BLK_MQ_F_SHOULD_IPI;
-	spin_unlock_irq(hctx->lock);
+	spin_unlock_irq(&hctx->lock);
 
 	hctx_for_each_ctx(hctx, ctx, i)
 		ctx->ipi_redirect = !!ret;

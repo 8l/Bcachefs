@@ -315,7 +315,6 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	struct blk_mq_ctx *ctx;
 	struct request *rq;
 	struct llist_node *first, *last = NULL;
-	unsigned long flags = 0;
 	LLIST_HEAD(rq_list);
 	LIST_HEAD(tmp);
 	int bit, queued;
@@ -366,9 +365,6 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	/*
 	 * Now process all the entries, sending them to the driver.
 	 */
-	if (hctx->flags & BLK_MQ_F_SHOULD_LOCK)
-		spin_lock_irqsave(hctx->lock, flags);
-
 	while (first) {
 		struct llist_node *entry;
 		int ret;
@@ -397,9 +393,6 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 			break;
 		}
 	}
-
-	if (hctx->flags & BLK_MQ_F_SHOULD_LOCK)
-		spin_unlock_irqrestore(hctx->lock, flags);
 
 	if (!queued)
 		hctx->dispatched[0]++;
@@ -646,8 +639,7 @@ static int blk_mq_init_rq_map(struct blk_mq_hw_ctx *hctx)
 	return 0;
 }
 
-struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
-					spinlock_t *lock)
+struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 {
 	struct blk_mq_hw_ctx **hctxs;
 	struct blk_mq_hw_ctx *hctx;
@@ -724,17 +716,12 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg,
 		unsigned int num_maps;
 
 		INIT_DELAYED_WORK(&hctx->delayed_work, blk_mq_work_fn);
-		spin_lock_init(&hctx->__lock);
+		spin_lock_init(&hctx->lock);
 		init_llist_head(&hctx->dispatch);
 		hctx->queue = q;
 		hctx->flags = reg->flags;
 		hctx->queue_depth = reg->queue_depth;
 		hctx->numa_node = reg->numa_node;
-
-		if (!lock)
-			hctx->lock = &hctx->__lock;
-		else
-			hctx->lock = lock;
 
 		/* FIXME: alloc failure handling */
 		blk_mq_init_rq_map(hctx);

@@ -278,7 +278,7 @@ static int null_add_dev(void)
 			null_mq_reg.nr_hw_queues = submit_queues;
 		}
 
-		nullb->q = blk_mq_init_queue(&null_mq_reg, &nullb->lock);
+		nullb->q = blk_mq_init_queue(&null_mq_reg);
 	} else {
 		nullb->q = blk_init_queue_node(null_request_fn, &nullb->lock, home_node);
 		if (nullb->q)

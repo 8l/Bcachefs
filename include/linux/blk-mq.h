@@ -23,8 +23,7 @@ struct blk_mq_ctx {
 };
 
 struct blk_mq_hw_ctx {
-	spinlock_t		__lock;
-	spinlock_t		*lock;
+	spinlock_t		lock;
 
 	struct llist_head	dispatch;
 	struct delayed_work	delayed_work;
@@ -83,12 +82,11 @@ enum {
 	BLK_MQ_F_SHOULD_MERGE	= 1 << 0,
 	BLK_MQ_F_SHOULD_SORT	= 1 << 1,
 	BLK_MQ_F_SHOULD_IPI	= 1 << 2,
-	BLK_MQ_F_SHOULD_LOCK	= 1 << 3, /* lock on queue_rq invocation */
 
 	BLK_MQ_MAX_DEPTH	= 2048,
 };
 
-struct request_queue *blk_mq_init_queue(struct blk_mq_reg *, spinlock_t *);
+struct request_queue *blk_mq_init_queue(struct blk_mq_reg *);
 void blk_mq_free_queue(struct request_queue *);
 int blk_mq_register_disk(struct gendisk *);
 void blk_mq_unregister_disk(struct gendisk *);

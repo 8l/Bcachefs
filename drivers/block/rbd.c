@@ -750,7 +750,7 @@ static struct bio *bio_chain_clone(struct bio **old, struct bio **next,
 
 			/* split the bio. We'll release it either in the next
 			   call, or it will have to be released outside */
-			bp = bio_split(old_chain, (len - total) / SECTOR_SIZE);
+			bp = bio_pair_split(old_chain, (len - total) / SECTOR_SIZE);
 			if (!bp)
 				goto err_out;
 

@@ -2357,6 +2357,8 @@ void bch_refill_keybuf(struct cache_set *c, struct keybuf *buf,
 	struct btree_op op;
 	bch_btree_op_init_stack(&op);
 
+	cond_resched();
+
 	btree_root(refill_keybuf, c, &op, buf, end);
 	closure_sync(&op.cl);
 

@@ -646,9 +646,6 @@ void bch_cache_read_endio(struct bio *bio, int error)
 static void bio_complete(struct search *s)
 {
 	if (s->orig_bio) {
-		if (s->error)
-			clear_bit(BIO_UPTODATE, &s->orig_bio->bi_flags);
-
 		trace_bcache_request_end(s, s->orig_bio);
 		bio_endio(s->orig_bio, s->error);
 		s->orig_bio = NULL;

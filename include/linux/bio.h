@@ -182,24 +182,23 @@ struct bio_integrity_payload {
 #endif /* CONFIG_BLK_DEV_INTEGRITY */
 
 /*
- * A bio_pair is used when we need to split a bio.
- * This can only happen for a bio that refers to just one
- * page of data, and in the unusual situation when the
- * page crosses a chunk/device boundary
- *
- * The address of the master bio is stored in bio1.bi_private
- * The address of the pool the pair was allocated from is stored
- *   in bio2.bi_private
+ * A bio_pair is used for splitting a bio and chaining the completions. split is
+ * the first half of the split, representing first_sectors from the original
+ * bio; orig is updated to represent the second half.
  */
 struct bio_pair {
-	struct bio			bio1, bio2;
-	struct bio_vec			bv1, bv2;
-#if defined(CONFIG_BLK_DEV_INTEGRITY)
-	struct bio_integrity_payload	bip1, bip2;
-	struct bio_vec			iv1, iv2;
-#endif
+	bio_end_io_t			*bi_end_io;
+	void				*bi_private;
+
 	atomic_t			cnt;
 	int				error;
+
+	struct bio			*orig;
+	/*
+	 * Since this struct is allocated using the front_pad option of struct
+	 * bio_set, split must come last.
+	 */
+	struct bio			split;
 };
 
 extern struct bio *bio_split(struct bio *bio, int sectors,
@@ -563,7 +562,6 @@ extern int bio_integrity_prep(struct bio *);
 extern void bio_integrity_endio(struct bio *, int);
 extern void bio_integrity_advance(struct bio *, unsigned int);
 extern void bio_integrity_trim(struct bio *, unsigned int, unsigned int);
-extern void bio_integrity_split(struct bio *, struct bio_pair *, int);
 extern int bio_integrity_clone(struct bio *, struct bio *, gfp_t, struct bio_set *);
 extern int bioset_integrity_create(struct bio_set *, int);
 extern void bioset_integrity_free(struct bio_set *);
@@ -605,12 +603,6 @@ static inline int bio_integrity_clone(struct bio *bio, struct bio *bio_src,
 				      gfp_t gfp_mask, struct bio_set *bs)
 {
 	return 0;
-}
-
-static inline void bio_integrity_split(struct bio *bio, struct bio_pair *bp,
-				       int sectors)
-{
-	return;
 }
 
 static inline void bio_integrity_advance(struct bio *bio,

@@ -1080,13 +1080,7 @@ static void make_request(struct mddev *mddev, struct bio * bio)
 		     && (conf->geo.near_copies < conf->geo.raid_disks
 			 || conf->prev.near_copies < conf->prev.raid_disks))) {
 		struct bio_pair *bp;
-		/* Sanity check -- queue functions should prevent this happening */
-		if (bio->bi_vcnt != 1 ||
-		    bio->bi_idx != 0)
-			goto bad_map;
-		/* This is a one page bio that upper layers
-		 * refuse to split for us, so we need to split it.
-		 */
+
 		bp = bio_pair_split(bio,
 				    chunk_sects - (bio->bi_sector & (chunk_sects - 1)));
 
@@ -1102,8 +1096,8 @@ static void make_request(struct mddev *mddev, struct bio * bio)
 		conf->nr_waiting++;
 		spin_unlock_irq(&conf->resync_lock);
 
-		make_request(mddev, &bp->bio1);
-		make_request(mddev, &bp->bio2);
+		make_request(mddev, &bp->split);
+		make_request(mddev, bio);
 
 		spin_lock_irq(&conf->resync_lock);
 		conf->nr_waiting--;
@@ -1111,13 +1105,6 @@ static void make_request(struct mddev *mddev, struct bio * bio)
 		spin_unlock_irq(&conf->resync_lock);
 
 		bio_pair_release(bp);
-		return;
-	bad_map:
-		printk("md/raid10:%s: make_request bug: can't convert block across chunks"
-		       " or bigger than %dk %llu %d\n", mdname(mddev), chunk_sects/2,
-		       (unsigned long long)bio->bi_sector, bio->bi_size >> 10);
-
-		bio_io_error(bio);
 		return;
 	}
 

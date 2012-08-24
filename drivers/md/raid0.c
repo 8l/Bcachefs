@@ -520,9 +520,9 @@ static void raid0_make_request(struct mddev *mddev, struct bio *bio)
 							   (chunk_sects-1)));
 		else
 			bp = bio_pair_split(bio, chunk_sects -
-					    sector_div(sector, chunk_sects));
-		raid0_make_request(mddev, &bp->bio1);
-		raid0_make_request(mddev, &bp->bio2);
+				       sector_div(sector, chunk_sects));
+		raid0_make_request(mddev, &bp->split);
+		raid0_make_request(mddev, bio);
 		bio_pair_release(bp);
 		return;
 	}

@@ -316,8 +316,8 @@ static void linear_make_request(struct mddev *mddev, struct bio *bio)
 
 		bp = bio_pair_split(bio, end_sector - bio->bi_sector);
 
-		linear_make_request(mddev, &bp->bio1);
-		linear_make_request(mddev, &bp->bio2);
+		linear_make_request(mddev, &bp->split);
+		linear_make_request(mddev, bio);
 		bio_pair_release(bp);
 		return;
 	}

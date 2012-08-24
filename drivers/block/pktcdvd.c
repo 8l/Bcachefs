@@ -2468,8 +2468,8 @@ static void pkt_make_request(struct request_queue *q, struct bio *bio)
 			first_sectors = last_zone - bio->bi_sector;
 			bp = bio_pair_split(bio, first_sectors);
 			BUG_ON(!bp);
-			pkt_make_request(q, &bp->bio1);
-			pkt_make_request(q, &bp->bio2);
+			pkt_make_request(q, &bp->split);
+			pkt_make_request(q, bio);
 			bio_pair_release(bp);
 			return;
 		}

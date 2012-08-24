@@ -754,9 +754,9 @@ static struct bio *bio_chain_clone(struct bio **old, struct bio **next,
 			if (!bp)
 				goto err_out;
 
-			__bio_clone(tmp, &bp->bio1);
+			__bio_clone(tmp, &bp->split);
 
-			*next = &bp->bio2;
+			*next = bp->orig;
 		} else {
 			__bio_clone(tmp, old_chain);
 			*next = old_chain->bi_next;

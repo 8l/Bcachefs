@@ -37,7 +37,7 @@
  */
 #define BIO_INLINE_VECS		4
 
-static mempool_t *bio_split_pool __read_mostly;
+static struct bio_set *bio_split_pool __read_mostly;
 
 /*
  * if you change this list, also change bvec_alloc or things will
@@ -1482,20 +1482,27 @@ void bio_endio(struct bio *bio, int error)
 }
 EXPORT_SYMBOL(bio_endio);
 
+/**
+ * bio_pair_release - drop refcount on a bio_pair
+ *
+ * This is called by bio_pair_split's endio function, and also must be called by
+ * the caller of bio_pair_split().
+ */
 void bio_pair_release(struct bio_pair *bp)
 {
 	if (atomic_dec_and_test(&bp->cnt)) {
-		struct bio *master = bp->bio1.bi_private;
+		bp->orig->bi_end_io = bp->bi_end_io;
+		bp->orig->bi_private = bp->bi_private;
 
-		bio_endio(master, bp->error);
-		mempool_free(bp, bp->bio2.bi_private);
+		bio_endio(bp->orig, bp->error);
+		bio_put(&bp->split);
 	}
 }
 EXPORT_SYMBOL(bio_pair_release);
 
-static void bio_pair_end_1(struct bio *bi, int err)
+static void bio_pair_endio(struct bio *bio, int err)
 {
-	struct bio_pair *bp = container_of(bi, struct bio_pair, bio1);
+	struct bio_pair *bp = bio->bi_private;
 
 	if (err)
 		bp->error = err;
@@ -1503,59 +1510,46 @@ static void bio_pair_end_1(struct bio *bi, int err)
 	bio_pair_release(bp);
 }
 
-static void bio_pair_end_2(struct bio *bi, int err)
-{
-	struct bio_pair *bp = container_of(bi, struct bio_pair, bio2);
-
-	if (err)
-		bp->error = err;
-
-	bio_pair_release(bp);
-}
-
-/*
- * split a bio - only worry about a bio with a single page in its iovec
+/**
+ * bio_pair_split - split a bio, and chain the completions
+ * @bio:	bio to split
+ * @sectors:	number of sectors to split from the front of @bio
+ *
+ * This wraps bio_split(), and puts the split and the original bio in a struct
+ * bio_pair. It also hooks into the completions so the original bio will be
+ * completed once both splits have been completed.
+ *
+ * The caller will own a refcount on the returned bio_pair, which must be
+ * dropped with bio_pair_release().
+ *
+ * Note: this interface is not safe and could cause deadlocks when used with
+ * stacked virtual block devices - to be correct it should allow the caller to
+ * pass in a bio_set to use. It shouldn't be used to split a bio more than once
+ * either, for that use bio_split().
  */
-struct bio_pair *bio_pair_split(struct bio *bi, int first_sectors)
+struct bio_pair *bio_pair_split(struct bio *bio, int sectors)
 {
-	struct bio_pair *bp = mempool_alloc(bio_split_pool, GFP_NOIO);
+	struct bio_pair *bp;
+	struct bio *split;
 
-	if (!bp)
-		return bp;
+	split = bio_split(bio, sectors, GFP_NOIO, bio_split_pool);
+	if (!split)
+		return NULL;
 
-	trace_block_split(bdev_get_queue(bi->bi_bdev), bi,
-				bi->bi_sector + first_sectors);
+	bp = container_of(split, struct bio_pair, split);
 
-	BUG_ON(bi->bi_vcnt != 1);
-	BUG_ON(bi->bi_idx != 0);
 	atomic_set(&bp->cnt, 3);
 	bp->error = 0;
-	bp->bio1 = *bi;
-	bp->bio2 = *bi;
-	bp->bio2.bi_sector += first_sectors;
-	bp->bio2.bi_size -= first_sectors << 9;
-	bp->bio1.bi_size = first_sectors << 9;
+	bp->orig = bio;
 
-	bp->bv1 = bi->bi_io_vec[0];
-	bp->bv2 = bi->bi_io_vec[0];
-	bp->bv2.bv_offset += first_sectors << 9;
-	bp->bv2.bv_len -= first_sectors << 9;
-	bp->bv1.bv_len = first_sectors << 9;
+	bp->bi_end_io = bio->bi_end_io;
+	bp->bi_private = bio->bi_private;
 
-	bp->bio1.bi_io_vec = &bp->bv1;
-	bp->bio2.bi_io_vec = &bp->bv2;
+	bio->bi_private = bp;
+	bio->bi_end_io = bio_pair_endio;
 
-	bp->bio1.bi_max_vecs = 1;
-	bp->bio2.bi_max_vecs = 1;
-
-	bp->bio1.bi_end_io = bio_pair_end_1;
-	bp->bio2.bi_end_io = bio_pair_end_2;
-
-	bp->bio1.bi_private = bi;
-	bp->bio2.bi_private = bio_split_pool;
-
-	if (bio_integrity(bi))
-		bio_integrity_split(bi, bp, first_sectors);
+	split->bi_private = bp;
+	split->bi_end_io = bio_pair_endio;
 
 	return bp;
 }
@@ -1878,8 +1872,7 @@ static int __init init_bio(void)
 	if (bioset_integrity_create(fs_bio_set, BIO_POOL_SIZE))
 		panic("bio: can't create integrity pool\n");
 
-	bio_split_pool = mempool_create_kmalloc_pool(BIO_SPLIT_ENTRIES,
-						     sizeof(struct bio_pair));
+	bio_split_pool = bioset_create(BIO_POOL_SIZE, offsetof(struct bio_pair, split));
 	if (!bio_split_pool)
 		panic("bio: can't create split pool\n");
 

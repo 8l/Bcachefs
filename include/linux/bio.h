@@ -201,6 +201,29 @@ struct bio_pair {
 	atomic_t			cnt;
 	int				error;
 };
+
+extern struct bio *bio_split(struct bio *bio, int sectors,
+			     gfp_t gfp, struct bio_set *bs);
+
+/**
+ * bio_next_split - get next @sectors from a bio, splitting if necessary
+ * @bio:	bio to split
+ * @sectors:	number of sectors to split from the front of @bio
+ * @gfp:	gfp mask
+ * @bs:		bio set to allocate from
+ *
+ * Returns a bio representing the next @sectors of @bio - if the bio is smaller
+ * than @sectors, returns the original bio unchanged.
+ */
+static inline struct bio *bio_next_split(struct bio *bio, int sectors,
+					 gfp_t gfp, struct bio_set *bs)
+{
+	if (sectors >= bio_sectors(bio))
+		return bio;
+
+	return bio_split(bio, sectors, gfp, bs);
+}
+
 extern struct bio_pair *bio_pair_split(struct bio *bi, int first_sectors);
 extern void bio_pair_release(struct bio_pair *dbio);
 

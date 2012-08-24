@@ -1562,6 +1562,102 @@ struct bio_pair *bio_pair_split(struct bio *bi, int first_sectors)
 EXPORT_SYMBOL(bio_pair_split);
 
 /**
+ * bio_split - split a bio
+ * @bio:	bio to split
+ * @sectors:	number of sectors to split from the front of @bio
+ * @gfp:	gfp mask
+ * @bs:		bio set to allocate from
+ *
+ * Allocates and returns a new bio which represents @sectors from the start of
+ * @bio, and updates @bio to represent the remaining sectors.
+ *
+ * The newly allocated bio will point to @bio's bi_io_vec, if the split was on a
+ * bvec boundry; it is the caller's responsibility to ensure that @bio is not
+ * freed before the split.
+ */
+struct bio *bio_split(struct bio *bio, int sectors,
+		      gfp_t gfp, struct bio_set *bs)
+{
+	unsigned idx, vcnt = 0, nbytes = sectors << 9;
+	struct bio_vec *bv;
+	struct bio *split = NULL;
+
+	BUG_ON(sectors <= 0);
+	BUG_ON(sectors >= bio_sectors(bio));
+
+	trace_block_split(bdev_get_queue(bio->bi_bdev), bio,
+			  bio->bi_sector + sectors);
+
+	if (bio->bi_rw & REQ_DISCARD) {
+		split = bio_alloc_bioset(gfp, 1, bs);
+
+		split->bi_io_vec = bio_iovec(bio);
+		idx = 0;
+		goto out;
+	}
+
+	bio_for_each_segment(bv, bio, idx) {
+		vcnt = idx - bio->bi_idx;
+
+		/*
+		 * The split might occur on a bvec boundry (nbytes == 0) - in
+		 * that case we can reuse the bvec from the old bio.
+		 *
+		 * Or, if the split isn't aligned, we'll have to allocate a new
+		 * bvec and patch up the two copies of the bvec we split in.
+		 */
+
+		if (!nbytes) {
+			split = bio_alloc_bioset(gfp, 0, bs);
+			if (!split)
+				return NULL;
+
+			split->bi_io_vec = bio_iovec(bio);
+			split->bi_flags |= 1 << BIO_CLONED;
+			break;
+		} else if (nbytes < bv->bv_len) {
+			split = bio_alloc_bioset(gfp, ++vcnt, bs);
+			if (!split)
+				return NULL;
+
+			memcpy(split->bi_io_vec, bio_iovec(bio),
+			       sizeof(struct bio_vec) * vcnt);
+
+			split->bi_io_vec[vcnt - 1].bv_len = nbytes;
+			bv->bv_offset += nbytes;
+			bv->bv_len -= nbytes;
+			break;
+		}
+
+		nbytes -= bv->bv_len;
+	}
+out:
+	split->bi_bdev		= bio->bi_bdev;
+	split->bi_sector	= bio->bi_sector;
+	split->bi_size		= sectors << 9;
+	split->bi_rw		= bio->bi_rw;
+	split->bi_vcnt		= vcnt;
+	split->bi_max_vecs	= vcnt;
+
+	bio->bi_sector	       += sectors;
+	bio->bi_size	       -= sectors << 9;
+	bio->bi_idx		= idx;
+
+	if (bio_integrity(bio)) {
+		if (bio_integrity_clone(split, bio, gfp, bs)) {
+			bio_put(split);
+			return NULL;
+		}
+
+		bio_integrity_trim(split, 0, bio_sectors(split));
+		bio_integrity_trim(bio, bio_sectors(split), bio_sectors(bio));
+	}
+
+	return split;
+}
+EXPORT_SYMBOL_GPL(bio_split);
+
+/**
  *      bio_sector_offset - Find hardware sector offset in bio
  *      @bio:           bio to inspect
  *      @index:         bio_vec index

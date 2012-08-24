@@ -672,7 +672,6 @@ void bio_integrity_trim(struct bio *bio, unsigned int offset,
 
 	BUG_ON(bip == NULL);
 	BUG_ON(bi == NULL);
-	BUG_ON(!bio_flagged(bio, BIO_CLONED));
 
 	nr_sectors = bio_integrity_hw_sectors(bi, sectors);
 	bip->bip_sector = bip->bip_sector + offset;

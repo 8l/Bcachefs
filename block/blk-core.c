@@ -1813,6 +1813,14 @@ end_io:
 	return false;
 }
 
+static void bi_idx_hack_endio(struct bio *bio, int error)
+{
+	struct bio *p = bio->bi_private;
+
+	bio_endio(p, error);
+	bio_put(bio);
+}
+
 /**
  * generic_make_request - hand a buffer to its device driver for I/O
  * @bio:  The bio describing the location in memory and on the device.
@@ -1843,6 +1851,15 @@ void generic_make_request(struct bio *bio)
 
 	if (!generic_make_request_checks(bio))
 		return;
+
+	if (bio->bi_idx) {
+		struct bio *clone = bio_clone(bio, GFP_NOIO);
+
+		clone->bi_private = bio;
+		clone->bi_end_io = bi_idx_hack_endio;
+
+		bio = clone;
+	}
 
 	/*
 	 * We only want one ->make_request_fn to be active at a time, else

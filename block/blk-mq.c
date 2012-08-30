@@ -549,6 +549,10 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 		rq = blk_mq_bio_to_request(q, ctx, bio, false);
 		if (list_empty(&plug->list))
 			trace_block_plug(q);
+		else if (request_count >= BLK_MAX_REQUEST_COUNT) {
+			blk_flush_plug_list(plug, false);
+			trace_block_plug(q);
+		}
 		list_add_tail(&rq->queuelist, &plug->list);
 		return;
 	}

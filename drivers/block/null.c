@@ -202,9 +202,9 @@ static void null_free_hctx(struct blk_mq_hw_ctx* hctx, unsigned int hctx_index)
  * Map each per-cpu software queue to a per-node hardware queue
  */
 struct blk_mq_hw_ctx *null_queue_map_per_node(struct request_queue *q,
-					      struct blk_mq_ctx *ctx)
+					      const int ctx_index)
 {
-	return q->queue_hw_ctx[cpu_to_node(ctx->index)];
+	return q->queue_hw_ctx[cpu_to_node(ctx_index)];
 }
 
 static struct blk_mq_ops null_mq_ops = {

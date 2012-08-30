@@ -10,6 +10,7 @@
 #include <linux/smp.h>
 
 #include <linux/blk-mq.h>
+#include "blk-mq.h"
 
 static void blk_mq_sysfs_release(struct kobject *kobj)
 {

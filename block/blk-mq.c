@@ -15,6 +15,7 @@
 
 #include <linux/blk-mq.h>
 #include "blk.h"
+#include "blk-mq.h"
 
 static DEFINE_PER_CPU(struct llist_head, ipi_lists);
 
@@ -79,7 +80,7 @@ static struct request *__blk_mq_alloc_request(struct request_queue *q,
 	struct request *rq = NULL;
 	DEFINE_WAIT(wait);
 
-	hctx = q->mq_ops->map_queue(q, ctx);
+	hctx = q->mq_ops->map_queue(q, ctx->index);
 
 	rq = __blk_mq_alloc_rq_nowait(hctx);
 	if (rq) {
@@ -131,7 +132,7 @@ static void blk_mq_free_request(struct request *rq)
 
 	ctx->rq_completed[rq_is_sync(rq)]++;
 
-	hctx = q->mq_ops->map_queue(q, ctx);
+	hctx = q->mq_ops->map_queue(q, ctx->index);
 	blk_rq_init(hctx->queue, rq);
 	clear_bit_unlock(tag, hctx->rq_map);
 
@@ -469,7 +470,7 @@ void blk_mq_insert_request(struct request_queue *q, struct request *rq)
 	struct blk_mq_ctx *ctx;
 
 	ctx = rq->mq_ctx;
-	hctx = q->mq_ops->map_queue(q, ctx);
+	hctx = q->mq_ops->map_queue(q, ctx->index);
 
 	spin_lock(&ctx->lock);
 	__blk_mq_insert_request(hctx, ctx, rq);
@@ -485,7 +486,7 @@ void blk_mq_insert_requests(struct request_queue *q, struct list_head *list)
 		return;
 
 	ctx = blk_mq_get_ctx(q);
-	hctx = q->mq_ops->map_queue(q, ctx);
+	hctx = q->mq_ops->map_queue(q, ctx->index);
 
 	spin_lock(&ctx->lock);
 	while (!list_empty(list)) {
@@ -536,7 +537,7 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 		return;
 
 	ctx = blk_mq_get_ctx(q);
-	hctx = q->mq_ops->map_queue(q, ctx);
+	hctx = q->mq_ops->map_queue(q, ctx->index);
 
 	hctx->queued++;
 
@@ -579,7 +580,7 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
  * Default mapping to a software queue, since we use one per CPU
  */
 struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *q,
-					      struct blk_mq_ctx *ctx)
+					      const int ctx_index)
 {
 	return q->queue_hw_ctx[0];
 }
@@ -714,7 +715,7 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 		spin_lock_init(&__ctx->lock);
 		INIT_LIST_HEAD(&__ctx->rq_list);
 
-		hctx = q->mq_ops->map_queue(q, __ctx);
+		hctx = q->mq_ops->map_queue(q, i);
 		hctx->nr_ctx++;
 	}
 
@@ -769,7 +770,7 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 	 * Map software to hardware queues
 	 */
 	queue_for_each_ctx(q, ctx, i) {
-		hctx = q->mq_ops->map_queue(q, ctx);
+		hctx = q->mq_ops->map_queue(q, i);
 		ctx->index_hw = hctx->nr_ctx;
 		hctx->ctxs[hctx->nr_ctx++] = ctx;
 	}

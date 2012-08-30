@@ -3,25 +3,6 @@
 
 #include <linux/blkdev.h>
 
-struct blk_mq_ctx {
-	spinlock_t		lock;
-
-	struct list_head	rq_list;
-
-	unsigned int		index;
-	unsigned int		index_hw;
-	unsigned int		ipi_redirect;
-
-	/* incremented at dispatch time */
-	unsigned long		rq_dispatched[2];
-	unsigned long		rq_merged;
-
-	/* incremented at completion time */
-	unsigned long		____cacheline_aligned_in_smp rq_completed[2];
-
-	struct kobject		kobj;
-};
-
 struct blk_mq_hw_ctx {
 	spinlock_t		lock;
 
@@ -62,7 +43,7 @@ struct blk_mq_reg {
 };
 
 typedef int (queue_rq_fn) (struct blk_mq_hw_ctx *, struct request *);
-typedef struct blk_mq_hw_ctx *(map_queue_fn) (struct request_queue *, struct blk_mq_ctx *);
+typedef struct blk_mq_hw_ctx *(map_queue_fn) (struct request_queue *, const int ctx_index);
 typedef struct blk_mq_hw_ctx *(alloc_hctx_fn) (struct blk_mq_reg *reg, unsigned int hctx_index);
 typedef void (free_hctx_fn) (struct blk_mq_hw_ctx *hctx, unsigned int hctx_index);
 
@@ -97,7 +78,7 @@ void blk_mq_insert_requests(struct request_queue *, struct list_head *);
 void blk_mq_run_queues(struct request_queue *q, bool async);
 struct request *blk_mq_alloc_request(struct request_queue *q, int rw, gfp_t gfp);
 
-struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *, struct blk_mq_ctx *);
+struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *, const int ctx_index);
 struct blk_mq_hw_ctx *blk_mq_alloc_single_hw_queue(struct blk_mq_reg *, unsigned int);
 void blk_mq_free_single_hw_queue(struct blk_mq_hw_ctx *, unsigned int);
 
@@ -124,16 +105,5 @@ void blk_mq_end_io(struct request *rq, int error);
 		__ret += sum;						\
 	__ret;								\
 })
-
-static inline unsigned int __blk_mq_in_flight(struct request_queue *q, int sync)
-{
-	return blk_ctx_sum(q, __x->rq_dispatched[sync] - __x->rq_completed[sync]);
-}
-
-static inline int blk_mq_in_flight(struct request_queue *q)
-{
-	return blk_ctx_sum(q, (__x->rq_dispatched[0] - __x->rq_completed[0]) +
-			      (__x->rq_dispatched[1] - __x->rq_completed[1]));
-}
 
 #endif

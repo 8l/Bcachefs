@@ -677,11 +677,8 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 
 	for (i = 0; i < reg->nr_hw_queues; i++) {
 		hctxs[i] = reg->ops->alloc_hctx(reg, i);
-		if (!hctxs[i]) {
-			while (i--)
-				reg->ops->free_hctx(hctxs[i], i);
+		if (!hctxs[i])
 			goto err_hctxs;
-		}
 	}
 
 	q = blk_alloc_queue_node(GFP_KERNEL, reg->numa_node);
@@ -773,6 +770,11 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 
 	return q;
 err_hctxs:
+	for (i = 0; i < reg->nr_hw_queues; i++) {
+		if (!hctxs[i])
+			break;
+		reg->ops->free_hctx(hctxs[i], i);
+	}
 	kfree(hctxs);
 err_percpu:
 	free_percpu(ctx);

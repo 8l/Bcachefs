@@ -148,7 +148,7 @@ static ssize_t sysfs_list_show(char *page, struct list_head *list, char *msg)
 
 static ssize_t blk_mq_sysfs_rq_list_show(struct blk_mq_ctx *ctx, char *page)
 {
-	return sysfs_list_show(page, &ctx->rq_list, "CTX pending");
+	return sysfs_list_show(page, &ctx->q.rq_list, "CTX pending");
 }
 
 static ssize_t blk_mq_hw_sysfs_queued_show(struct blk_mq_hw_ctx *hctx,

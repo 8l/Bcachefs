@@ -96,7 +96,7 @@ got_rq:
 		return NULL;
 
 	if (has_lock)
-		spin_unlock(&ctx->lock);
+		spin_unlock(&ctx->q.lock);
 
 	do {
 		prepare_to_wait(&hctx->rq_wait, &wait, TASK_UNINTERRUPTIBLE);
@@ -111,7 +111,7 @@ got_rq:
 	finish_wait(&hctx->rq_wait, &wait);
 
 	if (has_lock)
-		spin_lock(&ctx->lock);
+		spin_lock(&ctx->q.lock);
 
 	goto got_rq;
 }
@@ -277,7 +277,7 @@ static bool blk_mq_attempt_merge(struct request_queue *q,
 	struct request *rq;
 	int checked = 8;
 
-	list_for_each_entry_reverse(rq, &ctx->rq_list, queuelist) {
+	list_for_each_entry_reverse(rq, &ctx->q.rq_list, queuelist) {
 		int el_ret;
 
 		if (!checked--)
@@ -336,9 +336,9 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 		ctx = hctx->ctxs[bit];
 		BUG_ON(bit != ctx->index_hw);
 
-		spin_lock(&ctx->lock);
-		list_splice_tail_init(&ctx->rq_list, &tmp);
-		spin_unlock(&ctx->lock);
+		spin_lock(&ctx->q.lock);
+		list_splice_tail_init(&ctx->q.rq_list, &tmp);
+		spin_unlock(&ctx->q.lock);
 
 		/*
 		 * Reverse-add the entries to a lockless list, using the
@@ -455,7 +455,7 @@ static void __blk_mq_insert_request(struct blk_mq_hw_ctx *hctx,
 				    struct blk_mq_ctx *ctx,
 				    struct request *rq)
 {
-	list_add_tail(&rq->queuelist, &ctx->rq_list);
+	list_add_tail(&rq->queuelist, &ctx->q.rq_list);
 	blk_mq_hctx_mark_pending(hctx, ctx);
 
 	/*
@@ -472,9 +472,9 @@ void blk_mq_insert_request(struct request_queue *q, struct request *rq)
 	ctx = rq->mq_ctx;
 	hctx = q->mq_ops->map_queue(q, ctx->index);
 
-	spin_lock(&ctx->lock);
+	spin_lock(&ctx->q.lock);
 	__blk_mq_insert_request(hctx, ctx, rq);
-	spin_unlock(&ctx->lock);
+	spin_unlock(&ctx->q.lock);
 }
 
 void blk_mq_insert_requests(struct request_queue *q, struct list_head *list)
@@ -488,7 +488,7 @@ void blk_mq_insert_requests(struct request_queue *q, struct list_head *list)
 	ctx = blk_mq_get_ctx(q);
 	hctx = q->mq_ops->map_queue(q, ctx->index);
 
-	spin_lock(&ctx->lock);
+	spin_lock(&ctx->q.lock);
 	while (!list_empty(list)) {
 		struct request *rq;
 
@@ -496,7 +496,7 @@ void blk_mq_insert_requests(struct request_queue *q, struct list_head *list)
 		list_del_init(&rq->queuelist);
 		__blk_mq_insert_request(hctx, ctx, rq);
 	}
-	spin_unlock(&ctx->lock);
+	spin_unlock(&ctx->q.lock);
 
 	blk_mq_run_hw_queue(hctx);
 }
@@ -555,7 +555,7 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 		return;
 	}
 
-	spin_lock(&ctx->lock);
+	spin_lock(&ctx->q.lock);
 
 	if (!(hctx->flags & BLK_MQ_F_SHOULD_MERGE) ||
 	    !blk_mq_attempt_merge(q, ctx, bio)) {
@@ -563,7 +563,7 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 		__blk_mq_insert_request(hctx, ctx, rq);
 	}
 
-	spin_unlock(&ctx->lock);
+	spin_unlock(&ctx->q.lock);
 
 	/*
 	 * For a SYNC request, send it to the hardware immediately. For an
@@ -712,8 +712,8 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 
 		memset(__ctx, 0, sizeof(*__ctx));
 		__ctx->index = i;
-		spin_lock_init(&__ctx->lock);
-		INIT_LIST_HEAD(&__ctx->rq_list);
+		spin_lock_init(&__ctx->q.lock);
+		INIT_LIST_HEAD(&__ctx->q.rq_list);
 
 		hctx = q->mq_ops->map_queue(q, i);
 		hctx->nr_ctx++;

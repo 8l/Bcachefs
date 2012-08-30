@@ -143,6 +143,7 @@ static void blk_mq_free_request(struct request *rq)
 static void __blk_mq_end_io(struct request *rq, int error)
 {
 	struct bio *bio = rq->bio;
+	unsigned int bytes = 0;
 
 	if (blk_mark_rq_complete(rq))
 		return;
@@ -153,10 +154,12 @@ static void __blk_mq_end_io(struct request *rq, int error)
 		struct bio *next = bio->bi_next;
 
 		bio->bi_next = NULL;
+		bytes += bio->bi_size;
 		bio_endio(bio, error);
 		bio = next;
 	}
 
+	blk_account_io_completion(rq, bytes);
 	blk_mq_free_request(rq);
 }
 
@@ -514,8 +517,10 @@ static struct request *blk_mq_bio_to_request(struct request_queue *q,
 
 	rq = __blk_mq_alloc_request(q, ctx, rw_flags, GFP_ATOMIC | __GFP_WAIT,
 					has_lock);
-	if (rq)
+	if (rq) {
 		init_request_from_bio(rq, bio);
+		drive_stat_acct(rq, 1);
+	}
 
 	return rq;
 }

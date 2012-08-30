@@ -59,7 +59,7 @@ struct kmem_cache *blk_requestq_cachep;
  */
 static struct workqueue_struct *kblockd_workqueue;
 
-static void drive_stat_acct(struct request *rq, int new_io)
+void drive_stat_acct(struct request *rq, int new_io)
 {
 	struct hd_struct *part;
 	int rw = rq_data_dir(rq);
@@ -1982,7 +1982,7 @@ unsigned int blk_rq_err_bytes(const struct request *rq)
 }
 EXPORT_SYMBOL_GPL(blk_rq_err_bytes);
 
-static void blk_account_io_completion(struct request *req, unsigned int bytes)
+void blk_account_io_completion(struct request *req, unsigned int bytes)
 {
 	if (blk_do_io_stat(req)) {
 		const int rw = rq_data_dir(req);

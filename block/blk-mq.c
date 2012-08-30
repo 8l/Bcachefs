@@ -180,7 +180,7 @@ static void ipi_end_io(void *data)
  * it directly inline, or punt to a local IPI handler on the matching
  * remote CPU.
  */
-void blk_mq_end_io(struct blk_mq_hw_ctx *hctx, struct request *rq, int error)
+void blk_mq_end_io(struct request *rq, int error)
 {
 	struct blk_mq_ctx *ctx = rq->mq_ctx;
 	int cpu;
@@ -395,7 +395,7 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 			pr_err("blk-mq: bad return on queue: %d\n", ret);
 			rq->errors = -EIO;
 		case BLK_MQ_RQ_QUEUE_ERROR:
-			blk_mq_end_io(hctx, rq, rq->errors);
+			blk_mq_end_io(rq, rq->errors);
 			break;
 		}
 	}

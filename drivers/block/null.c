@@ -77,11 +77,10 @@ static bool use_per_node_hctx = true;
 module_param(use_per_node_hctx, bool, S_IRUGO);
 MODULE_PARM_DESC(use_per_node_hctx, "Use per-node allocation for hardware context queues. Default: true");
 
-static void null_complete_request(struct blk_mq_hw_ctx *hctx,
-				  struct request *rq)
+static void null_complete_request(struct request *rq)
 {
 	if (use_mq)
-		blk_mq_end_io(hctx, rq, 0);
+		blk_mq_end_io(rq, 0);
 	else {
 		INIT_LIST_HEAD(&rq->queuelist);
 		blk_end_request_all(rq, 0);
@@ -98,7 +97,7 @@ static enum hrtimer_restart null_request_timer_expired(struct hrtimer *timer)
 
 	while ((entry = llist_del_first(&cq->list)) != NULL) {
 		rq = llist_entry(entry, struct request, ll_list);
-		null_complete_request(NULL, rq);
+		null_complete_request(rq);
 	}
 
 	return HRTIMER_NORESTART;
@@ -128,7 +127,7 @@ static void null_ipi_end_io(void *data)
 
 	while ((entry = llist_del_first(&cq->list)) != NULL) {
 		rq = llist_entry(entry, struct request, ll_list);
-		null_complete_request(NULL, rq);
+		null_complete_request(rq);
 	}
 }
 
@@ -160,7 +159,7 @@ static inline void null_handle_rq(struct blk_mq_hw_ctx *hctx,
 	/* Complete IO by inline, softirq or timer */
 	switch (irqmode) {
 	case NULL_IRQ_NONE:
-		null_complete_request(hctx, rq);
+		null_complete_request(rq);
 		break;
 	case NULL_IRQ_SOFTIRQ:
 		null_request_end_ipi(rq);

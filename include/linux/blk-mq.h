@@ -101,7 +101,7 @@ struct blk_mq_hw_ctx *blk_mq_map_single_queue(struct request_queue *, struct blk
 struct blk_mq_hw_ctx *blk_mq_alloc_single_hw_queue(struct blk_mq_reg *, unsigned int);
 void blk_mq_free_single_hw_queue(struct blk_mq_hw_ctx *, unsigned int);
 
-void blk_mq_end_io(struct blk_mq_hw_ctx *hctx, struct request *rq, int error);
+void blk_mq_end_io(struct request *rq, int error);
 
 #define queue_for_each_hw_ctx(q, hctx, i)				\
 	for ((i) = 0, hctx = (q)->queue_hw_ctx[0];			\

@@ -53,7 +53,6 @@ struct virtio_blk
 struct virtblk_req
 {
 	struct request *req;
-	struct blk_mq_hw_ctx *hctx;
 	struct virtio_blk_outhdr out_hdr;
 	struct virtio_scsi_inhdr in_hdr;
 	u8 status;
@@ -95,7 +94,7 @@ static void blk_done(struct virtqueue *vq)
 			break;
 		}
 
-		blk_mq_end_io(vbr->hctx, vbr->req, error);
+		blk_mq_end_io(vbr->req, error);
 		mempool_free(vbr, vblk->pool);
 	}
 	spin_unlock_irqrestore(vblk->disk->queue->queue_lock, flags);
@@ -114,7 +113,6 @@ static bool do_req(struct blk_mq_hw_ctx *hctx, struct virtio_blk *vblk,
 		return false;
 
 	vbr->req = req;
-	vbr->hctx = hctx;
 
 	if (req->cmd_flags & REQ_FLUSH) {
 		vbr->out_hdr.type = VIRTIO_BLK_T_FLUSH;

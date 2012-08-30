@@ -821,7 +821,7 @@ static int __cpuinit blk_mq_cpu_notify(struct notifier_block *self,
 
 		local_irq_disable();
 
-		node = llist_del_first(&per_cpu(ipi_lists, cpu));
+		node = llist_del_all(&per_cpu(ipi_lists, cpu));
 		llist_for_each_entry(rq, node, ll_list)
 			__blk_mq_end_io(rq, rq->errors);
 

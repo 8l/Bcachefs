@@ -169,11 +169,9 @@ static void ipi_end_io(void *data)
 	struct llist_node *entry;
 	struct request *rq;
 
-	while ((entry = llist_del_first(list)) != NULL) {
-		rq = llist_entry(entry, struct request, ll_list);
-
-		__blk_mq_end_io(rq, rq->errors);
-	}
+	while ((entry = llist_del_all(list)) != NULL)
+		llist_for_each_entry(rq, entry, ll_list)
+			__blk_mq_end_io(rq, rq->errors);
 }
 
 /*

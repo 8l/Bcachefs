@@ -19,6 +19,17 @@
 static DEFINE_PER_CPU(struct llist_head, ipi_lists);
 
 /*
+ * This assumes per-cpu software queueing queues. They could be per-node
+ * as well, for instance. For now this is hardcoded as-is. Note that we don't
+ * care about preemption, since we know the ctx's are persistent. This does
+ * mean that we can't rely on ctx always matching the currently running CPU.
+ */
+static struct blk_mq_ctx *blk_mq_get_ctx(struct request_queue *q)
+{
+	return per_cpu_ptr(q->queue_ctx, raw_smp_processor_id());
+}
+
+/*
  * Check if any of the ctx's have pending work in this hardware queue
  */
 static bool blk_mq_hctx_has_pending(struct blk_mq_hw_ctx *hctx)
@@ -106,14 +117,9 @@ got_rq:
 
 struct request *blk_mq_alloc_request(struct request_queue *q, int rw, gfp_t gfp)
 {
-	struct blk_mq_ctx *ctx;
-	struct request *rq;
+	struct blk_mq_ctx *ctx = blk_mq_get_ctx(q);
 
-	ctx = per_cpu_ptr(q->queue_ctx, get_cpu());
-	rq = __blk_mq_alloc_request(q, ctx, rw, gfp, false);
-	put_cpu();
-
-	return rq;
+	return __blk_mq_alloc_request(q, ctx, rw, gfp, false);
 }
 
 static void blk_mq_free_request(struct request *rq)
@@ -478,7 +484,7 @@ void blk_mq_insert_requests(struct request_queue *q, struct list_head *list)
 	if (list_empty(list))
 		return;
 
-	ctx = per_cpu_ptr(q->queue_ctx, smp_processor_id());
+	ctx = blk_mq_get_ctx(q);
 	hctx = q->mq_ops->map_queue(q, ctx);
 
 	spin_lock(&ctx->lock);
@@ -529,7 +535,7 @@ static void blk_mq_make_request(struct request_queue *q, struct bio *bio)
 	if (blk_attempt_plug_merge(q, bio, &request_count))
 		return;
 
-	ctx = per_cpu_ptr(q->queue_ctx, raw_smp_processor_id());
+	ctx = blk_mq_get_ctx(q);
 	hctx = q->mq_ops->map_queue(q, ctx);
 
 	hctx->queued++;

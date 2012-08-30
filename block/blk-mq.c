@@ -594,6 +594,12 @@ void blk_mq_free_single_hw_queue(struct blk_mq_hw_ctx *hctx,
 }
 EXPORT_SYMBOL(blk_mq_free_single_hw_queue);
 
+static void blk_mq_free_rq_map(struct blk_mq_hw_ctx *hctx)
+{
+	kfree(hctx->rqs);
+	kfree(hctx->rq_map);
+}
+
 static int blk_mq_init_rq_map(struct blk_mq_hw_ctx *hctx)
 {
 	unsigned int num_maps, cur_qd;
@@ -723,12 +729,13 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 		hctx->queue_depth = reg->queue_depth;
 		hctx->numa_node = reg->numa_node;
 
-		/* FIXME: alloc failure handling */
-		blk_mq_init_rq_map(hctx);
+		if (blk_mq_init_rq_map(hctx))
+			break;
 
-		/* FIXME: alloc failure handling */
 		hctx->ctxs = kmalloc_node(hctx->nr_ctx *
 				sizeof(void *), GFP_KERNEL, reg->numa_node);
+		if (!hctx->ctxs)
+			break;
 
 		num_maps = ALIGN(nr_cpu_ids, BITS_PER_LONG) / BITS_PER_LONG;
 		hctx->ctx_map = kmalloc_node(num_maps * sizeof(unsigned long),
@@ -736,6 +743,23 @@ struct request_queue *blk_mq_init_queue(struct blk_mq_reg *reg)
 		hctx->nr_ctx_map = num_maps;
 
 		hctx->nr_ctx = 0;
+	}
+
+	/*
+	 * Init failed
+	 */
+	if (i != q->nr_hw_queues) {
+		int j;
+
+		queue_for_each_hw_ctx(q, hctx, j) {
+			if (i == j)
+				break;
+
+			blk_mq_free_rq_map(hctx);
+			kfree(hctx->ctxs);
+		}
+
+		goto err_hctxs;
 	}
 
 	/*
@@ -765,8 +789,7 @@ void blk_mq_free_queue(struct request_queue *q)
 		cancel_delayed_work_sync(&hctx->delayed_work);
 		kfree(hctx->ctx_map);
 		kfree(hctx->ctxs);
-		kfree(hctx->rqs);
-		kfree(hctx->rq_map);
+		blk_mq_free_rq_map(hctx);
 		q->mq_ops->free_hctx(hctx, i);
 	}
 

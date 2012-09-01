@@ -160,6 +160,7 @@ static void __blk_mq_end_io(struct request *rq, int error)
 	}
 
 	blk_account_io_completion(rq, bytes);
+	blk_account_io_done(rq);
 	blk_mq_free_request(rq);
 }
 
@@ -519,7 +520,7 @@ static struct request *blk_mq_bio_to_request(struct request_queue *q,
 					has_lock);
 	if (rq) {
 		init_request_from_bio(rq, bio);
-		drive_stat_acct(rq, 1);
+		blk_account_io_start(rq, 1);
 	}
 
 	return rq;

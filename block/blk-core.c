@@ -59,42 +59,6 @@ struct kmem_cache *blk_requestq_cachep;
  */
 static struct workqueue_struct *kblockd_workqueue;
 
-void drive_stat_acct(struct request *rq, int new_io)
-{
-	struct hd_struct *part;
-	int rw = rq_data_dir(rq);
-	int cpu;
-
-	if (!blk_do_io_stat(rq))
-		return;
-
-	cpu = part_stat_lock();
-
-	if (!new_io) {
-		part = rq->part;
-		part_stat_inc(cpu, part, merges[rw]);
-	} else {
-		part = disk_map_sector_rcu(rq->rq_disk, blk_rq_pos(rq));
-		if (!hd_struct_try_get(part)) {
-			/*
-			 * The partition is already being removed,
-			 * the request will be accounted on the disk only
-			 *
-			 * We take a reference on disk->part0 although that
-			 * partition will never be deleted, so we can treat
-			 * it as any other partition.
-			 */
-			part = &rq->rq_disk->part0;
-			hd_struct_get(part);
-		}
-		part_round_stats(cpu, part);
-		part_inc_in_flight(part, rw);
-		rq->part = part;
-	}
-
-	part_stat_unlock();
-}
-
 void blk_queue_congestion_threshold(struct request_queue *q)
 {
 	int nr;
@@ -1192,7 +1156,7 @@ EXPORT_SYMBOL(blk_requeue_request);
 static void add_acct_request(struct request_queue *q, struct request *rq,
 			     int where)
 {
-	drive_stat_acct(rq, 1);
+	blk_account_io_start(rq, true);
 	__elv_add_request(q, rq, where);
 }
 
@@ -1330,7 +1294,7 @@ bool bio_attempt_back_merge(struct request_queue *q, struct request *req,
 	req->__data_len += bio->bi_size;
 	req->ioprio = ioprio_best(req->ioprio, bio_prio(bio));
 
-	drive_stat_acct(req, 0);
+	blk_account_io_start(req, false);
 	return true;
 }
 
@@ -1360,7 +1324,7 @@ bool bio_attempt_front_merge(struct request_queue *q, struct request *req,
 	req->__data_len += bio->bi_size;
 	req->ioprio = ioprio_best(req->ioprio, bio_prio(bio));
 
-	drive_stat_acct(req, 0);
+	blk_account_io_start(req, false);
 	return true;
 }
 
@@ -1533,7 +1497,7 @@ get_rq:
 			}
 		}
 		list_add_tail(&req->queuelist, &plug->list);
-		drive_stat_acct(req, 1);
+		blk_account_io_start(req, true);
 	} else {
 		spin_lock_irq(q->queue_lock);
 		add_acct_request(q, req, where);
@@ -1996,7 +1960,7 @@ void blk_account_io_completion(struct request *req, unsigned int bytes)
 	}
 }
 
-static void blk_account_io_done(struct request *req)
+void blk_account_io_done(struct request *req)
 {
 	/*
 	 * Account IO completion.  flush_rq isn't accounted as a
@@ -2020,6 +1984,42 @@ static void blk_account_io_done(struct request *req)
 		hd_struct_put(part);
 		part_stat_unlock();
 	}
+}
+
+void blk_account_io_start(struct request *rq, bool new_io)
+{
+	struct hd_struct *part;
+	int rw = rq_data_dir(rq);
+	int cpu;
+
+	if (!blk_do_io_stat(rq))
+		return;
+
+	cpu = part_stat_lock();
+
+	if (!new_io) {
+		part = rq->part;
+		part_stat_inc(cpu, part, merges[rw]);
+	} else {
+		part = disk_map_sector_rcu(rq->rq_disk, blk_rq_pos(rq));
+		if (!hd_struct_try_get(part)) {
+			/*
+			 * The partition is already being removed,
+			 * the request will be accounted on the disk only
+			 *
+			 * We take a reference on disk->part0 although that
+			 * partition will never be deleted, so we can treat
+			 * it as any other partition.
+			 */
+			part = &rq->rq_disk->part0;
+			hd_struct_get(part);
+		}
+		part_round_stats(cpu, part);
+		part_inc_in_flight(part, rw);
+		rq->part = part;
+	}
+
+	part_stat_unlock();
 }
 
 /**
@@ -2428,7 +2428,6 @@ static void blk_finish_request(struct request *req, int error)
 
 	if (req->cmd_flags & REQ_DONTPREP)
 		blk_unprep_request(req);
-
 
 	blk_account_io_done(req);
 

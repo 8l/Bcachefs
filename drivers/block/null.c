@@ -33,8 +33,12 @@ static DEFINE_PER_CPU(struct completion_queue, completion_queues);
 
 enum {
 	NULL_IRQ_NONE		= 0,
-	NULL_IRQ_SOFTIRQ,
-	NULL_IRQ_TIMER,
+	NULL_IRQ_SOFTIRQ	= 1,
+	NULL_IRQ_TIMER		= 2,
+
+	NULL_Q_BIO		= 0,
+	NULL_Q_RQ		= 1,
+	NULL_Q_MQ		= 2,
 };
 
 static int submit_queues = 1;
@@ -49,9 +53,9 @@ static int home_node = NUMA_NO_NODE;
 module_param(home_node, int, S_IRUGO);
 MODULE_PARM_DESC(home_node, "Home node for the device");
 
-static int use_mq = 1;
-module_param(use_mq, int, S_IRUGO);
-MODULE_PARM_DESC(use_mq, "Use blk-mq interface");
+static int queue_mode = NULL_Q_MQ;
+module_param(queue_mode, int, S_IRUGO);
+MODULE_PARM_DESC(use_mq, "Use blk-mq interface (0=bio,1=rq,2=multiqueue)");
 
 static int gb = 250;
 module_param(gb, int, S_IRUGO);
@@ -79,12 +83,28 @@ MODULE_PARM_DESC(use_per_node_hctx, "Use per-node allocation for hardware contex
 
 static void null_complete_request(struct request *rq)
 {
-	if (use_mq)
+	if (queue_mode == NULL_Q_MQ)
 		blk_mq_end_io(rq, 0);
 	else {
 		INIT_LIST_HEAD(&rq->queuelist);
 		blk_end_request_all(rq, 0);
 	}
+}
+
+static enum hrtimer_restart null_bio_timer_expired(struct hrtimer *timer)
+{
+	struct completion_queue *cq;
+	struct llist_node *entry;
+	struct bio *bio;
+
+	cq = &per_cpu(completion_queues, smp_processor_id());
+
+	while ((entry = llist_del_first(&cq->list)) != NULL) {
+		bio = llist_entry(entry, struct bio, bi_next);
+		bio_endio(bio, 0);
+	}
+
+	return HRTIMER_NORESTART;
 }
 
 static enum hrtimer_restart null_request_timer_expired(struct hrtimer *timer)
@@ -117,7 +137,21 @@ static void null_request_end_timer(struct request *rq)
 	put_cpu();
 }
 
-static void null_ipi_end_io(void *data)
+static void null_bio_end_timer(struct bio *bio)
+{
+	struct completion_queue *cq = &per_cpu(completion_queues, get_cpu());
+
+	bio->bi_next = NULL;
+	if (llist_add((struct llist_node *) bio->bi_next, &cq->list)) {
+		ktime_t kt = ktime_set(0, completion_nsec);
+
+		hrtimer_start(&cq->timer, kt, HRTIMER_MODE_REL);
+	}
+
+	put_cpu();
+}
+
+static void null_ipi_request_end_io(void *data)
 {
 	struct completion_queue *cq;
 	struct llist_node *entry;
@@ -145,7 +179,7 @@ static void null_request_end_ipi(struct request *rq)
 	rq->ll_list.next = NULL;
 
 	if (llist_add(&rq->ll_list, &cq->list)) {
-		data->func = null_ipi_end_io;
+		data->func = null_ipi_request_end_io;
 		data->flags = 0;
 		__smp_call_function_single(cpu, data, 0);
 	}
@@ -166,6 +200,19 @@ static inline void null_handle_rq(struct blk_mq_hw_ctx *hctx,
 		break;
 	case NULL_IRQ_TIMER:
 		null_request_end_timer(rq);
+		break;
+	}
+}
+
+static void null_queue_bio(struct request_queue *q, struct bio *bio)
+{
+	switch (irqmode) {
+	case NULL_IRQ_SOFTIRQ:
+	case NULL_IRQ_NONE:
+		bio_endio(bio, 0);
+		break;
+	case NULL_IRQ_TIMER:
+		null_bio_end_timer(bio);
 		break;
 	}
 }
@@ -223,7 +270,7 @@ static void null_del_dev(struct nullb *nullb)
 	list_del_init(&nullb->list);
 
 	del_gendisk(nullb->disk);
-	if (use_mq)
+	if (queue_mode == NULL_Q_MQ)
 		blk_mq_free_queue(nullb->q);
 	else
 		blk_cleanup_queue(nullb->q);
@@ -261,7 +308,7 @@ static int null_add_dev(void)
 
 	spin_lock_init(&nullb->lock);
 
-	if (use_mq) {
+	if (queue_mode == NULL_Q_MQ) {
 		null_mq_reg.numa_node = home_node;
 		null_mq_reg.queue_depth = hw_queue_depth;
 
@@ -278,6 +325,9 @@ static int null_add_dev(void)
 		}
 
 		nullb->q = blk_mq_init_queue(&null_mq_reg);
+	} else if (queue_mode == NULL_Q_BIO) {
+		nullb->q = blk_alloc_queue_node(GFP_KERNEL, home_node);
+		blk_queue_make_request(nullb->q, null_queue_bio);
 	} else {
 		nullb->q = blk_init_queue_node(null_request_fn, &nullb->lock, home_node);
 		if (nullb->q)
@@ -293,7 +343,7 @@ static int null_add_dev(void)
 
 	disk = nullb->disk = alloc_disk_node(1, home_node);
 	if (!disk) {
-		if (use_mq)
+		if (queue_mode == NULL_Q_MQ)
 			blk_mq_free_queue(nullb->q);
 		else
 			blk_cleanup_queue(nullb->q);
@@ -328,6 +378,12 @@ static int __init null_init(void)
 {
 	unsigned int i;
 
+	if (queue_mode == NULL_Q_BIO && irqmode == NULL_IRQ_SOFTIRQ) {
+		pr_warn("null: bio and softirq completions do not work\n");
+		pr_warn("null: defaulting to inline completions\n");
+		irqmode = NULL_IRQ_NONE;
+	}
+
 	mutex_init(&lock);
 
 	/* Initialize a separate list for each CPU for issuing softirqs */
@@ -340,7 +396,10 @@ static int __init null_init(void)
 			continue;
 
 		hrtimer_init(&cq->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-		cq->timer.function = null_request_timer_expired;
+		if (queue_mode == NULL_Q_BIO)
+			cq->timer.function = null_bio_timer_expired;
+		else
+			cq->timer.function = null_request_timer_expired;
 	}
 
 	null_major = register_blkdev(0, "nullb");

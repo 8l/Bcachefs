@@ -99,9 +99,12 @@ static enum hrtimer_restart null_bio_timer_expired(struct hrtimer *timer)
 
 	cq = &per_cpu(completion_queues, smp_processor_id());
 
-	while ((entry = llist_del_first(&cq->list)) != NULL) {
-		bio = llist_entry(entry, struct bio, bi_next);
-		bio_endio(bio, 0);
+	while ((entry = llist_del_all(&cq->list)) != NULL) {
+		do {
+			bio = container_of(entry, struct bio, bi_next);
+			bio_endio(bio, 0);
+			entry = entry->next;
+		} while (entry);
 	}
 
 	return HRTIMER_NORESTART;
@@ -115,10 +118,9 @@ static enum hrtimer_restart null_request_timer_expired(struct hrtimer *timer)
 
 	cq = &per_cpu(completion_queues, smp_processor_id());
 
-	while ((entry = llist_del_first(&cq->list)) != NULL) {
-		rq = llist_entry(entry, struct request, ll_list);
-		null_complete_request(rq);
-	}
+	while ((entry = llist_del_all(&cq->list)) != NULL)
+		llist_for_each_entry(rq, entry, ll_list)
+			null_complete_request(rq);
 
 	return HRTIMER_NORESTART;
 }

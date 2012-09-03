@@ -376,6 +376,7 @@ void bch_writeback_init_cached_dev(struct cached_dev *dc)
 
 	dc->writeback_metadata		= true;
 	dc->writeback_running		= true;
+	dc->writeback_percent		= 10;
 	dc->writeback_delay		= 30;
 	dc->writeback_rate.rate		= 1024;
 

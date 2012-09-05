@@ -412,11 +412,11 @@ void blk_mq_run_hw_queue(struct blk_mq_hw_ctx *hctx)
 	 * Any items that need requeuing? Find last entry, batch re-add.
 	 */
 	if (first) {
-		last = NULL;
-		while (first->next)
-			last = first->next;
+		last = first;
+		while (last->next)
+			last = last->next;
 
-		if (last)
+		if (last != first)
 			llist_add_batch(first, last, &hctx->dispatch);
 		else
 			llist_add(first, &hctx->dispatch);

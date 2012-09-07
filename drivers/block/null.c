@@ -10,6 +10,7 @@
 
 struct nullb {
 	struct list_head list;
+	unsigned int index;
 	struct request_queue *q;
 	struct gendisk *disk;
 	struct hrtimer timer;
@@ -19,6 +20,7 @@ struct nullb {
 static LIST_HEAD(nullb_list);
 static struct mutex lock;
 static int null_major;
+static int nullb_indexes;
 
 struct completion_queue {
 	struct llist_head list;
@@ -64,6 +66,10 @@ MODULE_PARM_DESC(gb, "Size in GB");
 static int bs = 512;
 module_param(bs, int, S_IRUGO);
 MODULE_PARM_DESC(bs, "Block size (in bytes)");
+
+static int nr_devices = 2;
+module_param(nr_devices, int, S_IRUGO);
+MODULE_PARM_DESC(nr_devices, "Number of devices to register");
 
 static int irqmode = NULL_IRQ_SOFTIRQ;
 module_param(irqmode, int, S_IRUGO);
@@ -355,6 +361,7 @@ static int null_add_dev(void)
 
 	mutex_lock(&lock);
 	list_add_tail(&nullb->list, &nullb_list);
+	nullb->index = nullb_indexes++;
 	mutex_unlock(&lock);
 
 	blk_queue_logical_block_size(nullb->q, bs);
@@ -367,11 +374,11 @@ static int null_add_dev(void)
 	disk->flags |= GENHD_FL_EXT_DEVT;
 	spin_lock_init(&nullb->lock);
 	disk->major		= null_major;
-	disk->first_minor	= 0;
+	disk->first_minor	= nullb->index;
 	disk->fops		= &null_fops;
 	disk->private_data	= nullb;
 	disk->queue		= nullb->q;
-	sprintf(disk->disk_name, "nullb%d", 0);
+	sprintf(disk->disk_name, "nullb%d", nullb->index);
 	add_disk(disk);
 	return 0;
 }
@@ -408,9 +415,11 @@ static int __init null_init(void)
 	if (null_major < 0)
 		return null_major;
 
-	if (null_add_dev()) {
-		unregister_blkdev(null_major, "nullb");
-		return -EINVAL;
+	for (i = 0; i < nr_devices; i++) {
+		if (null_add_dev()) {
+			unregister_blkdev(null_major, "nullb");
+			return -EINVAL;
+		}
 	}
 
 	pr_info("null: module loaded\n");

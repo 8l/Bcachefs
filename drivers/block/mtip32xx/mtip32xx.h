@@ -310,8 +310,6 @@ struct mtip_cmd {
 	unsigned long comp_time; /* command completion time, in jiffies */
 
 	atomic_t active; /* declares if this command sent to the drive. */
-
-	struct blk_mq_hw_ctx *hctx; /* block layer hw context used for io completion */
 };
 
 /* Structure used to describe a port. */

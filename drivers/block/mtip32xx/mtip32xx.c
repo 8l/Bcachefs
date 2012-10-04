@@ -2480,7 +2480,6 @@ static void mtip_hw_submit_io(struct driver_data *dd, struct request *rq,
 	 * Set the completion function and data for the command passed
 	 * from the upper layer.
 	 */
-	command->hctx = hctx;
 	command->async_data = rq;
 	command->async_callback = blk_mq_end_io;
 

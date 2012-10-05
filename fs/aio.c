@@ -424,6 +424,8 @@ static struct kiocb *__aio_get_req(struct kioctx *ctx)
 	req->private = NULL;
 	req->ki_iovec = NULL;
 	INIT_LIST_HEAD(&req->ki_run_list);
+	req->ki_attrs = NULL;
+	req->ki_attr_rets = NULL;
 	req->ki_eventfd = NULL;
 
 	return req;
@@ -538,6 +540,7 @@ static inline void really_put_req(struct kioctx *ctx, struct kiocb *req)
 		req->ki_dtor(req);
 	if (req->ki_iovec != &req->ki_inline_vec)
 		kfree(req->ki_iovec);
+	kfree(req->ki_attrs);
 	kmem_cache_free(kiocb_cachep, req);
 	ctx->reqs_active--;
 
@@ -1504,6 +1507,109 @@ static ssize_t aio_setup_iocb(struct kiocb *kiocb, bool compat)
 	return 0;
 }
 
+static const size_t iocb_attr_sizes[] = {
+	[IOCB_ATTR_proxy_pid] = sizeof(struct iocb_attr_proxy_pid),
+};
+
+static const size_t iocb_attr_ret_sizes[] = {
+	[IOCB_ATTR_proxy_pid] = sizeof(struct iocb_attr_ret_proxy_pid),
+};
+
+static int aio_setup_attrs(struct iocb __user *user_iocb,
+			   struct iocb *iocb, struct kiocb *req)
+{
+	struct iocb_attr_list __user *user_attrs;
+	struct iocb_attr_ret_list __user *user_attr_rets;
+	struct iocb_attr *attr, *end;
+	struct iocb_attr_ret *attr_ret;
+	u64 size, ret_size = sizeof(struct iocb_attr_ret_list);
+	int ret;
+
+	user_attrs = (void *) &user_iocb[1];
+	user_attr_rets = (void *) iocb->aio_attr_rets;
+
+	if (!(iocb->aio_flags & IOCB_FLAG_ATTR))
+		return 0;
+
+	if (unlikely(get_user(size, &user_attrs->size)))
+		return -EFAULT;
+
+	if (size == sizeof(struct iocb_attr_list)) {
+		/*
+		 * We were passed an empty attribute list, so we can skip the
+		 * rest of the setup but we still need to return an empty
+		 * iocb_attr_ret_list:
+		 */
+
+		struct iocb_attr_ret_list tmp;
+		tmp.size = sizeof(tmp);
+
+		if (copy_to_user(user_attr_rets, &tmp, sizeof(tmp)))
+			return -EFAULT;
+
+		return 0;
+	}
+
+	if (unlikely(size > PAGE_SIZE))
+		return -EFAULT;
+
+	req->ki_attrs = kmalloc(size, GFP_KERNEL);
+	if (unlikely(!req->ki_attrs))
+		return  -ENOMEM;
+
+	req->ki_attrs->size = size;
+
+	ret = -EFAULT;
+	if (unlikely(copy_from_user(req->ki_attrs->attrs,
+				    user_attrs->attrs,
+				    size - sizeof(u64))))
+		goto err_free;
+
+	end = ((void *) req->ki_attrs) + req->ki_attrs->size;
+
+	ret = -EINVAL;
+	for_each_iocb_attr(attr, req->ki_attrs) {
+		if (attr > end)
+			goto err_free;
+
+		if (attr->size < sizeof(struct iocb_attr))
+			goto err_free;
+
+		if (attr->id >= IOCB_ATTR_MAX)
+			goto err_free;
+
+		if (attr->size != iocb_attr_sizes[attr->id])
+			goto err_free;
+
+		ret_size += iocb_attr_ret_sizes[attr->id];
+	}
+
+	ret = -ENOMEM;
+	req->ki_attr_rets = kmalloc(ret_size, GFP_KERNEL);
+	if (!req->ki_attr_rets)
+		goto err_free;
+
+	req->ki_attr_rets->size = ret_size;
+
+	attr_ret = req->ki_attr_rets->rets;
+
+	for_each_iocb_attr(attr, req->ki_attrs) {
+		attr_ret->cookie = attr->cookie;
+		attr_ret->size = iocb_attr_ret_sizes[attr->id];
+		attr_ret->ret = -EINVAL;
+
+		attr->cookie = (unsigned long) attr_ret;
+
+		attr_ret = ((void *) attr_ret) + attr_ret->size;
+	}
+
+	return 0;
+err_free:
+	kfree(req->ki_attrs);
+	req->ki_attrs = NULL;
+	return ret;
+}
+
 static int io_submit_one(struct kioctx *ctx, struct iocb __user *user_iocb,
 			 struct iocb *iocb, struct kiocb_batch *batch,
 			 bool compat)
@@ -1513,7 +1619,9 @@ static int io_submit_one(struct kioctx *ctx, struct iocb __user *user_iocb,
 	ssize_t ret;
 
 	/* enforce forwards compatibility on users */
-	if (unlikely(iocb->aio_reserved1 || iocb->aio_reserved2)) {
+	if (unlikely(iocb->aio_reserved1 ||
+		     (iocb->aio_attr_rets &&
+		      !(iocb->aio_flags & IOCB_FLAG_ATTR)))) {
 		pr_debug("EINVAL: io_submit: reserve field set\n");
 		return -EINVAL;
 	}
@@ -1538,6 +1646,11 @@ static int io_submit_one(struct kioctx *ctx, struct iocb __user *user_iocb,
 		return -EAGAIN;
 	}
 	req->ki_filp = file;
+
+	ret = aio_setup_attrs(user_iocb, iocb, req);
+	if (ret)
+		goto out_put_req;
+
 	if (iocb->aio_flags & IOCB_FLAG_RESFD) {
 		/*
 		 * If the IOCB_FLAG_RESFD flag of aio_flags is set, get an

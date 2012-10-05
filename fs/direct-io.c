@@ -371,6 +371,7 @@ static inline void dio_bio_submit(struct dio *dio, struct dio_submit *sdio)
 	unsigned long flags;
 
 	bio->bi_private = dio;
+	bio->bi_attrs = dio->iocb->ki_attrs;
 
 	spin_lock_irqsave(&dio->bio_lock, flags);
 	dio->refcount++;

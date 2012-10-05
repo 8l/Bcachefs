@@ -119,6 +119,9 @@ struct kiocb {
 						 * for cancellation */
 	struct list_head	ki_batch;	/* batch allocation */
 
+	struct iocb_attr_list	*ki_attrs;
+	struct iocb_attr_ret_list *ki_attr_rets;
+
 	/*
 	 * If the aio_resfd field of the userspace iocb is not zero,
 	 * this is the underlying eventfd context to deliver events to.
@@ -230,10 +233,61 @@ static inline long do_io_submit(aio_context_t ctx_id, long nr,
 				bool compat) { return 0; }
 #endif /* CONFIG_AIO */
 
+#define for_each_iocb_attr(attr, attr_list)				\
+	for (attr = (attr_list)->attrs;					\
+	     attr != ((void *) (attr_list)) + (attr_list)->size;	\
+	     attr = ((void *) attr) + (attr)->size)
+
 static inline struct kiocb *list_kiocb(struct list_head *h)
 {
 	return list_entry(h, struct kiocb, ki_list);
 }
+
+static inline struct iocb_attr *iocb_attr_next(struct iocb_attr_list *attrs,
+					       struct iocb_attr *attr)
+{
+	void *end = ((void *) attrs) + attrs->size;
+
+	if (attr)
+		attr = ((void *) attr) + attr->size;
+	else
+		attr = attrs->attrs;
+
+	if (attr == end)
+		return attr;
+
+	return attr;
+}
+
+static inline void *__iocb_attr_lookup(struct iocb_attr_list *attrs, unsigned id)
+{
+	struct iocb_attr *attr = NULL;
+
+	if (!attrs)
+		return NULL;
+
+	while (1) {
+		attr = iocb_attr_next(attrs, attr);
+		if (!attr)
+			return NULL;
+
+		if (attr->id == id)
+			return attr;
+	}
+
+	return NULL;
+}
+
+#define iocb_attr_lookup(attrs, id)					\
+({									\
+	struct iocb_attr *_attr;					\
+									\
+	_attr = __iocb_attr_lookup((attrs), IOCB_ATTR_ ## id);		\
+	if (_attr->size != sizeof(struct iocb_attr_ ## id))		\
+		_attr = NULL;						\
+									\
+	(struct iocb_attr_ ## id *) _attr;				\
+})
 
 /* for sysctl: */
 extern unsigned long aio_nr;

@@ -53,6 +53,7 @@ enum {
  *                   is valid.
  */
 #define IOCB_FLAG_RESFD		(1 << 0)
+#define IOCB_FLAG_ATTR		(1 << 1)
 
 /* read() from /dev/aio returns these structures. */
 struct io_event {
@@ -92,7 +93,7 @@ struct iocb {
 	__s64	aio_offset;
 
 	/* extra parameters */
-	__u64	aio_reserved2;	/* TODO: use this for a (struct sigevent *) */
+	__u64	aio_attr_rets;
 
 	/* flags for the "struct iocb" */
 	__u32	aio_flags;
@@ -103,6 +104,44 @@ struct iocb {
 	 */
 	__u32	aio_resfd;
 }; /* 64 bytes */
+
+struct iocb_attr {
+	__u64			cookie;
+	__u32			size;
+	__u32			id;
+	__u8			data[0];
+} __aligned(8);
+
+struct iocb_attr_list {
+	__u64			size;
+	struct iocb_attr	attrs[];
+};
+
+struct iocb_attr_ret {
+	__u64			cookie;
+	__u32			size;
+	__u32			ret;
+	__u8			data[0];
+} __aligned(8);
+
+struct iocb_attr_ret_list {
+	__u64			size;
+	struct iocb_attr_ret	rets[];
+};
+
+enum {
+	IOCB_ATTR_proxy_pid,
+	IOCB_ATTR_MAX
+};
+
+struct iocb_attr_proxy_pid {
+	struct iocb_attr	attr;
+	__u64			pid;
+};
+
+struct iocb_attr_ret_proxy_pid {
+	struct iocb_attr_ret	attr;
+};
 
 #undef IFBIG
 #undef IFLITTLE

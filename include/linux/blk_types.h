@@ -68,6 +68,9 @@ struct bio {
 	bio_end_io_t		*bi_end_io;
 
 	void			*bi_private;
+
+	struct iocb_attr_list	*bi_attrs;
+
 #ifdef CONFIG_BLK_CGROUP
 	/*
 	 * Optional ioc and css associated with this bio.  Put on bio

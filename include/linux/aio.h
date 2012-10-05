@@ -191,19 +191,24 @@ struct kioctx {
 	unsigned long		user_id;
 	struct hlist_node	list;
 
+	/* for io_getevents()/read_events() */
 	wait_queue_head_t	wait;
 
 	spinlock_t		ctx_lock;
 
-	int			reqs_active;
+	atomic_t		reqs_active;
 	struct list_head	active_reqs;	/* used for cancellation */
 	struct list_head	run_list;	/* used for kicked reqs */
 
 	/* sys_io_setup currently limits this to an unsigned int */
 	unsigned		max_reqs;
 
+	struct aio_ring		*ring;
+	unsigned		ring_order;
+	unsigned		nr_events;
 	struct aio_ring_info	ring_info;
 
+	struct work_struct	free_work;
 	struct delayed_work	wq;
 
 	struct rcu_head		rcu_head;

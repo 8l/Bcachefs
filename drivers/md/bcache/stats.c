@@ -169,7 +169,7 @@ static void scale_accounting(unsigned long data)
 	struct cache_accounting *acc = (struct cache_accounting *) data;
 
 #define move_stat(name) do {						\
-	unsigned long t = atomic_xchg(&acc->collector.name, 0);		\
+	unsigned t = atomic_xchg(&acc->collector.name, 0);		\
 	t <<= 16;							\
 	acc->five_minute.name += t;					\
 	acc->hour.name += t;						\

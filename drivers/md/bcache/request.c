@@ -740,8 +740,8 @@ static void cached_dev_read_complete(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
 
-	if (s->cache_miss)
-		bio_put(s->cache_miss);
+	if (s->op.insert_collision)
+		bch_mark_cache_miss_collision(s);
 
 	if (s->op.cache_bio) {
 		int i;
@@ -851,6 +851,9 @@ static void request_read_done(struct closure *cl)
 			src_offset	+= bytes;
 			dst_offset	+= bytes;
 		}
+
+		bio_put(s->cache_miss);
+		s->cache_miss = NULL;
 	}
 
 	if (verify(dc, &s->bio.bio) && s->recoverable)
@@ -871,9 +874,6 @@ static void request_read_done_bh(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
 	struct cached_dev *dc = container_of(s->d, struct cached_dev, disk);
-
-	if (s->cache_miss && s->op.insert_collision)
-		bch_mark_cache_miss_collision(s);
 
 	bch_mark_cache_accounting(s, !s->cache_miss, s->op.skip);
 

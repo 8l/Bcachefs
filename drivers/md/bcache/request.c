@@ -549,6 +549,7 @@ err:
 		 * we have written or bail out if we didn't do anything.
 		 */
 		op->insert_data_done = true;
+		bio_put(bio);
 
 		if (!bch_keylist_empty(&op->keys))
 			continue_at(cl, bch_journal, bcache_wq);

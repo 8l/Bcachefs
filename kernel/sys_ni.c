@@ -16,6 +16,13 @@ asmlinkage long sys_ni_syscall(void)
 	return -ENOSYS;
 }
 
+long __attribute__ ((weak)) arch_call_syscall(unsigned int nr,
+					      long arg0, long arg1, long arg2,
+					      long arg3, long arg4, long arg5)
+{
+	return -ENOSYS;
+}
+
 cond_syscall(sys_nfsservctl);
 cond_syscall(sys_quotactl);
 cond_syscall(sys32_quotactl);

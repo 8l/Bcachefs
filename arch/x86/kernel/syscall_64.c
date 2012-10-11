@@ -3,6 +3,7 @@
 #include <linux/linkage.h>
 #include <linux/sys.h>
 #include <linux/cache.h>
+#include <linux/errno.h>
 #include <asm/asm-offsets.h>
 
 #define __NO_STUBS
@@ -27,3 +28,16 @@ const sys_call_ptr_t sys_call_table[__NR_syscall_max+1] = {
 	[0 ... __NR_syscall_max] = &sys_ni_syscall,
 #include <asm/unistd_64.h>
 };
+
+long arch_call_syscall(unsigned int nr, long arg0, long arg1, long arg2,
+		       long arg3, long arg4, long arg5)
+{
+	typedef asmlinkage long (*syscall_fn_t)(long, long, long, long, long,
+						long);
+	syscall_fn_t *calls = (syscall_fn_t *)sys_call_table;
+
+	if (nr > __NR_syscall_max)
+		return -ENOSYS;
+
+	return calls[nr](arg0, arg1, arg2, arg3, arg4, arg5);
+}

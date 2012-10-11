@@ -830,4 +830,8 @@ ia32_sys_call_table:
 	.quad sys_inotify_init1
 	.quad compat_sys_preadv
 	.quad compat_sys_pwritev
+	.quad sys_acall_submit		/* 335 */
+	.quad compat_sys_acall_comp_pwait
+	.quad compat_sys_acall_ring_pwait
+	.quad sys_acall_cancel
 ia32_syscall_end:

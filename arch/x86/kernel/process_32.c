@@ -509,3 +509,20 @@ unsigned long arch_randomize_brk(struct mm_struct *mm)
 	unsigned long range_end = mm->brk + 0x02000000;
 	return randomize_range(mm->brk, range_end, 0) ? : mm->brk;
 }
+
+/* 
+ * XXX This is just a dumb place-holder for testing until we find out how
+ * the x86 maintainers want this done.
+ */
+long arch_call_syscall(unsigned int nr, long arg0, long arg1, long arg2,
+		       long arg3, long arg4, long arg5)
+{
+	typedef asmlinkage long (*syscall_fn_t)(long, long, long, long, long,
+						long);
+	syscall_fn_t *calls = (syscall_fn_t *)sys_call_table;
+
+	if (nr > __NR_acall_cancel)
+		return -ENOSYS;
+
+	return calls[nr](arg0, arg1, arg2, arg3, arg4, arg5);
+}

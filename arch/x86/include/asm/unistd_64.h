@@ -657,6 +657,14 @@ __SYSCALL(__NR_inotify_init1, sys_inotify_init1)
 __SYSCALL(__NR_preadv, sys_preadv)
 #define __NR_pwritev				296
 __SYSCALL(__NR_pwritev, sys_pwritev)
+#define __NR_acall_submit			297
+__SYSCALL(__NR_acall_submit, sys_acall_submit)
+#define __NR_acall_comp_pwait			298
+__SYSCALL(__NR_acall_comp_pwait, sys_acall_comp_pwait)
+#define __NR_acall_ring_pwait			299
+__SYSCALL(__NR_acall_ring_pwait, sys_acall_ring_pwait)
+#define __NR_acall_cancel			300
+__SYSCALL(__NR_acall_cancel, sys_acall_cancel)
 
 
 #ifndef __NO_STUBS

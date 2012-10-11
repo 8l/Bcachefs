@@ -55,6 +55,9 @@ struct compat_timeval;
 struct robust_list_head;
 struct getcpu_cache;
 struct old_linux_dirent;
+struct acall_submission;
+struct acall_id;
+struct acall_completion_ring;
 
 #include <linux/types.h>
 #include <linux/aio_abi.h>
@@ -752,7 +755,22 @@ asmlinkage long sys_ppoll(struct pollfd __user *, unsigned int,
 			  size_t);
 asmlinkage long sys_pipe2(int __user *, int);
 asmlinkage long sys_pipe(int __user *);
+asmlinkage long sys_acall_submit(struct acall_submission __user *submissions,
+				 unsigned long nr);
+asmlinkage long sys_acall_comp_pwait(struct acall_id __user *uids,
+				     unsigned long nr,
+				     struct timespec __user *utime,
+				     const sigset_t __user *sigmask,
+				     size_t sigsetsize);
+asmlinkage long sys_acall_ring_pwait(struct acall_completion_ring __user *uring,
+				     u32 tail, u32 min,
+				     struct timespec __user *utime,
+				     const sigset_t __user *sigmask,
+				     size_t sigsetsize);
 
 int kernel_execve(const char *filename, char *const argv[], char *const envp[]);
+
+long arch_call_syscall(unsigned int nr, long arg0, long arg1, long arg2,
+		       long arg3, long arg4, long arg5);
 
 #endif

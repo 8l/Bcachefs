@@ -100,6 +100,16 @@ int put_compat_timespec(const struct timespec *ts, struct compat_timespec __user
 			__put_user(ts->tv_nsec, &cts->tv_nsec)) ? -EFAULT : 0;
 }
 
+static int user_timespec_from_compat(struct timespec __user *uts,
+				     const struct compat_timespec __user *ucts)
+{
+	struct timespec ts;
+	return (get_compat_timespec(&ts, ucts) ||
+			!access_ok(VERIFY_WRITE, uts, sizeof(*uts)) ||
+			__put_user(uts->tv_sec, &ts.tv_sec) ||
+			__put_user(uts->tv_nsec, &ts.tv_nsec)) ? -EFAULT : 0;
+}
+
 static long compat_nanosleep_restart(struct restart_block *restart)
 {
 	struct compat_timespec __user *rmtp;
@@ -1127,4 +1137,80 @@ compat_sys_sysinfo(struct compat_sysinfo __user *info)
 		return -EFAULT;
 
 	return 0;
+}
+
+static int user_sigset_from_compat(sigset_t __user *usigset,
+				   const compat_sigset_t __user *ucsigset,
+				   compat_size_t sigsetsize)
+{
+	compat_sigset_t csigset;
+	sigset_t sigset;
+
+	if (sigsetsize != sizeof(sigset_t))
+		return -EINVAL;
+	if (copy_from_user(&csigset, ucsigset, sizeof(csigset)))
+		return -EFAULT;
+	sigset_from_compat(&sigset, &csigset);
+	if (copy_to_user(usigset, &sigset, sizeof(sigset)))
+		return -EFAULT;
+	return 0;
+}
+
+asmlinkage long 
+compat_sys_acall_ring_pwait(struct acall_completion_ring __user *uring,
+			    u32 tail, u32 min,
+			    struct compat_timespec __user *ucts,
+			    const compat_sigset_t __user *ucsigmask,
+			    compat_size_t sigsetsize)
+{
+	struct timespec __user *uts;
+	sigset_t __user *usigmask;
+	long ret;
+
+	if (ucts) {
+		uts = compat_alloc_user_space(sizeof(struct timespec));
+		if (user_timespec_from_compat(uts, ucts))
+			return -EFAULT;
+	} else
+		uts = NULL;
+
+	if (ucsigmask) {
+		usigmask = compat_alloc_user_space(sizeof (sigset_t));
+		ret = user_sigset_from_compat(usigmask, ucsigmask, sigsetsize);
+		if (ret)
+			return ret;
+	} else
+		usigmask = NULL;
+
+	return sys_acall_ring_pwait(uring, tail, min, uts, usigmask,
+				    sigsetsize);
+}
+
+asmlinkage long 
+compat_sys_acall_comp_pwait(struct acall_id __user *uids,
+			    unsigned long nr,
+			    struct compat_timespec __user *ucts,
+			    const compat_sigset_t __user *ucsigmask,
+			    compat_size_t sigsetsize)
+{
+	struct timespec __user *uts;
+	sigset_t __user *usigmask;
+	long ret;
+
+	if (ucts) {
+		uts = compat_alloc_user_space(sizeof(struct timespec));
+		if (user_timespec_from_compat(uts, ucts))
+			return -EFAULT;
+	} else
+		uts = NULL;
+
+	if (ucsigmask) {
+		usigmask = compat_alloc_user_space(sizeof (sigset_t));
+		ret = user_sigset_from_compat(usigmask, ucsigmask, sigsetsize);
+		if (ret)
+			return ret;
+	} else
+		usigmask = NULL;
+
+	return sys_acall_comp_pwait(uids, nr, uts, usigmask, sigsetsize);
 }

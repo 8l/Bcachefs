@@ -69,6 +69,27 @@ STRTO_H(strtouint, unsigned int)
 STRTO_H(strtoll, long long)
 STRTO_H(strtoull, unsigned long long)
 
+ssize_t hprint(char *buf, int64_t v)
+{
+	static const char units[] = "?kMGTPEZY";
+	char dec[3] = "";
+	int u, t = 0;
+
+	for (u = 0; v >= 1024 || v <= -1024; u++) {
+		t = v & ~(~0 << 10);
+		v >>= 10;
+	}
+
+	if (!u)
+		return sprintf(buf, "%llu", v);
+
+	if (v < 100 && v > -100)
+		sprintf(dec, ".%i", t / 100);
+
+	return sprintf(buf, "%lli%s%c", v, dec, units[u]);
+}
+EXPORT_SYMBOL_GPL(hprint);
+
 ssize_t snprint_string_list(char *buf, size_t size, const char * const list[],
 			    size_t selected)
 {

@@ -109,12 +109,10 @@ SHOW(__cached_dev)
 		char derivative[20];
 		char target[20];
 
-		sprintf(dirty, "%hli",
-			atomic_long_read(&dc->disk.sectors_dirty) << 9);
-		sprintf(derivative, "%hlli",
-			dc->writeback_rate_derivative << 9);
-		sprintf(target, "%hllu",
-			dc->writeback_rate_target << 9);
+		hprint(dirty,
+		       atomic_long_read(&dc->disk.sectors_dirty) << 9);
+		hprint(derivative,	dc->writeback_rate_derivative << 9);
+		hprint(target,		dc->writeback_rate_target << 9);
 
 		return sprintf(buf,
 			       "rate:\t\t%u\n"
@@ -127,12 +125,12 @@ SHOW(__cached_dev)
 			       dirty, derivative, target);
 	}
 
-	sysfs_printf(dirty_data,	"%hli",
+	sysfs_hprint(dirty_data,
 		     atomic_long_read(&dc->disk.sectors_dirty) << 9);
 
 	var_printf(sequential_merge,	"%i");
-	var_printf(sequential_cutoff,	"%hi");
-	var_printf(readahead,		"%hi");
+	var_hprint(sequential_cutoff);
+	var_hprint(readahead);
 
 	sysfs_print(running,		atomic_read(&dc->running));
 	sysfs_print(state,		states[BDEV_STATE(&dc->sb)]);
@@ -291,7 +289,7 @@ SHOW(flash_dev)
 	struct uuid_entry *u = &d->c->uuids[d->id];
 
 	sysfs_printf(data_csum,	"%i", d->data_csum);
-	sysfs_printf(size,	"%hllu", u->sectors << 9);
+	sysfs_hprint(size,	u->sectors << 9);
 
 	if (attr == &sysfs_label) {
 		memcpy(buf, u->label, SB_LABEL_SIZE);
@@ -425,12 +423,12 @@ lock_root:
 
 	sysfs_print(synchronous,		CACHE_SYNC(&c->sb));
 	sysfs_print(journal_delay_ms,		c->journal_delay_ms);
-	sysfs_printf(bucket_size,		"%hu", bucket_bytes(c));
-	sysfs_printf(block_size,		"%hu", block_bytes(c));
+	sysfs_hprint(bucket_size,		bucket_bytes(c));
+	sysfs_hprint(block_size,		block_bytes(c));
 	sysfs_print(tree_depth,			c->root->level);
 	sysfs_print(root_usage_percent,		root_usage(c));
 
-	sysfs_printf(btree_cache_size,		"%hzu", cache_size(c));
+	sysfs_hprint(btree_cache_size,		cache_size(c));
 	sysfs_print(btree_cache_max_chain,	cache_max_chain(c));
 	sysfs_print(cache_available_percent,	100 - c->gc_stats.in_use);
 
@@ -442,8 +440,8 @@ lock_root:
 
 	sysfs_print(btree_used_percent,	btree_used(c));
 	sysfs_print(btree_nodes,	c->gc_stats.nodes);
-	sysfs_printf(dirty_data,	"%hllu", c->gc_stats.dirty);
-	sysfs_printf(average_key_size,	"%hu", average_key_size(c));
+	sysfs_hprint(dirty_data,	c->gc_stats.dirty);
+	sysfs_hprint(average_key_size,	average_key_size(c));
 
 	sysfs_print(cache_read_races,
 		    atomic_long_read(&c->cache_read_races));
@@ -457,7 +455,7 @@ lock_root:
 	sysfs_print(io_error_halflife,	c->error_decay * 88);
 	sysfs_print(io_error_limit,	c->error_limit >> IO_ERROR_SHIFT);
 
-	sysfs_printf(congested,			"%hllu",
+	sysfs_hprint(congested,
 		     ((uint64_t) bch_get_congested(c)) << 9);
 	sysfs_print(congested_read_threshold_us,
 		    c->congested_read_threshold_us);
@@ -628,15 +626,15 @@ SHOW(__cache)
 {
 	struct cache *ca = container_of(kobj, struct cache, kobj);
 
-	sysfs_printf(bucket_size,	"%hu", bucket_bytes(ca));
-	sysfs_printf(block_size,	"%hu", block_bytes(ca));
+	sysfs_hprint(bucket_size,	bucket_bytes(ca));
+	sysfs_hprint(block_size,	block_bytes(ca));
 	sysfs_print(nbuckets,		ca->sb.nbuckets);
 	sysfs_print(discard,		ca->discard);
-	sysfs_printf(written,		"%hli",
+	sysfs_hprint(written,
 		     atomic_long_read(&ca->sectors_written) << 9);
-	sysfs_printf(btree_written,	"%hli",
+	sysfs_hprint(btree_written,
 		     atomic_long_read(&ca->btree_sectors_written) << 9);
-	sysfs_printf(metadata_written,	"%hli",
+	sysfs_hprint(metadata_written,
 		     (atomic_long_read(&ca->meta_sectors_written) +
 		      atomic_long_read(&ca->btree_sectors_written)) << 9);
 

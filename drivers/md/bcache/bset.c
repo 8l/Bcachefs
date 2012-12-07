@@ -836,6 +836,13 @@ struct bkey *__bch_bset_search(struct btree *b, struct bset_tree *t,
 
 /* Btree iterator */
 
+/*
+ * Returns true if l > r - unless l == r, in which case returns true if l is
+ * older than r.
+ *
+ * Necessary for btree_sort_fixup() - if there are multiple keys that compare
+ * equal in different sets, we have to process them newest to oldest.
+ */
 static inline bool btree_iter_cmp(struct btree_iter_set l,
 				  struct btree_iter_set r)
 {

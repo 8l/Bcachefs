@@ -2281,7 +2281,10 @@ int bch_btree_search_recurse(struct btree *b, struct btree_op *op)
 
 	do {
 		k = bch_btree_iter_next(&iter);
-		if (!k) {
+		if (k && bch_ptr_bad(b, k))
+			continue;
+
+		if (!k && !b->level) {
 			/*
 			 * b->key would be exactly what we want, except that
 			 * pointers to btree nodes have nonzero size - we
@@ -2294,9 +2297,6 @@ int bch_btree_search_recurse(struct btree *b, struct btree_op *op)
 			break;
 		}
 
-		if (bch_ptr_bad(b, k))
-			continue;
-
 		ret = b->level
 			? btree(search_recurse, k, b, op)
 			: submit_partial_cache_hit(b, op, k);
@@ -2304,6 +2304,40 @@ int bch_btree_search_recurse(struct btree *b, struct btree_op *op)
 		 !op->lookup_done);
 
 	return ret;
+}
+
+/* Generic... lookup? */
+
+static int bch_btree_map_recurse(struct btree *b, struct btree_op *op,
+				 struct bkey *from, btree_map_fn *fn)
+{
+	int ret = 0;
+	struct bkey *k;
+	struct btree_iter iter;
+	bch_btree_iter_init(b, &iter, from);
+
+	while (!ret &&
+	       !op->lookup_done &&
+	       (k = bch_btree_iter_next(&iter))) {
+		if (bch_ptr_bad(b, k))
+			continue;
+
+		if (!b->level)
+			op->lookup_done = fn(op, b, k);
+		else {
+			btree(map_recurse, k, b, op, from, fn);
+			from = NULL;
+		}
+	}
+
+	return 0;
+}
+
+void bch_btree_map(struct btree_op *op, struct cache_set *c,
+		   struct bkey *from, btree_map_fn *fn)
+{
+	btree_root(map_recurse, c, op, from, fn);
+	closure_sync(&op->cl);
 }
 
 /* Keybuf code */
@@ -2323,80 +2357,59 @@ static inline int keybuf_nonoverlapping_cmp(struct keybuf_key *l, struct keybuf_
 	return clamp_t(int64_t, bkey_cmp(&l->key, &r->key), -1, 1);
 }
 
-static int bch_btree_refill_keybuf(struct btree *b, struct btree_op *op,
-				   struct keybuf *buf, struct bkey *end)
+struct refill {
+	struct btree_op op;
+	struct keybuf *buf;
+	struct bkey *end;
+};
+
+static bool refill_keybuf_fn(struct btree_op *op, struct btree *b,
+			     struct bkey *k)
 {
-	struct btree_iter iter;
-	bch_btree_iter_init(b, &iter, &buf->last_scanned);
+	struct refill *refill = container_of(op, struct refill, op);
+	struct keybuf *buf = refill->buf;
 
-	while (!array_freelist_empty(&buf->freelist)) {
-		struct bkey *k = bch_btree_iter_next(&iter);
+	if (array_freelist_empty(&buf->freelist))
+		return true;
 
-		if (!b->level) {
-			if (!k) {
-				buf->last_scanned = b->key;
-				break;
-			}
+	buf->last_scanned = *k;
+	if (bkey_cmp(&buf->last_scanned, refill->end) >= 0)
+		return true;
 
-			buf->last_scanned = *k;
-			if (bkey_cmp(&buf->last_scanned, end) >= 0)
-				break;
+	if (buf->key_predicate(buf, k)) {
+		struct keybuf_key *w;
 
-			if (bch_ptr_bad(b, k))
-				continue;
+		pr_debug("%s", pkey(k));
 
-			if (buf->key_predicate(buf, k)) {
-				struct keybuf_key *w;
+		spin_lock(&buf->lock);
 
-				pr_debug("%s", pkey(k));
+		w = array_alloc(&buf->freelist);
 
-				spin_lock(&buf->lock);
+		w->private = NULL;
+		bkey_copy(&w->key, k);
 
-				w = array_alloc(&buf->freelist);
+		if (RB_INSERT(&buf->keys, w, node, keybuf_cmp))
+			array_free(&buf->freelist, w);
 
-				w->private = NULL;
-				bkey_copy(&w->key, k);
-
-				if (RB_INSERT(&buf->keys, w, node, keybuf_cmp))
-					array_free(&buf->freelist, w);
-
-				spin_unlock(&buf->lock);
-			}
-		} else {
-			if (!k)
-				break;
-
-			if (bch_ptr_bad(b, k))
-				continue;
-
-			btree(refill_keybuf, k, b, op, buf, end);
-			/*
-			 * Might get an error here, but can't really do anything
-			 * and it'll get logged elsewhere. Just read what we
-			 * can.
-			 */
-
-			if (bkey_cmp(&buf->last_scanned, end) >= 0)
-				break;
-
-			cond_resched();
-		}
+		spin_unlock(&buf->lock);
 	}
 
-	return 0;
+	return false;
 }
 
 void bch_refill_keybuf(struct cache_set *c, struct keybuf *buf,
 			  struct bkey *end)
 {
 	struct bkey start = buf->last_scanned;
-	struct btree_op op;
-	bch_btree_op_init_stack(&op);
+	struct refill refill;
 
 	cond_resched();
 
-	btree_root(refill_keybuf, c, &op, buf, end);
-	closure_sync(&op.cl);
+	bch_btree_op_init_stack(&refill.op);
+	refill.buf = buf;
+	refill.end = end;
+
+	bch_btree_map(&refill.op, c, &buf->last_scanned, refill_keybuf_fn);
 
 	pr_debug("found %s keys from %llu:%llu to %llu:%llu",
 		 RB_EMPTY_ROOT(&buf->keys) ? "no" :
@@ -2480,8 +2493,8 @@ struct keybuf_key *bch_keybuf_next(struct keybuf *buf)
 }
 
 struct keybuf_key *bch_keybuf_next_rescan(struct cache_set *c,
-					     struct keybuf *buf,
-					     struct bkey *end)
+					  struct keybuf *buf,
+					  struct bkey *end)
 {
 	struct keybuf_key *ret;
 

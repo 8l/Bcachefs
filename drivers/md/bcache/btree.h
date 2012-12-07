@@ -415,6 +415,11 @@ void bch_moving_gc(struct closure *);
 int bch_btree_check(struct cache_set *, struct btree_op *);
 uint8_t __bch_btree_mark_key(struct cache_set *, int, struct bkey *);
 
+typedef bool (btree_map_fn)(struct btree_op *, struct btree *, struct bkey *);
+
+void bch_btree_map(struct btree_op *, struct cache_set *,
+		   struct bkey *, btree_map_fn *);
+
 void bch_keybuf_init(struct keybuf *, keybuf_pred_fn *);
 void bch_refill_keybuf(struct cache_set *, struct keybuf *, struct bkey *);
 bool bch_keybuf_check_overlapping(struct keybuf *, struct bkey *,

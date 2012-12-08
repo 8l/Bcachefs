@@ -355,7 +355,7 @@ do {									\
 									\
 	while (!(cond)) {						\
 		prepare_to_wait(&ca->set->alloc_wait,			\
-				&__wait, TASK_UNINTERRUPTIBLE);		\
+				&__wait, TASK_INTERRUPTIBLE);		\
 									\
 		mutex_unlock(&(ca)->set->bucket_lock);			\
 		if (test_bit(CACHE_SET_STOPPING_2, &ca->set->flags)) {	\
@@ -364,6 +364,7 @@ do {									\
 		}							\
 									\
 		schedule();						\
+		__set_current_state(TASK_RUNNING);			\
 		mutex_lock(&(ca)->set->bucket_lock);			\
 	}								\
 									\

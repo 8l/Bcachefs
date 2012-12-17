@@ -133,7 +133,7 @@ bool bch_ptr_bad(struct btree *b, const struct bkey *k)
 				if (KEY_DIRTY(k) ||
 				    g->prio != BTREE_PRIO ||
 				    (b->c->gc_mark_valid &&
-				     GC_MARK(g) != GC_MARK_BTREE))
+				     GC_MARK(g) != GC_MARK_METADATA))
 					goto bug;
 
 			} else {

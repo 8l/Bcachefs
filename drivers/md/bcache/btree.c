@@ -133,13 +133,47 @@ static void bkey_put(struct cache_set *c, struct bkey *k, int level)
 
 /* Btree IO */
 
+KEY_FIELD(KEY0_PTRS,		high, 60, 3)
+KEY_FIELD(KEY0_CSUM,		high, 56, 2)
+KEY_FIELD(KEY0_PINNED,		high, 55, 1)
+KEY_FIELD(KEY0_DIRTY,		high, 36, 1)
+
+KEY_FIELD(KEY0_SIZE,		high, 20, 16)
+KEY_FIELD(KEY0_INODE,		high, 0,  20)
+
+void convert_v0_keys(struct btree *b, struct bset *i)
+{
+	struct bkey *k;
+
+	for (k = i->start;
+	     k < end(i);
+	     k = bkey_next(k)) {
+		struct bkey t;
+		bkey_init(&t);
+
+		SET_KEY_PTRS(&t,	KEY0_PTRS(k));
+		SET_KEY_CSUM(&t,	KEY0_CSUM(k));
+		SET_KEY_PINNED(&t,	KEY0_PINNED(k));
+		SET_KEY_DIRTY(&t,	KEY0_DIRTY(k));
+		SET_KEY_SIZE(&t,	KEY0_SIZE(k));
+		SET_KEY_INODE(&t,	KEY0_INODE(k));
+		SET_KEY_OFFSET(&t,	k->low);
+
+		*k = t;
+	}
+}
+
 static uint64_t btree_csum_set(struct btree *b, struct bset *i)
 {
-	uint64_t crc = b->key.ptr[0];
-	void *data = (void *) i + 8, *end = end(i);
+	if (i->version < BCACHE_BSET_CSUM) {
+		return csum_set(i);
+	} else {
+		uint64_t crc = b->key.ptr[0];
+		void *data = (void *) i + 8, *end = end(i);
 
-	crc = crc64_update(crc, data, end - data);
-	return crc ^ 0xffffffffffffffff;
+		crc = crc64_update(crc, data, end - data);
+		return crc ^ 0xffffffffffffffff;
+	}
 }
 
 static void btree_bio_endio(struct bio *bio, int error)
@@ -198,20 +232,15 @@ void bch_btree_read_done(struct closure *cl)
 			goto err;
 
 		err = "bad checksum";
-		switch (i->version) {
-		case 0:
-			if (i->csum != csum_set(i))
-				goto err;
-			break;
-		case BCACHE_BSET_VERSION:
-			if (i->csum != btree_csum_set(b, i))
-				goto err;
-			break;
-		}
+		if (i->csum != btree_csum_set(b, i))
+			goto err;
 
 		err = "empty set";
 		if (i != b->sets[0].data && !i->keys)
 			goto err;
+
+		if (i->version < BCACHE_BSET_KEY_v1)
+			convert_v0_keys(b, i);
 
 		bch_btree_iter_push(iter, i->start, end(i));
 

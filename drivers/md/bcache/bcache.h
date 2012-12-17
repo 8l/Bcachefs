@@ -296,7 +296,9 @@ BITMASK(BDEV_STATE,		struct cache_sb, flags, 61, 2);
 
 /* Version 1: Seed pointer into btree node checksum
  */
-#define BCACHE_BSET_VERSION	1
+#define BCACHE_BSET_CSUM	1
+#define BCACHE_BSET_KEY_v1	2
+#define BCACHE_BSET_VERSION	2
 
 /*
  * This is the on disk format for btree nodes - a btree node on disk is a list
@@ -904,25 +906,27 @@ static inline unsigned local_clock_us(void)
 		k->ptr[i] |= v << offset;				\
 	}
 
-KEY_FIELD(KEY_PTRS,	high, 60, 3)
-KEY_FIELD(HEADER_SIZE,	high, 58, 2)
-KEY_FIELD(KEY_CSUM,	high, 56, 2)
+KEY_FIELD(KEY_PTRS,	high, 58, 6)
+KEY_FIELD(KEY_DELETED,	high, 57, 1)
+KEY_FIELD(KEY_DIRTY,	high, 56, 1)
 KEY_FIELD(KEY_PINNED,	high, 55, 1)
-KEY_FIELD(KEY_DIRTY,	high, 36, 1)
+KEY_FIELD(KEY_CSUM,	high, 53, 2)
 
-KEY_FIELD(KEY_SIZE,	high, 20, 16)
-KEY_FIELD(KEY_INODE,	high, 0,  20)
+KEY_FIELD(KEY_SIZE,	high, 32, 16)
+KEY_FIELD(KEY_INODE_H,	high, 0,  32)
+KEY_FIELD(KEY_INODE_L,	low,  56,  8)
+KEY_FIELD(KEY_OFFSET,	low, 0,  56)
 
-/* Next time I change the on disk format, KEY_OFFSET() won't be 64 bits */
 
-static inline uint64_t KEY_OFFSET(const struct bkey *k)
+static inline uint64_t KEY_INODE(const struct bkey *k)
 {
-	return k->low;
+	return KEY_INODE_L(k) | (KEY_INODE_H(k) << 8);
 }
 
-static inline void SET_KEY_OFFSET(struct bkey *k, uint64_t v)
+static inline void SET_KEY_INODE(struct bkey *k, uint64_t v)
 {
-	k->low = v;
+	SET_KEY_INODE_L(k, v & ~(~0 << 8));
+	SET_KEY_INODE_H(k, v >> 8);
 }
 
 PTR_FIELD(PTR_DEV,		51, 12)
@@ -972,26 +976,25 @@ static inline struct bucket *PTR_BUCKET(struct cache_set *c,
 
 /* Btree key macros */
 
-/*
- * The high bit being set is a relic from when we used it to do binary
- * searches - it told you where a key started. It's not used anymore,
- * and can probably be safely dropped.
- */
-#define KEY(dev, sector, len)	(struct bkey)				\
+#define KEY(inode, offset, size) (struct bkey)				\
 {									\
-	.high = (1ULL << 63) | ((uint64_t) (len) << 20) | (dev),	\
-	.low = (sector)							\
+	.high = ((uint64_t) (size) << 32) | ((inode) >> 8),		\
+	.low = (((uint64_t) inode) << 56) | (offset),			\
 }
 
 static inline void bkey_init(struct bkey *k)
 {
-	*k = KEY(0, 0, 0);
+	memset(k, 0, sizeof(*k));
 }
 
 #define KEY_START(k)		(KEY_OFFSET(k) - KEY_SIZE(k))
 #define START_KEY(k)		KEY(KEY_INODE(k), KEY_START(k), 0)
-#define MAX_KEY			KEY(~(~0 << 20), ((uint64_t) ~0) >> 1, 0)
 #define ZERO_KEY		KEY(0, 0, 0)
+
+#define MAX_KEY_INODE		(~(~0ULL << 40))
+#define MAX_KEY_OFFSET		(~(~0ULL << 56))
+
+#define MAX_KEY			KEY(MAX_KEY_INODE, MAX_KEY_OFFSET, 0)
 
 /*
  * This is used for various on disk data structures - cache_sb, prio_set, bset,

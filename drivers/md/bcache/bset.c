@@ -242,7 +242,9 @@ bool bch_bkey_try_merge(struct btree *b, struct bkey *l, struct bkey *r)
 		return false;
 
 	if (KEY_PTRS(l) != KEY_PTRS(r) ||
+	    KEY_DELETED(l) != KEY_DELETED(r) ||
 	    KEY_DIRTY(l) != KEY_DIRTY(r) ||
+	    KEY_PINNED(l) != KEY_PINNED(r) ||
 	    bkey_cmp(l, &START_KEY(r)))
 		return false;
 
@@ -487,8 +489,8 @@ static void make_bfloat(struct bset_tree *t, unsigned j)
 	BUG_ON(m < l || m > r);
 	BUG_ON(bkey_next(p) != m);
 
-	if (KEY_INODE(l) != KEY_INODE(r))
-		f->exponent = fls64(KEY_INODE(r) ^ KEY_INODE(l)) + 64;
+	if (KEY_INODE_H(l) != KEY_INODE_H(r))
+		f->exponent = fls64(KEY_INODE_H(r) ^ KEY_INODE_H(l)) + 64;
 	else
 		f->exponent = fls64(r->low ^ l->low);
 

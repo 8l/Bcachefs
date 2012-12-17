@@ -294,6 +294,15 @@ BITMASK(BDEV_STATE,		struct cache_sb, flags, 61, 2);
 #define BDEV_STATE_DIRTY	2U
 #define BDEV_STATE_STALE	3U
 
+enum btree_id {
+	BTREE_ID_EXTENTS	= 0,
+	BTREE_ID_INODES		= 1,
+	BTREE_ID_DIRS		= 2,
+	BTREE_ID_NR		= 3,
+
+	BTREE_ID_UUIDS		= 255,
+};
+
 /* Version 1: Seed pointer into btree node checksum
  */
 #define BCACHE_BSET_CSUM	1
@@ -738,7 +747,8 @@ struct cache_set {
 
 	struct closure_with_waitlist gc;
 	/* Where in the btree gc currently is */
-	struct bkey		gc_done;
+	enum btree_id		gc_cur_btree;
+	struct bkey		gc_cur_key;
 
 	/*
 	 * The allocation code needs gc_mark in struct bucket to be correct, but
@@ -755,7 +765,10 @@ struct cache_set {
 	/* Number of moving GC bios in flight */
 	atomic_t		in_flight;
 
-	struct btree		*root;
+	spinlock_t		btree_root_lock;
+	unsigned		btree_root_reserve;
+
+	struct btree		*btree_roots[BTREE_ID_NR];
 
 #ifdef CONFIG_BCACHE_DEBUG
 	struct btree		*verify_data;

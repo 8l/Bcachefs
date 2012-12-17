@@ -713,7 +713,7 @@ static void btree_read_async(struct closure *cl)
 {
 	struct btree_op *op = container_of(cl, struct btree_op, cl);
 
-	int ret = btree_root(search_recurse, op->c, op);
+	int ret = btree_root(search_recurse, op->c, BTREE_ID_EXTENTS, op);
 
 	if (ret == -EAGAIN)
 		continue_at(cl, btree_read_async, bcache_wq);

@@ -80,20 +80,8 @@ void bch_keylist_pop_front(struct keylist *l)
 
 /* Pointer validation */
 
-bool __bch_ptr_invalid(struct cache_set *c, int level, const struct bkey *k)
+static bool __ptr_invalid(struct cache_set *c, const struct bkey *k)
 {
-	if (KEY_DELETED(k))
-		return true;
-
-	if (!KEY_SIZE(k))
-		return true;
-
-	if (level && (!KEY_PTRS(k) || KEY_DIRTY(k)))
-		goto bad;
-
-	if (!level && KEY_SIZE(k) > KEY_OFFSET(k))
-		goto bad;
-
 	for (unsigned i = 0; i < KEY_PTRS(k); i++)
 		if (ptr_available(c, k, i)) {
 			struct cache *ca = PTR_CACHE(c, k, i);
@@ -103,8 +91,42 @@ bool __bch_ptr_invalid(struct cache_set *c, int level, const struct bkey *k)
 			if (KEY_SIZE(k) + r > c->sb.bucket_size ||
 			    bucket <  ca->sb.first_bucket ||
 			    bucket >= ca->sb.nbuckets)
-				goto bad;
+				return true;
 		}
+
+	return false;
+}
+
+bool bch_btree_ptr_invalid(struct cache_set *c, const struct bkey *k)
+{
+	if (KEY_DELETED(k))
+		return true;
+
+	if (!KEY_SIZE(k))
+		return true;
+
+	if (!KEY_PTRS(k) || KEY_DIRTY(k))
+		goto bad;
+
+	if (__ptr_invalid(c, k))
+		goto bad;
+
+	return false;
+bad:
+	cache_bug(c, "spotted bad key %s: %s", pkey(k), bch_ptr_status(c, k));
+	return true;
+}
+
+bool bch_extent_ptr_invalid(struct cache_set *c, const struct bkey *k)
+{
+	if (KEY_DELETED(k))
+		return true;
+
+	if (!KEY_SIZE(k) || KEY_SIZE(k) > KEY_OFFSET(k))
+		goto bad;
+
+	if (__ptr_invalid(c, k))
+		goto bad;
 
 	return false;
 bad:
@@ -116,6 +138,9 @@ bool bch_ptr_bad(struct btree *b, const struct bkey *k)
 {
 	struct bucket *g;
 	unsigned i, stale;
+
+	if (!b->level && b->btree_id != BTREE_ID_EXTENTS)
+		return KEY_DELETED(k);
 
 	if (!bkey_cmp(k, &ZERO_KEY) ||
 	    !KEY_PTRS(k) ||
@@ -1171,14 +1196,19 @@ int bch_bset_print_stats(struct cache_set *c, char *buf)
 {
 	struct btree_op op;
 	struct bset_stats t;
+	unsigned id;
 	int ret;
 
 	bch_btree_op_init_stack(&op);
 	memset(&t, 0, sizeof(struct bset_stats));
 
-	ret = btree_root(bset_stats, c, &op, &t);
-	if (ret)
-		return ret;
+	for (id = 0; id < BTREE_ID_NR; id++)
+		if (c->btree_roots[id]) {
+			ret = btree_root(bset_stats, c, id, &op, &t);
+			if (ret)
+				return ret;
+		}
+
 
 	return snprintf(buf, PAGE_SIZE,
 			"btree nodes:		%zu\n"

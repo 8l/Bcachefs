@@ -81,11 +81,6 @@
 #define BCACHE_JSET_VERSION_JKEYS	2
 #define BCACHE_JSET_VERSION		2
 
-enum btree_id {
-	BTREE_ID_EXTENTS	= 0,
-	BTREE_ID_UUIDS		= 1,
-};
-
 struct jset_keys {
 	uint16_t		keys;
 	uint8_t			btree_id;
@@ -246,7 +241,7 @@ struct cache_set;
 struct btree_op;
 
 struct bkey *bch_journal_find_btree_root(struct cache_set *, struct jset *,
-					 enum btree_id, int *);
+					 enum btree_id, unsigned *);
 
 void bch_journal(struct closure *);
 void bch_journal_next(struct journal *);

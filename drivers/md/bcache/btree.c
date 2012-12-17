@@ -507,9 +507,22 @@ static void mca_reinit(struct btree *b)
 		b->sets[i].data = NULL;
 }
 
-#define mca_reserve(c)	((c->root ? c->root->level : 1) * 8 + 16)
+void bch_recalc_btree_reserve(struct cache_set *c)
+{
+	unsigned i, reserve = 16;
+
+	if (!c->btree_roots[0])
+		reserve += 8;
+
+	for (i = 0; i < BTREE_ID_NR; i++)
+		if (c->btree_roots[i])
+			reserve += c->btree_roots[i]->level * 8;
+
+	c->btree_root_reserve = reserve;
+}
+
 #define mca_can_free(c)						\
-	max_t(int, 0, c->bucket_cache_used - mca_reserve(c))
+	max_t(int, 0, c->bucket_cache_used - c->btree_root_reserve)
 
 static void mca_data_free(struct btree *b)
 {
@@ -751,7 +764,9 @@ int bch_btree_cache_alloc(struct cache_set *c)
 
 	closure_init_unlocked(&c->gc);
 
-	for (int i = 0; i < mca_reserve(c); i++)
+	bch_recalc_btree_reserve(c);
+
+	for (int i = 0; i < c->btree_root_reserve; i++)
 		mca_bucket_alloc(c, &ZERO_KEY, GFP_KERNEL);
 
 	list_splice_init(&c->btree_cache,
@@ -860,8 +875,8 @@ void bch_cannibalize_unlock(struct cache_set *c, struct closure *cl)
 	}
 }
 
-static struct btree *mca_alloc(struct cache_set *c, struct bkey *k,
-			       int level, struct closure *cl)
+static struct btree *mca_alloc(struct cache_set *c, struct bkey *k, int level,
+			       enum btree_id id, struct closure *cl)
 {
 	struct btree *b;
 
@@ -906,6 +921,7 @@ out:
 
 	lock_set_subclass(&b->lock.dep_map, level + 1, _THIS_IP_);
 	b->level	= level;
+	b->btree_id	= id;
 	b->parent	= (void *) ~0UL;
 
 	mca_reinit(b);
@@ -932,8 +948,8 @@ err:
  * The btree node will have either a read or a write lock held, depending on
  * level and op->lock.
  */
-struct btree *bch_btree_node_get(struct cache_set *c, struct bkey *k,
-				 int level, struct btree_op *op)
+struct btree *bch_btree_node_get(struct cache_set *c, struct bkey *k, int level,
+				 enum btree_id id, struct btree_op *op)
 {
 	int i = 0;
 	bool write = level <= op->lock;
@@ -945,7 +961,7 @@ retry:
 
 	if (!b) {
 		mutex_lock(&c->bucket_lock);
-		b = mca_alloc(c, k, level, &op->cl);
+		b = mca_alloc(c, k, level, id, &op->cl);
 		mutex_unlock(&c->bucket_lock);
 
 		if (!b)
@@ -989,12 +1005,13 @@ retry:
 	return b;
 }
 
-static void btree_node_prefetch(struct cache_set *c, struct bkey *k, int level)
+static void btree_node_prefetch(struct cache_set *c, struct bkey *k,
+				int level, enum btree_id id)
 {
 	struct btree *b;
 
 	mutex_lock(&c->bucket_lock);
-	b = mca_alloc(c, k, level, NULL);
+	b = mca_alloc(c, k, level, id, NULL);
 	mutex_unlock(&c->bucket_lock);
 
 	if (!IS_ERR_OR_NULL(b)) {
@@ -1012,7 +1029,6 @@ static void btree_node_free(struct btree *b, struct btree_op *op)
 	 * lock on parent to free or even invalidate a node
 	 */
 	BUG_ON(op->lock <= b->level);
-	BUG_ON(b == b->c->root);
 	pr_debug("bucket %s", pbtree(b));
 
 	if (btree_node_dirty(b))
@@ -1042,7 +1058,7 @@ static void btree_node_free(struct btree *b, struct btree_op *op)
 }
 
 struct btree *bch_btree_node_alloc(struct cache_set *c, int level,
-				   struct closure *cl)
+				   enum btree_id id, struct closure *cl)
 {
 	BKEY_PADDED(key) k;
 	struct btree *b = ERR_PTR(-EAGAIN);
@@ -1054,7 +1070,7 @@ retry:
 
 	SET_KEY_SIZE(&k.key, c->btree_pages * PAGE_SECTORS);
 
-	b = mca_alloc(c, &k.key, level, cl);
+	b = mca_alloc(c, &k.key, level, id, cl);
 	if (IS_ERR(b))
 		goto err_free;
 
@@ -1082,7 +1098,7 @@ err:
 static struct btree *btree_node_alloc_replacement(struct btree *b,
 						  struct closure *cl)
 {
-	struct btree *n = bch_btree_node_alloc(b->c, b->level, cl);
+	struct btree *n = bch_btree_node_alloc(b->c, b->level, b->btree_id, cl);
 	if (!IS_ERR_OR_NULL(n))
 		bch_btree_sort_into(b, n);
 
@@ -1149,6 +1165,10 @@ static int btree_gc_mark_node(struct btree *b, unsigned *keys, struct gc_stat *g
 	struct bkey *k;
 
 	struct btree_iter iter;
+
+	if (b->btree_id != BTREE_ID_EXTENTS && b->level == 0)
+		return 0;
+
 	bch_btree_iter_init(b, &iter, NULL);
 
 	gc->nodes++;
@@ -1348,8 +1368,9 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 
 	memset(r, 0, sizeof(r));
 
-	while ((r->k = bch_next_recurse_key(b, &b->c->gc_done))) {
-		r->b = bch_btree_node_get(b->c, r->k, b->level - 1, op);
+	while ((r->k = bch_next_recurse_key(b, &b->c->gc_cur_key))) {
+		r->b = bch_btree_node_get(b->c, r->k, b->level - 1,
+					  b->btree_id, op);
 
 		if (IS_ERR(r->b)) {
 			ret = PTR_ERR(r->b);
@@ -1372,7 +1393,7 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 			break;
 		}
 
-		bkey_copy_key(&b->c->gc_done, r->k);
+		bkey_copy_key(&b->c->gc_cur_key, r->k);
 
 		if (!b->written)
 			btree_gc_coalesce(b, op, gc, r);
@@ -1449,7 +1470,8 @@ static void btree_gc_start(struct cache_set *c)
 	mutex_lock(&c->bucket_lock);
 
 	c->gc_mark_valid = 0;
-	c->gc_done = ZERO_KEY;
+	c->gc_cur_btree = 0;
+	c->gc_cur_key = ZERO_KEY;
 
 	for_each_cache(ca, c)
 		for_each_bucket(b, ca) {
@@ -1472,7 +1494,7 @@ size_t bch_btree_gc_finish(struct cache_set *c)
 	size_t available = 0;
 	struct bucket *b;
 	struct cache *ca;
-	uint64_t *i;
+	unsigned i, ptr;
 
 	mutex_lock(&c->bucket_lock);
 
@@ -1480,16 +1502,22 @@ size_t bch_btree_gc_finish(struct cache_set *c)
 	c->gc_mark_valid = 1;
 	c->need_gc	= 0;
 
-	if (c->root)
-		for (unsigned i = 0; i < KEY_PTRS(&c->root->key); i++)
-			SET_GC_MARK(PTR_BUCKET(c, &c->root->key, i),
-				    GC_MARK_METADATA);
+	for (i = 0; i < BTREE_ID_NR; i++)
+		if (c->btree_roots[i]) {
+			struct bkey *k = &c->btree_roots[i]->key;
 
-	for (unsigned i = 0; i < KEY_PTRS(&c->uuid_bucket); i++)
-		SET_GC_MARK(PTR_BUCKET(c, &c->uuid_bucket, i),
+			for (ptr = 0; ptr < KEY_PTRS(k); ptr++)
+				SET_GC_MARK(PTR_BUCKET(c, k, ptr),
+					    GC_MARK_METADATA);
+		}
+
+	for (unsigned ptr = 0; ptr < KEY_PTRS(&c->uuid_bucket); ptr++)
+		SET_GC_MARK(PTR_BUCKET(c, &c->uuid_bucket, ptr),
 			    GC_MARK_METADATA);
 
 	for_each_cache(ca, c) {
+		uint64_t *i;
+
 		ca->invalidate_needs_gc = 0;
 
 		for (i = ca->sb.d; i < ca->sb.d + ca->sb.keys; i++)
@@ -1535,7 +1563,6 @@ size_t bch_btree_gc_finish(struct cache_set *c)
 static void bch_btree_gc(struct closure *cl)
 {
 	struct cache_set *c = container_of(cl, struct cache_set, gc.cl);
-	int ret;
 	unsigned long available;
 	struct gc_stat stats;
 	struct closure writes;
@@ -1552,15 +1579,25 @@ static void bch_btree_gc(struct closure *cl)
 
 	btree_gc_start(c);
 
-	ret = btree_root(gc_root, c, &op, &writes, &stats);
-	closure_sync(&op.cl);
-	closure_sync(&writes);
+	while (c->gc_cur_btree < BTREE_ID_NR) {
+		int ret = 0;
 
-	if (ret) {
-		blktrace_msg_all(c, "Stopped gc");
-		printk(KERN_WARNING "bcache: gc failed!\n");
+		if (c->btree_roots[c->gc_cur_btree])
+			ret = btree_root(gc_root, c, c->gc_cur_btree,
+					 &op, &writes, &stats);
 
-		continue_at(cl, bch_btree_gc, bch_gc_wq);
+		closure_sync(&op.cl);
+		closure_sync(&writes);
+
+		if (ret) {
+			blktrace_msg_all(c, "Stopped gc");
+			printk(KERN_WARNING "bcache: gc failed!\n");
+
+			continue_at(cl, bch_btree_gc, bch_gc_wq);
+		}
+
+		c->gc_cur_btree++;
+		c->gc_cur_key = ZERO_KEY;
 	}
 
 	/* Possibly wait for new UUIDs or whatever to hit disk */
@@ -1621,13 +1658,14 @@ static int bch_btree_check_recurse(struct btree *b, struct btree_op *op,
 		btree_mark_key(b, k);
 	}
 
-	if (b->level) {
+	if ((b->btree_id == BTREE_ID_EXTENTS && b->level) || b->level > 1) {
 		k = bch_next_recurse_key(b, &ZERO_KEY);
 
 		while (k) {
 			struct bkey *p = bch_next_recurse_key(b, k);
 			if (p)
-				btree_node_prefetch(b->c, p, b->level - 1);
+				btree_node_prefetch(b->c, p, b->level - 1,
+						    b->btree_id);
 
 			ret = btree(check_recurse, k, b, op, seen);
 			if (ret)
@@ -1644,10 +1682,11 @@ int bch_btree_check(struct cache_set *c, struct btree_op *op)
 {
 	int ret = -ENOMEM;
 	unsigned long *seen[MAX_CACHES_PER_SET];
+	unsigned i;
 
 	memset(seen, 0, sizeof(seen));
 
-	for (int i = 0; c->cache[i]; i++) {
+	for (i = 0; c->cache[i]; i++) {
 		size_t n = DIV_ROUND_UP(c->cache[i]->sb.nbuckets, 8);
 		seen[i] = kmalloc(n, GFP_KERNEL);
 		if (!seen[i])
@@ -1657,7 +1696,13 @@ int bch_btree_check(struct cache_set *c, struct btree_op *op)
 		memset(seen[i], 0xFF, n);
 	}
 
-	ret = btree_root(check_recurse, c, op, seen);
+	for (i = 0; i < BTREE_ID_NR; i++)
+		if (c->btree_roots[i]) {
+			ret = btree_root(check_recurse, c, i, op, seen);
+			if (ret)
+				goto err;
+		}
+
 err:
 	for (int i = 0; i < MAX_CACHES_PER_SET; i++)
 		kfree(seen[i]);
@@ -1974,12 +2019,14 @@ static int btree_split(struct btree *b, struct btree_op *op,
 	if (split) {
 		unsigned keys = 0;
 
-		n2 = bch_btree_node_alloc(b->c, b->level, &op->cl);
+		n2 = bch_btree_node_alloc(b->c, b->level,
+					  b->btree_id, &op->cl);
 		if (IS_ERR(n2))
 			goto err_free1;
 
 		if (!b->parent) {
-			n3 = bch_btree_node_alloc(b->c, b->level + 1, &op->cl);
+			n3 = bch_btree_node_alloc(b->c, b->level + 1,
+						  b->btree_id, &op->cl);
 			if (IS_ERR(n3))
 				goto err_free2;
 		}
@@ -2083,9 +2130,9 @@ static int bch_btree_insert_node(struct btree_op *op, struct btree *b,
 
 	do {
 		if (should_split(b)) {
-			if (op->lock <= b->c->root->level) {
+			if (op->lock <= btree_node_root(b)->level) {
 				BUG_ON(b->level);
-				op->lock = b->c->root->level + 1;
+				op->lock = btree_node_root(b)->level + 1;
 				ret = -EINTR;
 			} else {
 				struct btree *parent = b->parent;
@@ -2154,7 +2201,7 @@ static int bch_btree_insert_recurse(struct btree *b, struct btree_op *op)
 
 		if (!k) {
 			btree_bug(b, "no key to recurse on at level %i/%i",
-				  b->level, b->c->root->level);
+				  b->level, btree_node_root(b)->level);
 
 			op->keys.top = op->keys.bottom;
 			return -EIO;
@@ -2180,7 +2227,7 @@ int bch_btree_insert(struct btree_op *op, struct cache_set *c)
 
 	while (!bch_keylist_empty(&op->keys)) {
 		op->lock = 0;
-		ret = btree_root(insert_recurse, c, op);
+		ret = btree_root(insert_recurse, c, BTREE_ID_EXTENTS, op);
 
 		if (ret == -EAGAIN) {
 			ret = 0;
@@ -2213,7 +2260,10 @@ void bch_btree_set_root(struct btree *b)
 	list_del_init(&b->list);
 	mutex_unlock(&b->c->bucket_lock);
 
-	b->c->root = b;
+	spin_lock(&b->c->btree_root_lock);
+	btree_node_root(b) = b;
+	spin_unlock(&b->c->btree_root_lock);
+
 	__bkey_put(b->c, &b->key);
 
 	bch_journal_meta(b->c, NULL);
@@ -2374,10 +2424,10 @@ static int bch_btree_map_recurse(struct btree *b, struct btree_op *op,
 	return 0;
 }
 
-void bch_btree_map(struct btree_op *op, struct cache_set *c,
+void bch_btree_map(struct btree_op *op, enum btree_id id,
 		   struct bkey *from, btree_map_fn *fn)
 {
-	btree_root(map_recurse, c, op, from, fn);
+	btree_root(map_recurse, op->c, id, op, from, fn);
 	closure_sync(&op->cl);
 }
 
@@ -2439,7 +2489,7 @@ static bool refill_keybuf_fn(struct btree_op *op, struct btree *b,
 }
 
 void bch_refill_keybuf(struct cache_set *c, struct keybuf *buf,
-			  struct bkey *end)
+		       struct bkey *end)
 {
 	struct bkey start = buf->last_scanned;
 	struct refill refill;
@@ -2447,10 +2497,12 @@ void bch_refill_keybuf(struct cache_set *c, struct keybuf *buf,
 	cond_resched();
 
 	bch_btree_op_init_stack(&refill.op);
+	refill.op.c = c;
 	refill.buf = buf;
 	refill.end = end;
 
-	bch_btree_map(&refill.op, c, &buf->last_scanned, refill_keybuf_fn);
+	bch_btree_map(&refill.op, BTREE_ID_EXTENTS,
+		      &buf->last_scanned, refill_keybuf_fn);
 
 	pr_debug("found %s keys from %llu:%llu to %llu:%llu",
 		 RB_EMPTY_ROOT(&buf->keys) ? "no" :

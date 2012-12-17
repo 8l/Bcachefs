@@ -18,7 +18,7 @@
 			     k = bkey_next(k))
 
 struct bkey *bch_journal_find_btree_root(struct cache_set *c, struct jset *j,
-					 enum btree_id id, int *level)
+					 enum btree_id id, unsigned *level)
 {
 	struct bkey *k;
 	struct jset_keys *jkeys;
@@ -56,7 +56,7 @@ struct bkey *bch_journal_find_btree_root(struct cache_set *c, struct jset *j,
 
 	return NULL;
 found:
-	if (!__bch_ptr_invalid(c, *level + 1, k))
+	if (!bch_btree_ptr_invalid(c, k))
 		return k;
 
 err:
@@ -680,6 +680,7 @@ static void journal_write_unlocked(struct closure *cl)
 	struct journal_write *w = c->journal.cur;
 	struct bkey *k = &c->journal.key;
 	unsigned sectors = set_blocks(w->data, c) * c->sb.block_size;
+	unsigned i;
 
 	struct bio *bio;
 	struct bio_list list;
@@ -705,9 +706,17 @@ static void journal_write_unlocked(struct closure *cl)
 
 	c->journal.blocks_free -= set_blocks(w->data, c);
 
-	/* XXX: need locking */
-	bch_journal_add_btree_root(w->data, BTREE_ID_EXTENTS,
-				   &c->root->key, c->root->level);
+	spin_lock(&c->btree_root_lock);
+
+	for (i = 0; i < BTREE_ID_NR; i++) {
+		struct btree *b = c->btree_roots[i];
+
+		if (b)
+			bch_journal_add_btree_root(w->data, i,
+						   &b->key, b->level);
+	}
+
+	spin_unlock(&c->btree_root_lock);
 
 	bch_journal_add_btree_root(w->data, BTREE_ID_UUIDS,
 				   &c->uuid_bucket, 0);

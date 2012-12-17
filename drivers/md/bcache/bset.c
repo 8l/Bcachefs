@@ -82,14 +82,17 @@ void bch_keylist_pop_front(struct keylist *l)
 
 bool __bch_ptr_invalid(struct cache_set *c, int level, const struct bkey *k)
 {
+	if (KEY_DELETED(k))
+		return true;
+
+	if (!KEY_SIZE(k))
+		return true;
+
 	if (level && (!KEY_PTRS(k) || KEY_DIRTY(k)))
 		goto bad;
 
 	if (!level && KEY_SIZE(k) > KEY_OFFSET(k))
 		goto bad;
-
-	if (!KEY_SIZE(k))
-		return true;
 
 	for (unsigned i = 0; i < KEY_PTRS(k); i++)
 		if (ptr_available(c, k, i)) {
@@ -204,6 +207,9 @@ bool __bch_cut_front(const struct bkey *where, struct bkey *k)
 
 	BUG_ON(len > KEY_SIZE(k));
 	SET_KEY_SIZE(k, len);
+	if (!len)
+		SET_KEY_DELETED(k, true);
+
 	return true;
 }
 
@@ -223,6 +229,9 @@ bool __bch_cut_back(const struct bkey *where, struct bkey *k)
 
 	BUG_ON(len > KEY_SIZE(k));
 	SET_KEY_SIZE(k, len);
+	if (!len)
+		SET_KEY_DELETED(k, true);
+
 	return true;
 }
 

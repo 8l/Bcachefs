@@ -82,7 +82,7 @@ void bch_keylist_pop_front(struct keylist *l)
 
 bool __bch_ptr_invalid(struct cache_set *c, int level, const struct bkey *k)
 {
-	if (level && (!KEY_PTRS(k) || !KEY_SIZE(k) || KEY_DIRTY(k)))
+	if (level && (!KEY_PTRS(k) || KEY_DIRTY(k)))
 		goto bad;
 
 	if (!level && KEY_SIZE(k) > KEY_OFFSET(k))

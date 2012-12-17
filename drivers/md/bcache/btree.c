@@ -2004,6 +2004,7 @@ static int btree_split(struct btree *b, struct btree_op *op,
 		bch_btree_set_root(n1);
 	} else {
 		bkey_copy(parent_keys->top, &b->key);
+		SET_KEY_SIZE(parent_keys->top, 0);
 		bkey_copy_key(parent_keys->top, &ZERO_KEY);
 
 		for (unsigned i = 0; i < KEY_PTRS(&b->key); i++) {

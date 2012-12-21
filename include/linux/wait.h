@@ -330,6 +330,61 @@ do {									\
 	__ret;								\
 })
 
+#define __wait_event_hrtimeout(wq, condition, timeout, state)		\
+({									\
+	int __ret = 0;							\
+	DEFINE_WAIT(__wait);						\
+	struct hrtimer_sleeper __t;					\
+									\
+	hrtimer_init_on_stack(&__t.timer, CLOCK_MONOTONIC,		\
+			      HRTIMER_MODE_REL);			\
+	hrtimer_init_sleeper(&__t, current);				\
+	if ((timeout).tv64 != KTIME_MAX)				\
+		hrtimer_start_range_ns(&__t.timer, timeout,		\
+				       current->timer_slack_ns,		\
+				       HRTIMER_MODE_REL);		\
+									\
+	for (;;) {							\
+		prepare_to_wait(&wq, &__wait, state);			\
+		if (condition)						\
+			break;						\
+		if (state == TASK_INTERRUPTIBLE &&			\
+		    signal_pending(current)) {				\
+			__ret = -ERESTARTSYS;				\
+			break;						\
+		}							\
+		if (!__t.task) {					\
+			__ret = -ETIME;					\
+			break;						\
+		}							\
+		schedule();						\
+	}								\
+									\
+	hrtimer_cancel(&__t.timer);					\
+	destroy_hrtimer_on_stack(&__t.timer);				\
+	finish_wait(&wq, &__wait);					\
+	__ret;								\
+})
+
+#define wait_event_hrtimeout(wq, condition, timeout)			\
+({									\
+	int __ret = 0;							\
+	if (!(condition))						\
+		__ret = __wait_event_hrtimeout(wq, condition, timeout,	\
+					       TASK_UNINTERRUPTIBLE);	\
+	__ret;								\
+})
+
+#define wait_event_interruptible_hrtimeout(wq, condition, timeout)	\
+({									\
+	long __ret = 0;							\
+	if (!(condition))						\
+		__ret = __wait_event_hrtimeout(wq, condition, timeout,	\
+					       TASK_INTERRUPTIBLE);	\
+	__ret;								\
+})
+
+
 #define __wait_event_interruptible_exclusive(wq, condition, ret)	\
 do {									\
 	DEFINE_WAIT(__wait);						\

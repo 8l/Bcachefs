@@ -317,11 +317,20 @@ extern char __sched_text_start[], __sched_text_end[];
 extern int in_sched_functions(unsigned long addr);
 
 #define	MAX_SCHEDULE_TIMEOUT	LONG_MAX
-extern signed long schedule_timeout(signed long timeout);
+extern signed long __schedule_timeout(signed long timeout);
 extern signed long schedule_timeout_interruptible(signed long timeout);
 extern signed long schedule_timeout_killable(signed long timeout);
 extern signed long schedule_timeout_uninterruptible(signed long timeout);
 asmlinkage void schedule(void);
+
+static inline signed long schedule_timeout(signed long timeout)
+{
+	if (timeout != MAX_SCHEDULE_TIMEOUT)
+		return __schedule_timeout(timeout);
+	schedule();
+	return MAX_SCHEDULE_TIMEOUT;
+}
+
 extern void schedule_preempt_disabled(void);
 extern int mutex_spin_on_owner(struct mutex *lock, struct task_struct *owner);
 

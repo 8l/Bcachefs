@@ -649,6 +649,17 @@ void init_timer_key(struct timer_list *timer, unsigned int flags,
 }
 EXPORT_SYMBOL(init_timer_key);
 
+static void timer_wakeup(unsigned long *data)
+{
+	struct timer_sleeper *t = (void *) data;
+	struct task_struct *task = t->task;
+
+	t->task = NULL;
+	if (task)
+		wake_up_process(task);
+}
+EXPORT_SYMBOL_GPL(timer_wakeup);
+
 static inline void detach_timer(struct timer_list *timer, bool clear_pending)
 {
 	struct list_head *entry = &timer->entry;

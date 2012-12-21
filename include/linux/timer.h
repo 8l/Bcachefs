@@ -33,6 +33,11 @@ struct timer_list {
 #endif
 };
 
+struct timer_sleeper {
+	struct timer_list timer;
+	struct task_struct *task;
+};
+
 extern struct tvec_base boot_tvec_bases;
 
 #ifdef CONFIG_LOCKDEP

@@ -26,6 +26,7 @@
 #include <linux/ata.h>
 #include <linux/interrupt.h>
 #include <linux/genhd.h>
+#include <linux/tags.h>
 
 /* Offset of Subsystem Device ID in pci confoguration space */
 #define PCI_SUBSYSTEM_DEVICEID	0x2E
@@ -390,8 +391,6 @@ struct mtip_port {
 
 	u8 *smart_buf;
 	dma_addr_t smart_buf_dma;
-
-	unsigned long allocated[SLOTBITS_IN_LONGS];
 	/*
 	 * used to queue commands when an internal command is in progress
 	 * or error handling is active
@@ -415,11 +414,7 @@ struct mtip_port {
 	 */
 	struct timer_list cmd_timer;
 	unsigned long ic_pause_timer;
-	/*
-	 * Semaphore used to block threads if there are no
-	 * command slots available.
-	 */
-	struct semaphore cmd_slot;
+
 	/* Spinlock for working around command-issue bug. */
 	spinlock_t cmd_issue_lock;
 };
@@ -458,6 +453,8 @@ struct driver_data {
 	struct task_struct *mtip_svc_handler; /* task_struct of svc thd */
 
 	struct dentry *dfs_node;
+
+	struct tag_pool tags;
 };
 
 #endif

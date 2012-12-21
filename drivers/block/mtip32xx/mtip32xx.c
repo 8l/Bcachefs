@@ -181,65 +181,6 @@ static void mtip_command_cleanup(struct driver_data *dd)
 }
 
 /*
- * Obtain an empty command slot.
- *
- * This function needs to be reentrant since it could be called
- * at the same time on multiple CPUs. The allocation of the
- * command slot must be atomic.
- *
- * @port Pointer to the port data structure.
- *
- * return value
- *	>= 0	Index of command slot obtained.
- *	-1	No command slots available.
- */
-static int get_slot(struct mtip_port *port)
-{
-	int slot, i;
-	unsigned int num_command_slots = port->dd->slot_groups * 32;
-
-	/*
-	 * Try 10 times, because there is a small race here.
-	 *  that's ok, because it's still cheaper than a lock.
-	 *
-	 * Race: Since this section is not protected by lock, same bit
-	 * could be chosen by different process contexts running in
-	 * different processor. So instead of costly lock, we are going
-	 * with loop.
-	 */
-	for (i = 0; i < 10; i++) {
-		slot = find_next_zero_bit(port->allocated,
-					 num_command_slots, 1);
-		if ((slot < num_command_slots) &&
-		    (!test_and_set_bit(slot, port->allocated)))
-			return slot;
-	}
-	dev_warn(&port->dd->pdev->dev, "Failed to get a tag.\n");
-
-	if (mtip_check_surprise_removal(port->dd->pdev)) {
-		/* Device not present, clean outstanding commands */
-		mtip_command_cleanup(port->dd);
-	}
-	return -1;
-}
-
-/*
- * Release a command slot.
- *
- * @port Pointer to the port data structure.
- * @tag  Tag of command to release
- *
- * return value
- *	None
- */
-static inline void release_slot(struct mtip_port *port, int tag)
-{
-	smp_mb__before_clear_bit();
-	clear_bit(tag, port->allocated);
-	smp_mb__after_clear_bit();
-}
-
-/*
  * Reset the HBA (without sleeping)
  *
  * Just like hba_reset, except does not call sleep, so can be
@@ -619,9 +560,7 @@ static void mtip_timeout_function(unsigned long int data)
 			 * command.
 			 */
 			atomic_set(&port->commands[tag].active, 0);
-			release_slot(port, tag);
-
-			up(&port->cmd_slot);
+			tag_free(&dd->tags, tag);
 		}
 	}
 
@@ -705,9 +644,7 @@ static void mtip_async_complete(struct mtip_port *port,
 
 	/* Clear the allocated and active bits for the command */
 	atomic_set(&port->commands[tag].active, 0);
-	release_slot(port, tag);
-
-	up(&port->cmd_slot);
+	tag_free(&dd->tags, tag);
 }
 
 /*
@@ -2498,20 +2435,6 @@ static void mtip_hw_submit_io(struct driver_data *dd, struct request *rq,
 }
 
 /*
- * Release a command slot.
- *
- * @dd  Pointer to the driver data structure.
- * @tag Slot tag
- *
- * return value
- *      None
- */
-static void mtip_hw_release_scatterlist(struct driver_data *dd, int tag)
-{
-	release_slot(dd->port, tag);
-}
-
-/*
  * Obtain a command slot and return its associated scatter list.
  *
  * @dd  Pointer to the driver data structure.
@@ -2525,20 +2448,10 @@ static void mtip_hw_release_scatterlist(struct driver_data *dd, int tag)
 static struct scatterlist *mtip_hw_get_scatterlist(struct driver_data *dd,
 						   int *tag)
 {
-	/*
-	 * It is possible that, even with this semaphore, a thread
-	 * may think that no command slots are available. Therefore, we
-	 * need to make an attempt to get_slot().
-	 */
-	down(&dd->port->cmd_slot);
-	*tag = get_slot(dd->port);
+	*tag = tag_alloc(&dd->tags, true);
 
 	if (unlikely(test_bit(MTIP_DDF_REMOVE_PENDING_BIT, &dd->dd_flag))) {
-		up(&dd->port->cmd_slot);
-		return NULL;
-	}
-	if (unlikely(*tag < 0)) {
-		up(&dd->port->cmd_slot);
+		tag_free(&dd->tags, *tag);
 		return NULL;
 	}
 
@@ -2979,6 +2892,11 @@ static int mtip_hw_init(struct driver_data *dd)
 	}
 	num_command_slots = dd->slot_groups * 32;
 
+	if (tag_pool_init(&dd->tags, num_command_slots)) {
+		rv = -ENOMEM;
+		goto out1;
+	}
+
 	hba_setup(dd);
 
 	tasklet_init(&dd->tasklet, mtip_tasklet, (unsigned long)dd);
@@ -2989,9 +2907,6 @@ static int mtip_hw_init(struct driver_data *dd)
 			"Memory allocation: port structure\n");
 		return -ENOMEM;
 	}
-
-	/* Counting semaphore to track command slot usage */
-	sema_init(&dd->port->cmd_slot, num_command_slots - 1);
 
 	/* Spinlock to prevent concurrent issue */
 	spin_lock_init(&dd->port->cmd_issue_lock);
@@ -3616,7 +3531,7 @@ static int mtip_submit_request(struct blk_mq_hw_ctx *hctx, struct request *rq)
 	if (unlikely(rq->nr_phys_segments > MTIP_MAX_SG)) {
 		dev_warn(&dd->pdev->dev,
 				"Maximum number of SGL entries exceeded\n");
-		mtip_hw_release_scatterlist(dd, rq->tag);
+		tag_free(&dd->tags, tag);
 		return -EIO;
 	}
 

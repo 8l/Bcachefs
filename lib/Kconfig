@@ -396,4 +396,7 @@ config SIGNATURE
 config LIBFDT
 	bool
 
+config PERCPU_TAG
+	bool
+
 endmenu

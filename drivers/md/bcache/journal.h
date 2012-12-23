@@ -78,7 +78,35 @@
 #define BCACHE_JSET_VERSION_UUIDv1	1
 /* Always latest UUID format */
 #define BCACHE_JSET_VERSION_UUID	1
-#define BCACHE_JSET_VERSION		1
+#define BCACHE_JSET_VERSION_JKEYS	2
+#define BCACHE_JSET_VERSION		2
+
+enum btree_id {
+	BTREE_ID_EXTENTS	= 0,
+	BTREE_ID_UUIDS		= 1,
+};
+
+struct jset_keys {
+	uint16_t		keys;
+	uint8_t			btree_id;
+	uint8_t			level;
+	uint32_t		flags;
+
+	union {
+		struct bkey	start[0];
+		uint64_t	d[0];
+	};
+};
+
+BITMASK(JKEYS_BTREE_ROOT, struct jset_keys, flags, 0, 1);
+
+#define JSET_RESERVE		32
+
+static inline struct jset_keys *jset_keys_next(struct jset_keys *j)
+{
+	return (void *) (&j->d[j->keys]);
+
+}
 
 /*
  * On disk format for a journal entry:
@@ -91,6 +119,23 @@
  * version is for on disk format changes.
  */
 struct jset {
+	uint64_t		csum;
+	uint64_t		magic;
+	uint64_t		seq;
+	uint32_t		version;
+	uint32_t		keys;
+
+	uint64_t		last_seq;
+
+	uint64_t		prio_bucket[MAX_CACHES_PER_SET];
+
+	union {
+		struct jset_keys start[0];
+		uint64_t	d[0];
+	};
+};
+
+struct jset_v0 {
 	uint64_t		csum;
 	uint64_t		magic;
 	uint64_t		seq;
@@ -199,6 +244,9 @@ struct journal_device {
 struct closure;
 struct cache_set;
 struct btree_op;
+
+struct bkey *bch_journal_find_btree_root(struct cache_set *, struct jset *,
+					 enum btree_id, int *);
 
 void bch_journal(struct closure *);
 void bch_journal_next(struct journal *);

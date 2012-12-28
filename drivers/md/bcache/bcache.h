@@ -191,6 +191,8 @@
 #include "bset.h"
 #include "util.h"
 
+#include <linux/dynamic_fault.h>
+
 struct bucket {
 	atomic_t	pin;
 	uint16_t	prio;

@@ -119,8 +119,8 @@ static void refill_dirty(struct closure *cl)
 					     writeback.cl);
 	struct keybuf *buf = &dc->writeback_keys;
 	bool searched_from_start = false;
-	struct bkey end = MAX_KEY;
-	SET_KEY_INODE(&end, dc->disk.id);
+	unsigned inode = KEY_INODE(&dc->disk.inode.k);
+	struct bkey end = KEY(inode, MAX_KEY_OFFSET, 0);
 
 	if (!atomic_read(&dc->disk.detaching) &&
 	    !dc->writeback_running)
@@ -137,7 +137,7 @@ static void refill_dirty(struct closure *cl)
 	}
 
 	if (bkey_cmp(&buf->last_scanned, &end) >= 0) {
-		buf->last_scanned = KEY(dc->disk.id, 0, 0);
+		buf->last_scanned = KEY(inode, 0, 0);
 		searched_from_start = true;
 	}
 

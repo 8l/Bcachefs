@@ -195,13 +195,16 @@ STORE(__cached_dev)
 	}
 
 	if (attr == &sysfs_label) {
+		mutex_lock(&dc->disk.inode_lock);
+
 		memcpy(dc->sb.label, buf, SB_LABEL_SIZE);
+		memcpy(dc->disk.inode.label, buf, SB_LABEL_SIZE);
+
 		bch_write_bdev_super(dc, NULL);
-		if (dc->disk.c) {
-			memcpy(dc->disk.c->uuids[dc->disk.id].label,
-			       buf, SB_LABEL_SIZE);
-			uuid_write(dc->disk.c);
-		}
+		if (dc->disk.c)
+			bch_uuid_inode_write(dc->disk.c, &dc->disk.inode);
+
+		mutex_unlock(&dc->disk.inode_lock);
 	}
 
 	if (attr == &sysfs_attach) {
@@ -286,13 +289,12 @@ SHOW(flash_dev)
 {
 	struct bcache_device *d = container_of(kobj, struct bcache_device,
 					       kobj);
-	struct uuid_entry *u = &d->c->uuids[d->id];
 
 	sysfs_printf(data_csum,	"%i", d->data_csum);
-	sysfs_hprint(size,	u->sectors << 9);
+	sysfs_hprint(size,	d->inode.sectors << 9);
 
 	if (attr == &sysfs_label) {
-		memcpy(buf, u->label, SB_LABEL_SIZE);
+		memcpy(buf, d->inode.label, SB_LABEL_SIZE);
 		buf[SB_LABEL_SIZE + 1] = '\0';
 		strcat(buf, "\n");
 		return strlen(buf);
@@ -305,7 +307,6 @@ STORE(__flash_dev)
 {
 	struct bcache_device *d = container_of(kobj, struct bcache_device,
 					       kobj);
-	struct uuid_entry *u = &d->c->uuids[d->id];
 
 	sysfs_strtoul(data_csum,	d->data_csum);
 
@@ -313,14 +314,22 @@ STORE(__flash_dev)
 		uint64_t v;
 		strtoi_h_or_return(buf, v);
 
-		u->sectors = v >> 9;
-		uuid_write(d->c);
-		set_capacity(d->disk, u->sectors);
+		mutex_lock(&d->inode_lock);
+
+		d->inode.sectors = v >> 9;
+		bch_uuid_inode_write(d->c, &d->inode);
+		set_capacity(d->disk, d->inode.sectors);
+
+		mutex_unlock(&d->inode_lock);
 	}
 
 	if (attr == &sysfs_label) {
-		memcpy(u->label, buf, SB_LABEL_SIZE);
-		uuid_write(d->c);
+		mutex_lock(&d->inode_lock);
+
+		memcpy(d->inode.label, buf, SB_LABEL_SIZE);
+		bch_uuid_inode_write(d->c, &d->inode);
+
+		mutex_unlock(&d->inode_lock);
 	}
 
 	if (attr == &sysfs_unregister) {

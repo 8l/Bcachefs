@@ -718,15 +718,13 @@ static void journal_write_unlocked(struct closure *cl)
 
 	spin_unlock(&c->btree_root_lock);
 
-	bch_journal_add_btree_root(w->data, BTREE_ID_UUIDS,
-				   &c->uuid_bucket, 0);
-
 	for_each_cache(ca, c)
 		w->data->prio_bucket[ca->sb.nr_this_dev] = ca->prio_buckets[0];
 
 	w->data->magic		= jset_magic(c);
 	w->data->version	= BCACHE_JSET_VERSION;
 	w->data->last_seq	= last_seq(&c->journal);
+	w->data->unused_inode_hint = c->unused_inode_hint;
 	w->data->csum		= csum_set(w->data);
 
 	for (unsigned i = 0; i < KEY_PTRS(k); i++) {

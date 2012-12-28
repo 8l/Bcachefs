@@ -347,6 +347,7 @@ struct prio_set {
 
 #include "journal.h"
 #include "stats.h"
+#include "inode.h"
 struct search;
 struct btree;
 struct keybuf;
@@ -385,7 +386,11 @@ struct bcache_device {
 	struct kobject		kobj;
 
 	struct cache_set	*c;
-	unsigned		id;
+
+	struct rb_node		node;
+	struct bch_inode_uuid	inode;
+	struct mutex		inode_lock;
+
 #define BCACHEDEVNAME_SIZE	12
 	char			name[BCACHEDEVNAME_SIZE];
 
@@ -644,7 +649,9 @@ struct cache_set {
 	struct cache		*cache_by_alloc[MAX_CACHES_PER_SET];
 	int			caches_loaded;
 
-	struct bcache_device	**devices;
+	struct rb_root		devices;
+	spinlock_t		devices_lock;
+
 	struct list_head	cached_devs;
 	uint64_t		cached_dev_sectors;
 	struct closure		caching;
@@ -775,10 +782,7 @@ struct cache_set {
 	struct mutex		verify_lock;
 #endif
 
-	unsigned		nr_uuids;
-	struct uuid_entry	*uuids;
-	BKEY_PADDED(uuid_bucket);
-	struct closure_with_waitlist uuid_write;
+	uint64_t		unused_inode_hint;
 
 	/*
 	 * A btree node on disk could have too many bsets for an iterator to fit
@@ -1152,6 +1156,9 @@ bool bch_cache_set_error(struct cache_set *, const char *, ...);
 
 void bch_prio_write(struct cache *);
 void bch_write_bdev_super(struct cached_dev *, struct closure *);
+
+struct bcache_device *bch_dev_find(struct cache_set *c, uint64_t inode);
+struct bcache_device *bch_dev_get_by_inode(struct cache_set *c, uint64_t inode);
 
 extern struct workqueue_struct *bcache_wq, *bch_gc_wq;
 extern const char * const bch_cache_modes[];

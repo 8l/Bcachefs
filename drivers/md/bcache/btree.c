@@ -1160,7 +1160,6 @@ uint8_t __bch_btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 static int btree_gc_mark_node(struct btree *b, unsigned *keys, struct gc_stat *gc)
 {
 	uint8_t stale = 0;
-	unsigned last_dev = -1;
 	struct bcache_device *d = NULL;
 	struct bkey *k;
 
@@ -1177,12 +1176,11 @@ static int btree_gc_mark_node(struct btree *b, unsigned *keys, struct gc_stat *g
 		if (bch_ptr_invalid(b, k))
 			continue;
 
-		if (last_dev != KEY_INODE(k)) {
-			last_dev = KEY_INODE(k);
+		if (d && KEY_INODE(k) != KEY_INODE(&d->inode.k)) {
+			if (d)
+				closure_put(&d->cl);
 
-			d = KEY_INODE(k) < b->c->nr_uuids
-				? b->c->devices[last_dev]
-				: NULL;
+			d = bch_dev_get_by_inode(b->c, KEY_INODE(k));
 		}
 
 		stale = max(stale, btree_mark_key(b, k));
@@ -1202,6 +1200,10 @@ static int btree_gc_mark_node(struct btree *b, unsigned *keys, struct gc_stat *g
 				d->sectors_dirty_gc += KEY_SIZE(k);
 		}
 	}
+
+	if (d)
+		closure_put(&d->cl);
+
 
 	for (struct bset_tree *t = b->sets; t <= &b->sets[b->nsets]; t++)
 		btree_bug_on(t->size &&
@@ -1463,6 +1465,7 @@ static void btree_gc_start(struct cache_set *c)
 {
 	struct cache *ca;
 	struct bucket *b;
+	struct bcache_device *d;
 
 	if (!c->gc_mark_valid)
 		return;
@@ -1480,11 +1483,14 @@ static void btree_gc_start(struct cache_set *c)
 				SET_GC_MARK(b, GC_MARK_RECLAIMABLE);
 		}
 
-	for (struct bcache_device **d = c->devices;
-	     d < c->devices + c->nr_uuids;
-	     d++)
-		if (*d)
-			(*d)->sectors_dirty_gc = 0;
+	spin_lock(&c->devices_lock);
+
+	for (d = RB_FIRST(&c->devices, struct bcache_device, node);
+	     d;
+	     d = RB_NEXT(d, node))
+		d->sectors_dirty_gc = 0;
+
+	spin_unlock(&c->devices_lock);
 
 	mutex_unlock(&c->bucket_lock);
 }
@@ -1494,6 +1500,7 @@ size_t bch_btree_gc_finish(struct cache_set *c)
 	size_t available = 0;
 	struct bucket *b;
 	struct cache *ca;
+	struct bcache_device *d;
 	unsigned i, ptr;
 
 	mutex_lock(&c->bucket_lock);
@@ -1510,10 +1517,6 @@ size_t bch_btree_gc_finish(struct cache_set *c)
 				SET_GC_MARK(PTR_BUCKET(c, k, ptr),
 					    GC_MARK_METADATA);
 		}
-
-	for (unsigned ptr = 0; ptr < KEY_PTRS(&c->uuid_bucket); ptr++)
-		SET_GC_MARK(PTR_BUCKET(c, &c->uuid_bucket, ptr),
-			    GC_MARK_METADATA);
 
 	for_each_cache(ca, c) {
 		uint64_t *i;
@@ -1540,21 +1543,22 @@ size_t bch_btree_gc_finish(struct cache_set *c)
 		}
 	}
 
-	for (struct bcache_device **d = c->devices;
-	     d < c->devices + c->nr_uuids;
-	     d++)
-		if (*d) {
-			unsigned long last =
-				atomic_long_read(&((*d)->sectors_dirty));
-			long difference = (*d)->sectors_dirty_gc - last;
+	spin_lock(&c->devices_lock);
 
-			pr_debug("sectors dirty off by %li", difference);
+	for (d = RB_FIRST(&c->devices, struct bcache_device, node);
+	     d;
+	     d = RB_NEXT(d, node)) {
+		unsigned long last = atomic_long_read(&d->sectors_dirty);
+		long difference = d->sectors_dirty_gc - last;
 
-			(*d)->sectors_dirty_last += difference;
+		pr_debug("sectors dirty off by %li", difference);
 
-			atomic_long_set(&((*d)->sectors_dirty),
-					(*d)->sectors_dirty_gc);
-		}
+		d->sectors_dirty_last += difference;
+
+		atomic_long_set(&d->sectors_dirty, d->sectors_dirty_gc);
+	}
+
+	spin_unlock(&c->devices_lock);
 
 	mutex_unlock(&c->bucket_lock);
 	return available;
@@ -1731,10 +1735,18 @@ static bool fix_overlapping_extents(struct btree *b,
 {
 	void subtract_dirty(struct bkey *k, int sectors)
 	{
-		struct bcache_device *d = b->c->devices[KEY_INODE(k)];
+		struct bcache_device *d;
 
-		if (KEY_DIRTY(k) && d)
+		BUG_ON(!sectors);
+
+		if (!KEY_DIRTY(k))
+			return;
+
+		spin_lock(&b->c->devices_lock);
+		d = bch_dev_find(b->c, KEY_INODE(k));
+		if (d)
 			atomic_long_sub(sectors, &d->sectors_dirty);
+		spin_unlock(&b->c->devices_lock);
 	}
 
 	unsigned sectors_found = 0;
@@ -1867,6 +1879,61 @@ check_failed:
 	return false;
 }
 
+static bool fix_overlapping_inodes(struct btree *b,
+				   struct bkey *insert,
+				   struct btree_iter *iter,
+				   struct btree_op *op)
+{
+	while (1) {
+		struct bkey *k = bch_btree_iter_next(iter);
+		if (!k ||
+		    bkey_cmp(&START_KEY(k), insert) >= 0)
+			break;
+
+		if (bkey_cmp(k, &START_KEY(insert)) <= 0)
+			continue;
+
+		if (op->type == BTREE_REPLACE) {
+			if (KEY_PTRS(k) != KEY_PTRS(insert))
+				return true;
+
+			if (memcmp(k->ptr,
+				   insert->ptr,
+				   KEY_PTRS(k) * sizeof(uint64_t)))
+				return true;
+		}
+
+		SET_KEY_DELETED(k, true);
+	}
+
+	return false;
+}
+
+static bool fix_overlapping_dirs(struct btree *b,
+				 struct bkey *insert,
+				 struct btree_iter *iter,
+				 struct btree_op *op)
+{
+	return false;
+}
+
+static bool fix_overlapping_keys(struct btree *b,
+				 struct bkey *insert,
+				 struct btree_iter *iter,
+				 struct btree_op *op)
+{
+	switch (b->level) {
+	case BTREE_ID_EXTENTS:
+		return fix_overlapping_extents(b, insert, iter, op);
+	case BTREE_ID_INODES:
+		return fix_overlapping_inodes(b, insert, iter, op);
+	case BTREE_ID_DIRS:
+		return fix_overlapping_dirs(b, insert, iter, op);
+	default:
+		BUG();
+	}
+}
+
 static bool btree_insert_key(struct btree *b, struct btree_op *op,
 			     struct bkey *k)
 {
@@ -1894,7 +1961,7 @@ static bool btree_insert_key(struct btree *b, struct btree_op *op,
 		prev = NULL;
 		m = bch_btree_iter_init(b, &iter, &search);
 
-		if (fix_overlapping_extents(b, k, &iter, op))
+		if (fix_overlapping_keys(b, k, &iter, op))
 			return false;
 
 		while (m != end(i) &&
@@ -2416,18 +2483,50 @@ static int bch_btree_map_recurse(struct btree *b, struct btree_op *op,
 		if (!b->level)
 			op->lookup_done = fn(op, b, k);
 		else {
-			btree(map_recurse, k, b, op, from, fn);
+			ret = btree(map_recurse, k, b, op, from, fn);
 			from = NULL;
 		}
 	}
 
-	return 0;
+	return ret;
 }
 
 void bch_btree_map(struct btree_op *op, enum btree_id id,
 		   struct bkey *from, btree_map_fn *fn)
 {
 	btree_root(map_recurse, op->c, id, op, from, fn);
+	closure_sync(&op->cl);
+}
+
+static int bch_btree_map_node_recurse(struct btree *b, struct btree_op *op,
+				      struct bkey *from, btree_node_map_fn *fn)
+{
+	int ret = 0;
+	struct bkey *k;
+	struct btree_iter iter;
+	bch_btree_iter_init(b, &iter, from);
+
+	if (b->level) {
+		while (!ret &&
+		       !op->lookup_done &&
+		       (k = bch_btree_iter_next(&iter))) {
+			if (bch_ptr_bad(b, k))
+				continue;
+
+			ret = btree(map_node_recurse, k, b, op, from, fn);
+			from = NULL;
+		}
+	} else {
+		op->lookup_done = fn(op, b);
+	}
+
+	return ret;
+}
+
+void bch_btree_map_node(struct btree_op *op, enum btree_id id,
+			struct bkey *from, btree_node_map_fn *fn)
+{
+	btree_root(map_node_recurse, op->c, id, op, from, fn);
 	closure_sync(&op->cl);
 }
 

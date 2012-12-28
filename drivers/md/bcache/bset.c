@@ -953,7 +953,7 @@ struct bkey *bch_next_recurse_key(struct btree *b, struct bkey *search)
 
 /* Mergesort */
 
-static void btree_sort_fixup(struct btree_iter *iter)
+static void btree_sort_fixup_extents(struct btree_iter *iter)
 {
 	while (iter->used > 1) {
 		struct btree_iter_set *top = iter->data, *i = top + 1;
@@ -978,6 +978,40 @@ static void btree_sort_fixup(struct btree_iter *iter)
 	}
 }
 
+static void btree_sort_fixup_inodes(struct btree_iter *iter)
+{
+	while (iter->used > 1) {
+		struct btree_iter_set *top = iter->data, *i = top + 1;
+
+		if (iter->used > 2 &&
+		    btree_iter_cmp(i[0], i[1]))
+			i++;
+
+		if (bkey_cmp(top->k, i->k))
+			break;
+
+		i->k = bkey_next(i->k);
+
+		if (i->k == i->end) {
+			iter->used--;
+			*i = iter->data[iter->used];
+		}
+
+		heap_sift(iter, i - top, btree_iter_cmp);
+	}
+}
+
+static void btree_sort_fixup(struct btree *b, struct btree_iter *iter)
+{
+	if (b->level)
+		return;
+	else if (b->btree_id == BTREE_ID_EXTENTS)
+		btree_sort_fixup_extents(iter);
+	else
+		btree_sort_fixup_inodes(iter);
+
+}
+
 static void btree_mergesort(struct btree *b, struct bset *out,
 			    struct btree_iter *iter,
 			    bool fixup, bool remove_stale)
@@ -988,8 +1022,8 @@ static void btree_mergesort(struct btree *b, struct bset *out,
 		: bch_ptr_invalid;
 
 	while (!btree_iter_end(iter)) {
-		if (fixup && !b->level)
-			btree_sort_fixup(iter);
+		if (fixup)
+			btree_sort_fixup(b, iter);
 
 		k = bch_btree_iter_next(iter);
 		if (bad(b, k))

@@ -122,6 +122,8 @@ struct jset {
 
 	uint64_t		last_seq;
 
+	uint64_t		unused_inode_hint;
+
 	uint64_t		prio_bucket[MAX_CACHES_PER_SET];
 
 	union {

@@ -431,9 +431,12 @@ int bch_btree_check(struct cache_set *, struct btree_op *);
 uint8_t __bch_btree_mark_key(struct cache_set *, int, struct bkey *);
 
 typedef bool (btree_map_fn)(struct btree_op *, struct btree *, struct bkey *);
-
 void bch_btree_map(struct btree_op *, enum btree_id,
 		   struct bkey *, btree_map_fn *);
+
+typedef bool (btree_node_map_fn)(struct btree_op *, struct btree *);
+void bch_btree_map_node(struct btree_op *op, enum btree_id id,
+			struct bkey *from, btree_node_map_fn *fn);
 
 void bch_keybuf_init(struct keybuf *, keybuf_pred_fn *);
 void bch_refill_keybuf(struct cache_set *, struct keybuf *, struct bkey *);

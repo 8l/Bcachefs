@@ -44,35 +44,6 @@ static const char * const cache_replacement_policies[] = {
 	NULL
 };
 
-struct uuid_entry_v0 {
-	uint8_t		uuid[16];
-	uint8_t		label[32];
-	uint32_t	first_reg;
-	uint32_t	last_reg;
-	uint32_t	invalidated;
-	uint32_t	pad;
-};
-
-struct uuid_entry {
-	union {
-		struct {
-			uint8_t		uuid[16];
-			uint8_t		label[32];
-			uint32_t	first_reg;
-			uint32_t	last_reg;
-			uint32_t	invalidated;
-
-			uint32_t	flags;
-			/* Size of flash only volumes */
-			uint64_t	sectors;
-		};
-
-		uint8_t	pad[128];
-	};
-};
-
-BITMASK(UUID_FLASH_ONLY,	struct uuid_entry, flags, 0, 1);
-
 /* We keep absolute totals of various statistics, and addionally a set of three
  * rolling averages.
  *
@@ -111,7 +82,6 @@ static wait_queue_head_t unregister_wait;
 
 struct workqueue_struct *bcache_wq;
 
-static int uuid_write(struct cache_set *);
 static void bcache_device_stop(struct bcache_device *);
 
 static void __cached_dev_free(struct kobject *);
@@ -132,6 +102,36 @@ static void cache_free(struct kobject *);
 #include "sysfs.c"
 
 #define BTREE_MAX_PAGES		(256 * 1024 / PAGE_SIZE)
+
+static int64_t bch_dev_cmp(struct bcache_device *l, struct bcache_device *r)
+{
+	return KEY_INODE(&l->inode.k) - KEY_INODE(&l->inode.k);
+}
+
+struct bcache_device *bch_dev_find(struct cache_set *c, uint64_t inode)
+{
+	struct bcache_device t;
+
+	bkey_init(&t.inode.k);
+	SET_KEY_INODE(&t.inode.k, inode);
+
+	return RB_SEARCH(&c->devices, t, node, bch_dev_cmp);
+}
+
+struct bcache_device *bch_dev_get_by_inode(struct cache_set *c, uint64_t inode)
+{
+	struct bcache_device *d;
+
+	spin_lock(&c->devices_lock);
+
+	d = bch_dev_find(c, inode);
+	if (d)
+		closure_get(&d->cl);
+
+	spin_unlock(&c->devices_lock);
+
+	return d;
+}
 
 /* Superblock */
 
@@ -351,141 +351,6 @@ static void bcache_write_super(struct cache_set *c)
 
 /* UUID io */
 
-static void uuid_endio(struct bio *bio, int error)
-{
-	struct closure *cl = bio->bi_private;
-	struct cache_set *c = container_of(cl, struct cache_set, uuid_write.cl);
-
-	cache_set_err_on(error, c, "accessing uuids");
-	bch_bbio_free(bio, c);
-	closure_put(cl);
-}
-
-static void uuid_io(struct cache_set *c, unsigned long rw,
-		    struct bkey *k, struct closure *parent)
-{
-	struct closure *cl = &c->uuid_write.cl;
-
-	BUG_ON(!parent);
-	closure_lock(&c->uuid_write, parent);
-
-	for (unsigned i = 0; i < KEY_PTRS(k); i++) {
-		struct bio *bio = bch_bbio_alloc(c);
-
-		bio->bi_rw	= REQ_SYNC|REQ_META|rw;
-		bio->bi_size	= KEY_SIZE(k) << 9;
-
-		bio->bi_end_io	= uuid_endio;
-		bio->bi_private = cl;
-		bio_map(bio, c->uuids);
-
-		bch_submit_bbio(bio, c, k, i);
-
-		if (!(rw & WRITE))
-			break;
-	}
-
-	pr_debug("%s UUIDs at %s", rw & REQ_WRITE ? "wrote" : "read",
-		 pkey(&c->uuid_bucket));
-
-	for (struct uuid_entry *u = c->uuids; u < c->uuids + c->nr_uuids; u++)
-		if (!is_zero(u->uuid, 16))
-			pr_debug("Slot %zi: %pU: %s: 1st: %u last: %u inv: %u",
-				 u - c->uuids, u->uuid, u->label,
-				 u->first_reg, u->last_reg, u->invalidated);
-
-	closure_return(cl);
-}
-
-static char *uuid_read(struct cache_set *c, struct jset *j, struct closure *cl)
-{
-	int level;
-	struct bkey *k;
-
-	k = bch_journal_find_btree_root(c, j, BTREE_ID_UUIDS, &level);
-
-	if (!k)
-		return "bad uuid pointer";
-
-	bkey_copy(&c->uuid_bucket, k);
-	uuid_io(c, READ_SYNC, k, cl);
-
-	if (j->version < BCACHE_JSET_VERSION_UUIDv1) {
-		struct uuid_entry_v0	*u0 = (void *) c->uuids;
-		struct uuid_entry	*u1 = (void *) c->uuids;
-
-		closure_sync(cl);
-
-		/*
-		 * Since the new uuid entry is bigger than the old, we have to
-		 * convert starting at the highest memory address and work down
-		 * in order to do it in place
-		 */
-
-		for (int i = c->nr_uuids - 1;
-		     i >= 0;
-		     --i) {
-			memcpy(u1[i].uuid,	u0[i].uuid, 16);
-			memcpy(u1[i].label,	u0[i].label, 32);
-
-			u1[i].first_reg		= u0[i].first_reg;
-			u1[i].last_reg		= u0[i].last_reg;
-			u1[i].invalidated	= u0[i].invalidated;
-
-			u1[i].flags	= 0;
-			u1[i].sectors	= 0;
-		}
-	}
-
-	return NULL;
-}
-
-static int __uuid_write(struct cache_set *c)
-{
-	BKEY_PADDED(key) k;
-	struct closure cl;
-	closure_init_stack(&cl);
-
-	lockdep_assert_held(&register_lock);
-
-	if (bch_bucket_alloc_set(c, WATERMARK_METADATA, &k.key, 1, &cl))
-		return 1;
-
-	SET_KEY_SIZE(&k.key, c->sb.bucket_size);
-	uuid_io(c, REQ_WRITE, &k.key, &cl);
-	closure_sync(&cl);
-
-	bkey_copy(&c->uuid_bucket, &k.key);
-	__bkey_put(c, &k.key);
-	return 0;
-}
-
-static int uuid_write(struct cache_set *c)
-{
-	int ret = __uuid_write(c);
-
-	if (!ret)
-		bch_journal_meta(c, NULL);
-
-	return ret;
-}
-
-static struct uuid_entry *uuid_find(struct cache_set *c, const char *uuid)
-{
-	for (struct uuid_entry *u = c->uuids;
-	     u < c->uuids + c->nr_uuids; u++)
-		if (!memcmp(u->uuid, uuid, 16))
-			return u;
-
-	return NULL;
-}
-
-static struct uuid_entry *uuid_find_empty(struct cache_set *c)
-{
-	static const char zero_uuid[16] = "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
-	return uuid_find(c, zero_uuid);
-}
-
 /*
  * Bucket priorities/gens:
  *
@@ -686,38 +551,43 @@ static void bcache_device_detach(struct bcache_device *d)
 	lockdep_assert_held(&register_lock);
 
 	if (atomic_read(&d->detaching)) {
-		struct uuid_entry *u = d->c->uuids + d->id;
-
-		SET_UUID_FLASH_ONLY(u, 0);
-		memcpy(u->uuid, invalid_uuid, 16);
-		u->invalidated = cpu_to_le32(get_seconds());
-		uuid_write(d->c);
+		mutex_lock(&d->inode_lock);
+		bch_inode_rm(d->c, KEY_INODE(&d->inode.k));
+		mutex_unlock(&d->inode_lock);
 
 		atomic_set(&d->detaching, 0);
 	}
 
-	d->c->devices[d->id] = NULL;
+	spin_lock(&d->c->devices_lock);
+	rb_erase(&d->node, &d->c->devices);
+	spin_unlock(&d->c->devices_lock);
+
 	closure_put(&d->c->caching);
 	d->c = NULL;
 }
 
-static void bcache_device_attach(struct bcache_device *d, struct cache_set *c,
-				 unsigned id)
+static void bcache_device_attach(struct bcache_device *d, struct cache_set *c)
 {
+	lockdep_assert_held(&register_lock);
+
 	BUG_ON(test_bit(CACHE_SET_STOPPING, &c->flags));
 
-	d->id = id;
 	d->c = c;
-	c->devices[id] = d;
-
 	closure_get(&c->caching);
+
+	spin_lock(&d->c->devices_lock);
+
+	/* XXX: how are we protected against this failing? */
+	BUG_ON(RB_INSERT(&c->devices, d, node, bch_dev_cmp));
+
+	spin_unlock(&d->c->devices_lock);
 }
 
 static void bcache_device_link(struct bcache_device *d, struct cache_set *c,
 			       const char *name)
 {
 	snprintf(d->name, BCACHEDEVNAME_SIZE,
-		 "%s%u", name, d->id);
+		 "%s%llu", name, KEY_INODE(&d->inode.k));
 
 	WARN(sysfs_create_link(&d->kobj, &c->kobj, "cache") ||
 	     sysfs_create_link(&c->kobj, &d->kobj, d->name),
@@ -751,6 +621,8 @@ static void bcache_device_free(struct bcache_device *d)
 static int bcache_device_init(struct bcache_device *d, unsigned block_size)
 {
 	struct request_queue *q;
+
+	mutex_init(&d->inode_lock);
 
 	if (!(d->bio_split = bioset_create(4, offsetof(struct bbio, bio))) ||
 	    !(d->unaligned_bvec = mempool_create_kmalloc_pool(1,
@@ -874,8 +746,8 @@ static void cached_dev_detach(struct cached_dev *dc)
 static int cached_dev_attach(struct cached_dev *dc, struct cache_set *c)
 {
 	uint32_t rtime = cpu_to_le32(get_seconds());
-	struct uuid_entry *u;
 	char buf[BDEVNAME_SIZE];
+	bool found;
 
 	bdevname(dc->bdev, buf);
 
@@ -891,41 +763,37 @@ static int cached_dev_attach(struct cached_dev *dc, struct cache_set *c)
 		return -EINVAL;
 	}
 
-	u = uuid_find(c, dc->sb.uuid);
+	memcpy(&dc->disk.inode.uuid, dc->sb.uuid, 16);
+	found = !bch_uuid_inode_find(c, &dc->disk.inode);
 
-	if (u &&
-	    (BDEV_STATE(&dc->sb) == BDEV_STATE_STALE ||
-	     BDEV_STATE(&dc->sb) == BDEV_STATE_NONE)) {
-		memcpy(u->uuid, invalid_uuid, 16);
-		u->invalidated = cpu_to_le32(get_seconds());
-		u = NULL;
+	if (!found && BDEV_STATE(&dc->sb) == BDEV_STATE_DIRTY) {
+		err_printk("Couldn't find uuid for %s in set\n", buf);
+		return -ENOENT;
 	}
 
-	if (!u) {
-		if (BDEV_STATE(&dc->sb) == BDEV_STATE_DIRTY) {
-			err_printk("Couldn't find uuid for %s in set\n", buf);
-			return -ENOENT;
-		}
-
-		u = uuid_find_empty(c);
-		if (!u) {
-			err_printk("Not caching %s, no room for UUID\n", buf);
-			return -EINVAL;
-		}
+	if (found &&
+	    (BDEV_STATE(&dc->sb) == BDEV_STATE_STALE ||
+	     BDEV_STATE(&dc->sb) == BDEV_STATE_NONE)) {
+		found = false;
+		bch_inode_rm(c, KEY_INODE(&dc->disk.inode.k));
 	}
 
 	/* Deadlocks since we're called via sysfs...
 	sysfs_remove_file(&dc->kobj, &sysfs_attach);
 	 */
 
-	if (is_zero(u->uuid, 16)) {
+	if (!found) {
 		struct closure cl;
 		closure_init_stack(&cl);
 
-		memcpy(u->uuid, dc->sb.uuid, 16);
-		memcpy(u->label, dc->sb.label, SB_LABEL_SIZE);
-		u->first_reg = u->last_reg = rtime;
-		uuid_write(c);
+		memcpy(dc->disk.inode.label, dc->sb.label, SB_LABEL_SIZE);
+		dc->disk.inode.first_reg = rtime;
+		dc->disk.inode.last_reg = rtime;
+
+		if (bch_uuid_inode_write_new(c, &dc->disk.inode)) {
+			err_printk("No free inodes, not caching %s\n", buf);
+			return -EINVAL;
+		}
 
 		memcpy(dc->sb.set_uuid, c->sb.set_uuid, 16);
 		SET_BDEV_STATE(&dc->sb, BDEV_STATE_CLEAN);
@@ -933,11 +801,11 @@ static int cached_dev_attach(struct cached_dev *dc, struct cache_set *c)
 		bch_write_bdev_super(dc, &cl);
 		closure_sync(&cl);
 	} else {
-		u->last_reg = rtime;
-		uuid_write(c);
+		dc->disk.inode.last_reg = rtime;
+		bch_uuid_inode_write(c, &dc->disk.inode);
 	}
 
-	bcache_device_attach(&dc->disk, c, u - c->uuids);
+	bcache_device_attach(&dc->disk, c);
 	bcache_device_link(&dc->disk, c, "bdev");
 	list_move(&dc->list, &c->cached_devs);
 	calc_cached_dev_sectors(c);
@@ -1120,12 +988,14 @@ static void flash_dev_flush(struct closure *cl)
 	continue_at(cl, flash_dev_free, system_wq);
 }
 
-static int flash_dev_run(struct cache_set *c, struct uuid_entry *u)
+static int flash_dev_run(struct cache_set *c, struct bch_inode_uuid *inode)
 {
 	struct bcache_device *d = kzalloc(sizeof(struct bcache_device),
 					  GFP_KERNEL);
 	if (!d)
 		return -ENOMEM;
+
+	d->inode = *inode;
 
 	closure_init(&d->cl, NULL);
 	set_closure_fn(&d->cl, flash_dev_flush, system_wq);
@@ -1135,8 +1005,8 @@ static int flash_dev_run(struct cache_set *c, struct uuid_entry *u)
 	if (bcache_device_init(d, block_bytes(c)))
 		goto err;
 
-	bcache_device_attach(d, c, u - c->uuids);
-	set_capacity(d->disk, u->sectors);
+	bcache_device_attach(d, c);
+	set_capacity(d->disk, d->inode.sectors);
 	bch_flash_dev_request_init(d);
 	add_disk(d->disk);
 
@@ -1151,42 +1021,56 @@ err:
 	return -ENOMEM;
 }
 
+static bool flash_dev_map_fn(struct btree_op *op, struct btree *b,
+			     struct bkey *k)
+{
+	struct bch_inode_uuid *inode;
+
+	if (KEY_INODE(k) >= UUID_INODE_MAX)
+		return true;
+
+	inode = (void *) k;
+	if (UUID_FLASH_ONLY(inode))
+		if (flash_dev_run(b->c, inode)) {
+			bch_cache_set_error(b->c, "can't bring up flash only volumes");
+			return true;
+		}
+
+	return false;
+}
+
 static int flash_devs_run(struct cache_set *c)
 {
-	int ret = 0;
+	struct btree_op op;
 
-	for (struct uuid_entry *u = c->uuids;
-	     u < c->uuids + c->nr_uuids && !ret;
-	     u++)
-		if (UUID_FLASH_ONLY(u))
-			ret = flash_dev_run(c, u);
+	bch_btree_op_init_stack(&op);
+	op.c = c;
 
-	return ret;
+	bch_btree_map(&op, BTREE_ID_INODES, &ZERO_KEY, flash_dev_map_fn);
+
+	return 0;
 }
 
 static int flash_dev_create(struct cache_set *c, uint64_t size)
 {
-	struct uuid_entry *u;
+	struct bch_inode_uuid inode;
 
 	if (test_bit(CACHE_SET_STOPPING, &c->flags))
 		return -EINTR;
 
-	u = uuid_find_empty(c);
-	if (!u) {
-		err_printk("Can't create volume, no room for UUID\n");
+	memset(&inode, 0, sizeof(inode));
+
+	get_random_bytes(inode.uuid, 16);
+	inode.first_reg = inode.last_reg = cpu_to_le32(get_seconds());
+	inode.sectors = size >> 9;
+	SET_UUID_FLASH_ONLY(&inode, 1);
+
+	if (bch_uuid_inode_write_new(c, &inode)) {
+		err_printk("Can't create volume, no free inodes\n");
 		return -EINVAL;
 	}
 
-	get_random_bytes(u->uuid, 16);
-	memset(u->label, 0, 32);
-	u->first_reg = u->last_reg = cpu_to_le32(get_seconds());
-
-	SET_UUID_FLASH_ONLY(u, 1);
-	u->sectors = size >> 9;
-
-	uuid_write(c);
-
-	return flash_dev_run(c, u);
+	return flash_dev_run(c, &inode);
 }
 
 /* Cache set */
@@ -1238,7 +1122,6 @@ static void cache_set_free(struct closure *cl)
 		if (ca)
 			kobject_put(&ca->kobj);
 
-	free_pages((unsigned long) c->uuids, ilog2(bucket_pages(c)));
 	free_pages((unsigned long) c->sort, ilog2(bucket_pages(c)));
 
 	kfree(c->fill_iter);
@@ -1248,7 +1131,6 @@ static void cache_set_free(struct closure *cl)
 		mempool_destroy(c->bio_meta);
 	if (c->search)
 		mempool_destroy(c->search);
-	kfree(c->devices);
 
 	mutex_lock(&register_lock);
 	list_del(&c->list);
@@ -1293,6 +1175,7 @@ static void __cache_set_unregister(struct closure *cl)
 {
 	struct cache_set *c = container_of(cl, struct cache_set, caching);
 	struct cached_dev *dc, *t;
+	struct bcache_device *d;
 
 	mutex_lock(&register_lock);
 
@@ -1300,9 +1183,15 @@ static void __cache_set_unregister(struct closure *cl)
 		list_for_each_entry_safe(dc, t, &c->cached_devs, list)
 			cached_dev_detach(dc);
 
-	for (size_t i = 0; i < c->nr_uuids; i++)
-		if (c->devices[i] && UUID_FLASH_ONLY(&c->uuids[i]))
-			bcache_device_stop(c->devices[i]);
+	spin_lock(&c->devices_lock);
+
+	for (d = RB_FIRST(&c->devices, struct bcache_device, node);
+	     d;
+	     d = RB_NEXT(d, node))
+		if (UUID_FLASH_ONLY(&d->inode))
+			bcache_device_stop(d);
+
+	spin_unlock(&c->devices_lock);
 
 	mutex_unlock(&register_lock);
 
@@ -1352,13 +1241,14 @@ struct cache_set *bch_cache_set_alloc(struct cache_sb *sb)
 	c->sb.last_mount	= sb->last_mount;
 	c->bucket_bits		= ilog2(sb->bucket_size);
 	c->block_bits		= ilog2(sb->block_size);
-	c->nr_uuids		= bucket_bytes(c) / sizeof(struct uuid_entry);
 
 	c->btree_pages		= c->sb.bucket_size / PAGE_SECTORS;
 	if (c->btree_pages > BTREE_MAX_PAGES)
 		c->btree_pages = max_t(int, c->btree_pages / 4,
 				       BTREE_MAX_PAGES);
 
+	c->devices = RB_ROOT;
+	spin_lock_init(&c->devices_lock);
 	init_waitqueue_head(&c->alloc_wait);
 	mutex_init(&c->bucket_lock);
 	mutex_init(&c->fill_lock);
@@ -1366,7 +1256,6 @@ struct cache_set *bch_cache_set_alloc(struct cache_sb *sb)
 	spin_lock_init(&c->btree_root_lock);
 	spin_lock_init(&c->sort_time_lock);
 	closure_init_unlocked(&c->sb_write);
-	closure_init_unlocked(&c->uuid_write);
 	spin_lock_init(&c->btree_read_time_lock);
 	bch_moving_init_cache_set(c);
 
@@ -1384,14 +1273,12 @@ struct cache_set *bch_cache_set_alloc(struct cache_sb *sb)
 	iter_size = (sb->bucket_size / sb->block_size + 1) *
 		sizeof(struct btree_iter_set);
 
-	if (!(c->devices = kzalloc(c->nr_uuids * sizeof(void *), GFP_KERNEL)) ||
-	    !(c->bio_meta = mempool_create_kmalloc_pool(2,
+	if (!(c->bio_meta = mempool_create_kmalloc_pool(2,
 				sizeof(struct bbio) + sizeof(struct bio_vec) *
 				bucket_pages(c))) ||
 	    !(c->bio_split = bioset_create(4, offsetof(struct bbio, bio))) ||
 	    !(c->fill_iter = kmalloc(iter_size, GFP_KERNEL)) ||
 	    !(c->sort = alloc_bucket_pages(GFP_KERNEL, c)) ||
-	    !(c->uuids = alloc_bucket_pages(GFP_KERNEL, c)) ||
 	    bch_journal_alloc(c) ||
 	    bch_btree_cache_alloc(c) ||
 	    bch_open_buckets_alloc(c))
@@ -1415,6 +1302,7 @@ static void run_cache_set(struct cache_set *c)
 	struct cached_dev *dc, *t;
 	struct cache *ca;
 	struct btree *b;
+	unsigned id;
 
 	struct btree_op op;
 	bch_btree_op_init_stack(&op);
@@ -1427,7 +1315,6 @@ static void run_cache_set(struct cache_set *c)
 		LIST_HEAD(journal);
 		struct bkey *k;
 		struct jset *j;
-		unsigned id;
 
 		err = "cannot allocate memory for journal";
 		if (bch_journal_read(c, &journal, &op))
@@ -1474,10 +1361,6 @@ static void run_cache_set(struct cache_set *c)
 			c->btree_roots[id] = b;
 		}
 
-		err = uuid_read(c, j, &op.cl);
-		if (err)
-			goto err;
-
 		err = "error in recovery";
 		if (bch_btree_check(c, &op))
 			goto err;
@@ -1507,8 +1390,13 @@ static void run_cache_set(struct cache_set *c)
 		 * If the uuids were in the old format we have to rewrite them
 		 * before the next journal entry is written:
 		 */
+#if 0
+		err = uuid_convert(c, j, &op.cl);
+		if (err)
+			goto err;
 		if (j->version < BCACHE_JSET_VERSION_UUID)
 			__uuid_write(c);
+#endif
 
 		bch_journal_replay(c, &journal, &op);
 	} else {
@@ -1548,20 +1436,18 @@ static void run_cache_set(struct cache_set *c)
 		atomic_dec(&c->prio_blocked);
 		wake_up(&c->alloc_wait);
 
-		err = "cannot allocate new UUID bucket";
-		if (__uuid_write(c))
-			goto err_unlock_gc;
+		for (id = 0; id < BTREE_ID_NR; id++) {
+			err = "cannot allocate new btree root";
+			b = bch_btree_node_alloc(c, 0, id, &op.cl);
+			if (IS_ERR_OR_NULL(b))
+				goto err_unlock_gc;
 
-		err = "cannot allocate new btree root";
-		b = bch_btree_node_alloc(c, 0, BTREE_ID_EXTENTS, &op.cl);
-		if (IS_ERR_OR_NULL(b))
-			goto err_unlock_gc;
+			bkey_copy_key(&b->key, &MAX_KEY);
+			bch_btree_write(b, true, &op);
 
-		bkey_copy_key(&b->key, &MAX_KEY);
-		bch_btree_write(b, true, &op);
-
-		bch_btree_set_root(b);
-		rw_unlock(true, b);
+			bch_btree_set_root(b);
+			rw_unlock(true, b);
+		}
 
 		/*
 		 * We don't want to write the first journal entry until

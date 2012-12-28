@@ -1861,6 +1861,8 @@ bool bch_btree_insert_keys(struct btree *b, struct btree_op *op,
 {
 	bool ret = false;
 	unsigned oldsize = bch_count_data(b);
+	unsigned prev = 0;
+	struct bkey prevk;
 
 	BUG_ON(!insert_lock(op, b));
 
@@ -1871,6 +1873,12 @@ bool bch_btree_insert_keys(struct btree *b, struct btree_op *op,
 		if (b->written + __set_blocks(i, i->keys + bkey_u64s(k), b->c)
 		    > btree_blocks(b))
 			break;
+
+		if (!b->level && prev)
+			BUG_ON(bkey_cmp(k, &prevk) < 0);
+
+		prevk = *k;
+		prev = 1;
 
 		if (bkey_cmp(k, &b->key) <= 0) {
 			bkey_put(b->c, k, b->level);

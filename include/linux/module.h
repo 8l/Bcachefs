@@ -17,6 +17,7 @@
 #include <linux/moduleparam.h>
 #include <linux/tracepoint.h>
 #include <linux/export.h>
+#include <linux/percpu-refcount.h>
 
 #include <linux/percpu.h>
 #include <asm/module.h>
@@ -206,19 +207,7 @@ enum module_state {
 	MODULE_STATE_UNFORMED,	/* Still setting it up. */
 };
 
-/**
- * struct module_ref - per cpu module reference counts
- * @incs: number of module get on this cpu
- * @decs: number of module put on this cpu
- *
- * We force an alignment on 8 or 16 bytes, so that alloc_percpu()
- * put @incs/@decs in same cache line, with no extra memory cost,
- * since alloc_percpu() is fine grained.
- */
-struct module_ref {
-	unsigned long incs;
-	unsigned long decs;
-} __attribute((aligned(2 * sizeof(unsigned long))));
+const char *module_state(struct module *mod);
 
 struct module
 {
@@ -361,13 +350,10 @@ struct module
 	/* What modules do I depend on? */
 	struct list_head target_list;
 
-	/* Who is waiting for us to be unloaded */
-	struct task_struct *waiter;
-
 	/* Destruction function. */
 	void (*exit)(void);
 
-	struct module_ref __percpu *refptr;
+	struct percpu_ref ref;
 #endif
 
 #ifdef CONFIG_CONSTRUCTORS
@@ -387,7 +373,7 @@ extern struct mutex module_mutex;
    (IDE & SCSI) require entry into the module during init.*/
 static inline int module_is_live(struct module *mod)
 {
-	return mod->state != MODULE_STATE_GOING;
+	return !percpu_ref_dead(&mod->ref);
 }
 
 struct module *__module_text_address(unsigned long addr);
@@ -451,7 +437,11 @@ extern void __module_put_and_exit(struct module *mod, long code)
 #define module_put_and_exit(code) __module_put_and_exit(THIS_MODULE, code);
 
 #ifdef CONFIG_MODULE_UNLOAD
-unsigned long module_refcount(struct module *mod);
+static inline unsigned long module_refcount(struct module *mod)
+{
+	return percpu_ref_count(&mod->ref) - 1;
+}
+
 void __symbol_put(const char *symbol);
 #define symbol_put(x) __symbol_put(VMLINUX_SYMBOL_STR(x))
 void symbol_put_addr(void *addr);

@@ -625,21 +625,15 @@ static char last_unloaded_module[MODULE_NAME_LEN+1];
 EXPORT_TRACEPOINT_SYMBOL(module_get);
 
 /* Init the unload section of the module. */
-static int module_unload_init(struct module *mod)
+static void module_unload_init(struct module *mod)
 {
-	mod->refptr = alloc_percpu(struct module_ref);
-	if (!mod->refptr)
-		return -ENOMEM;
+	percpu_ref_init(&mod->ref);
 
 	INIT_LIST_HEAD(&mod->source_list);
 	INIT_LIST_HEAD(&mod->target_list);
 
 	/* Hold reference count during initialization. */
-	__this_cpu_write(mod->refptr->incs, 1);
-	/* Backwards compatibility macros put refcount during init. */
-	mod->waiter = current;
-
-	return 0;
+	__module_get(mod);
 }
 
 /* Does a already use b? */
@@ -719,8 +713,6 @@ static void module_unload_free(struct module *mod)
 		kfree(use);
 	}
 	mutex_unlock(&module_mutex);
-
-	free_percpu(mod->refptr);
 }
 
 #ifdef CONFIG_MODULE_FORCE_UNLOAD
@@ -745,6 +737,15 @@ struct stopref
 	int *forced;
 };
 
+static void stop_module(struct module *mod)
+{
+	/* Mark it as dying, drop base ref */
+	if (percpu_ref_kill(&mod->ref))
+		module_put(mod);
+	else
+		WARN(1, "initial module ref already dropped");
+}
+
 /* Whole machine is stopped with interrupts off when this runs. */
 static int __try_stop_module(void *_sref)
 {
@@ -756,8 +757,7 @@ static int __try_stop_module(void *_sref)
 			return -EWOULDBLOCK;
 	}
 
-	/* Mark it as dying. */
-	sref->mod->state = MODULE_STATE_GOING;
+	stop_module(sref->mod);
 	return 0;
 }
 
@@ -769,56 +769,13 @@ static int try_stop_module(struct module *mod, int flags, int *forced)
 		return stop_machine(__try_stop_module, &sref, NULL);
 	} else {
 		/* We don't need to stop the machine for this. */
-		mod->state = MODULE_STATE_GOING;
-		synchronize_sched();
+		stop_module(mod);
 		return 0;
 	}
 }
 
-unsigned long module_refcount(struct module *mod)
-{
-	unsigned long incs = 0, decs = 0;
-	int cpu;
-
-	for_each_possible_cpu(cpu)
-		decs += per_cpu_ptr(mod->refptr, cpu)->decs;
-	/*
-	 * ensure the incs are added up after the decs.
-	 * module_put ensures incs are visible before decs with smp_wmb.
-	 *
-	 * This 2-count scheme avoids the situation where the refcount
-	 * for CPU0 is read, then CPU0 increments the module refcount,
-	 * then CPU1 drops that refcount, then the refcount for CPU1 is
-	 * read. We would record a decrement but not its corresponding
-	 * increment so we would see a low count (disaster).
-	 *
-	 * Rare situation? But module_refcount can be preempted, and we
-	 * might be tallying up 4096+ CPUs. So it is not impossible.
-	 */
-	smp_rmb();
-	for_each_possible_cpu(cpu)
-		incs += per_cpu_ptr(mod->refptr, cpu)->incs;
-	return incs - decs;
-}
-EXPORT_SYMBOL(module_refcount);
-
 /* This exists whether we can unload or not */
 static void free_module(struct module *mod);
-
-static void wait_for_zero_refcount(struct module *mod)
-{
-	/* Since we might sleep for some time, release the mutex first */
-	mutex_unlock(&module_mutex);
-	for (;;) {
-		pr_debug("Looking at refcount...\n");
-		set_current_state(TASK_UNINTERRUPTIBLE);
-		if (module_refcount(mod) == 0)
-			break;
-		schedule();
-	}
-	current->state = TASK_RUNNING;
-	mutex_lock(&module_mutex);
-}
 
 SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 		unsigned int, flags)
@@ -850,7 +807,7 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 	}
 
 	/* Doing init or already dying? */
-	if (mod->state != MODULE_STATE_LIVE) {
+	if (mod->state != MODULE_STATE_LIVE || !module_is_live(mod)) {
 		/* FIXME: if (force), slam module count and wake up
                    waiter --RR */
 		pr_debug("%s already dying\n", mod->name);
@@ -868,19 +825,17 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 		}
 	}
 
-	/* Set this up before setting mod->state */
-	mod->waiter = current;
-
 	/* Stop the machine so refcounts can't move and disable module. */
 	ret = try_stop_module(mod, flags, &forced);
 	if (ret != 0)
 		goto out;
 
-	/* Never wait if forced. */
-	if (!forced && module_refcount(mod) != 0)
-		wait_for_zero_refcount(mod);
-
 	mutex_unlock(&module_mutex);
+
+	/* Never wait if forced. */
+	if (!forced)
+		wait_event(module_wq, !percpu_ref_count(&mod->ref));
+
 	/* Final destruction now no one is using it. */
 	if (mod->exit != NULL)
 		mod->exit();
@@ -962,45 +917,29 @@ static struct module_attribute modinfo_refcnt =
 void __module_get(struct module *module)
 {
 	if (module) {
-		preempt_disable();
-		__this_cpu_inc(module->refptr->incs);
 		trace_module_get(module, _RET_IP_);
-		preempt_enable();
+		percpu_ref_get(&module->ref);
 	}
 }
 EXPORT_SYMBOL(__module_get);
 
 bool try_module_get(struct module *module)
 {
-	bool ret = true;
-
 	if (module) {
-		preempt_disable();
-
-		if (likely(module_is_live(module))) {
-			__this_cpu_inc(module->refptr->incs);
-			trace_module_get(module, _RET_IP_);
-		} else
-			ret = false;
-
-		preempt_enable();
-	}
-	return ret;
+		trace_module_get(module, _RET_IP_);
+		return percpu_ref_tryget(&module->ref);
+	} else
+		return true;
 }
 EXPORT_SYMBOL(try_module_get);
 
 void module_put(struct module *module)
 {
 	if (module) {
-		preempt_disable();
-		smp_wmb(); /* see comment in module_refcount */
-		__this_cpu_inc(module->refptr->decs);
-
 		trace_module_put(module, _RET_IP_);
-		/* Maybe they're waiting for us to drop reference? */
-		if (unlikely(!module_is_live(module)))
-			wake_up_process(module->waiter);
-		preempt_enable();
+
+		if (percpu_ref_put(&module->ref))
+			wake_up_all(&module_wq);
 	}
 }
 EXPORT_SYMBOL(module_put);
@@ -1048,25 +987,27 @@ static size_t module_flags_taint(struct module *mod, char *buf)
 	return l;
 }
 
+const char *module_state(struct module *mod)
+{
+	switch (mod->state) {
+	case MODULE_STATE_LIVE:
+		if (module_is_live(mod))
+			return "live";
+		else
+			return "going";
+	case MODULE_STATE_COMING:
+		return "coming";
+	case MODULE_STATE_UNFORMED:
+		return "unformed";
+	default:
+		return "unknown";
+	}
+}
+
 static ssize_t show_initstate(struct module_attribute *mattr,
 			      struct module_kobject *mk, char *buffer)
 {
-	const char *state = "unknown";
-
-	switch (mk->mod->state) {
-	case MODULE_STATE_LIVE:
-		state = "live";
-		break;
-	case MODULE_STATE_COMING:
-		state = "coming";
-		break;
-	case MODULE_STATE_GOING:
-		state = "going";
-		break;
-	default:
-		BUG();
-	}
-	return sprintf(buffer, "%s\n", state);
+	return sprintf(buffer, "%s\n", module_state(mk->mod));
 }
 
 static struct module_attribute modinfo_initstate =
@@ -3015,8 +2956,7 @@ static bool finished_loading(const char *name)
 
 	mutex_lock(&module_mutex);
 	mod = find_module_all(name, true);
-	ret = !mod || mod->state == MODULE_STATE_LIVE
-		|| mod->state == MODULE_STATE_GOING;
+	ret = !mod || mod->state == MODULE_STATE_LIVE;
 	mutex_unlock(&module_mutex);
 
 	return ret;
@@ -3066,8 +3006,7 @@ static int do_init_module(struct module *mod)
 	if (ret < 0) {
 		/* Init routine failed: abort.  Try to protect us from
                    buggy refcounters. */
-		mod->state = MODULE_STATE_GOING;
-		synchronize_sched();
+		stop_module(mod);
 		module_put(mod);
 		blocking_notifier_call_chain(&module_notify_list,
 					     MODULE_STATE_GOING, mod);
@@ -3238,9 +3177,7 @@ static int load_module(struct load_info *info, const char __user *uargs,
 #endif
 
 	/* Now module is in final location, initialize linked lists, etc. */
-	err = module_unload_init(mod);
-	if (err)
-		goto unlink_mod;
+	module_unload_init(mod);
 
 	/* Now we've got everything in the final locations, we can
 	 * find optional sections. */
@@ -3316,7 +3253,6 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	free_modinfo(mod);
  free_unload:
 	module_unload_free(mod);
- unlink_mod:
 	mutex_lock(&module_mutex);
 	/* Unlink carefully: kallsyms could be walking list. */
 	list_del_rcu(&mod->list);
@@ -3607,12 +3543,12 @@ static char *module_flags(struct module *mod, char *buf)
 
 	BUG_ON(mod->state == MODULE_STATE_UNFORMED);
 	if (mod->taints ||
-	    mod->state == MODULE_STATE_GOING ||
+	    !module_is_live(mod) ||
 	    mod->state == MODULE_STATE_COMING) {
 		buf[bx++] = '(';
 		bx += module_flags_taint(mod, buf + bx);
 		/* Show a - for module-is-being-unloaded */
-		if (mod->state == MODULE_STATE_GOING)
+		if (!module_is_live(mod))
 			buf[bx++] = '-';
 		/* Show a + for module-is-being-loaded */
 		if (mod->state == MODULE_STATE_COMING)
@@ -3656,10 +3592,7 @@ static int m_show(struct seq_file *m, void *p)
 	print_unload_info(m, mod);
 
 	/* Informative for users. */
-	seq_printf(m, " %s",
-		   mod->state == MODULE_STATE_GOING ? "Unloading":
-		   mod->state == MODULE_STATE_COMING ? "Loading":
-		   "Live");
+	seq_printf(m, " %s", module_state(mod));
 	/* Used by oprofile and other similar tools. */
 	seq_printf(m, " 0x%pK", mod->module_core);
 

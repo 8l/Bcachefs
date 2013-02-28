@@ -1740,6 +1740,11 @@ generic_make_request_checks(struct bio *bio)
 		goto end_io;
 	}
 
+	if (bio_cancelled(bio)) {
+		err = -ECANCELED;
+		goto end_io;
+	}
+
 	/*
 	 * Various block parts want %current->io_context and lazy ioc
 	 * allocation ends up trading a lot of pain for a small amount of
@@ -2093,6 +2098,12 @@ struct request *blk_peek_request(struct request_queue *q)
 			trace_block_rq_issue(q, rq);
 		}
 
+		if (rq->bio && !rq->bio->bi_next && bio_cancelled(rq->bio)) {
+			blk_start_request(rq);
+			__blk_end_request_all(rq, -ECANCELED);
+			continue;
+		}
+
 		if (!q->boundary_rq || q->boundary_rq == rq) {
 			q->end_sector = rq_end_sector(rq);
 			q->boundary_rq = NULL;
@@ -2278,6 +2289,8 @@ bool blk_update_request(struct request *req, int error, unsigned int nr_bytes,
 		char *error_type;
 
 		switch (error) {
+		case -ECANCELED:
+			goto noerr;
 		case -ENOLINK:
 			error_type = "recoverable transport";
 			break;
@@ -2298,6 +2311,7 @@ bool blk_update_request(struct request *req, int error, unsigned int nr_bytes,
 				   (unsigned long long)blk_rq_pos(req));
 
 	}
+noerr:
 
 	blk_account_io_completion(req, nr_bytes);
 

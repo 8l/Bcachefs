@@ -272,8 +272,7 @@ void kiocb_set_cancel_fn(struct kiocb *req, kiocb_cancel_fn *cancel)
 }
 EXPORT_SYMBOL(kiocb_set_cancel_fn);
 
-static int kiocb_cancel(struct kioctx *ctx, struct kiocb *kiocb,
-			struct io_event *res)
+static int kiocb_cancel(struct kioctx *ctx, struct kiocb *kiocb)
 {
 	kiocb_cancel_fn *old, *cancel;
 	int ret = -EINVAL;
@@ -295,12 +294,10 @@ static int kiocb_cancel(struct kioctx *ctx, struct kiocb *kiocb,
 	atomic_inc(&kiocb->ki_users);
 	spin_unlock_irq(&ctx->ctx_lock);
 
-	memset(res, 0, sizeof(*res));
-	res->obj = (u64)(unsigned long)kiocb->ki_obj.user;
-	res->data = kiocb->ki_user_data;
-	ret = cancel(kiocb, res);
+	ret = cancel(kiocb);
 
 	spin_lock_irq(&ctx->ctx_lock);
+	aio_put_req(kiocb);
 
 	return ret;
 }
@@ -321,7 +318,6 @@ static void free_ioctx_rcu(struct rcu_head *head)
 static void free_ioctx(struct kioctx *ctx)
 {
 	struct aio_ring *ring;
-	struct io_event res;
 	struct kiocb *req;
 	unsigned cpu, head, avail;
 
@@ -332,7 +328,7 @@ static void free_ioctx(struct kioctx *ctx)
 				       struct kiocb, ki_list);
 
 		list_del_init(&req->ki_list);
-		kiocb_cancel(ctx, req, &res);
+		kiocb_cancel(ctx, req);
 	}
 
 	spin_unlock_irq(&ctx->ctx_lock);
@@ -1431,7 +1427,6 @@ static struct kiocb *lookup_kiocb(struct kioctx *ctx, struct iocb __user *iocb,
 SYSCALL_DEFINE3(io_cancel, aio_context_t, ctx_id, struct iocb __user *, iocb,
 		struct io_event __user *, result)
 {
-	struct io_event res;
 	struct kioctx *ctx;
 	struct kiocb *kiocb;
 	u32 key;
@@ -1449,18 +1444,19 @@ SYSCALL_DEFINE3(io_cancel, aio_context_t, ctx_id, struct iocb __user *, iocb,
 
 	kiocb = lookup_kiocb(ctx, iocb, key);
 	if (kiocb)
-		ret = kiocb_cancel(ctx, kiocb, &res);
+		ret = kiocb_cancel(ctx, kiocb);
 	else
 		ret = -EINVAL;
 
 	spin_unlock_irq(&ctx->ctx_lock);
 
 	if (!ret) {
-		/* Cancellation succeeded -- copy the result
-		 * into the user's buffer.
+		/*
+		 * The result argument is no longer used - the io_event is
+		 * always delivered via the ring buffer. -EINPROGRESS indicates
+		 * cancellation is progress:
 		 */
-		if (copy_to_user(result, &res, sizeof(res)))
-			ret = -EFAULT;
+		ret = -EINPROGRESS;
 	}
 
 	put_ioctx(ctx);

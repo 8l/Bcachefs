@@ -271,7 +271,7 @@ static ssize_t dio_complete(struct dio *dio, loff_t offset, ssize_t ret, bool is
 	return ret;
 }
 
-static int dio_bio_complete(struct dio *dio, struct bio *bio);
+static void dio_bio_complete(struct dio *dio, struct bio *bio);
 /*
  * Asynchronous IO callback. 
  */
@@ -280,6 +280,9 @@ static void dio_bio_end_aio(struct bio *bio, int error, struct batch_complete *b
 	struct dio *dio = bio->bi_private;
 	unsigned long remaining;
 	unsigned long flags;
+
+	if (error)
+		dio->io_error = error;
 
 	/* cleanup the bio */
 	dio_bio_complete(dio, bio);
@@ -307,6 +310,9 @@ static void dio_bio_end_io(struct bio *bio, int error)
 {
 	struct dio *dio = bio->bi_private;
 	unsigned long flags;
+
+	if (error)
+		dio->io_error = error;
 
 	spin_lock_irqsave(&dio->bio_lock, flags);
 	bio->bi_private = dio->bio_list;
@@ -437,14 +443,10 @@ static struct bio *dio_await_one(struct dio *dio)
 /*
  * Process one completed BIO.  No locks are held.
  */
-static int dio_bio_complete(struct dio *dio, struct bio *bio)
+static void dio_bio_complete(struct dio *dio, struct bio *bio)
 {
-	const int uptodate = test_bit(BIO_UPTODATE, &bio->bi_flags);
 	struct bio_vec *bvec = bio->bi_io_vec;
 	int page_no;
-
-	if (!uptodate)
-		dio->io_error = -EIO;
 
 	if (dio->is_async && dio->rw == READ) {
 		bio_check_pages_dirty(bio);	/* transfers ownership */
@@ -458,7 +460,6 @@ static int dio_bio_complete(struct dio *dio, struct bio *bio)
 		}
 		bio_put(bio);
 	}
-	return uptodate ? 0 : -EIO;
 }
 
 /*
@@ -485,27 +486,21 @@ static void dio_await_completion(struct dio *dio)
  *
  * This also helps to limit the peak amount of pinned userspace memory.
  */
-static inline int dio_bio_reap(struct dio *dio, struct dio_submit *sdio)
+static inline void dio_bio_reap(struct dio *dio, struct dio_submit *sdio)
 {
-	int ret = 0;
-
 	if (sdio->reap_counter++ >= 64) {
 		while (dio->bio_list) {
 			unsigned long flags;
 			struct bio *bio;
-			int ret2;
 
 			spin_lock_irqsave(&dio->bio_lock, flags);
 			bio = dio->bio_list;
 			dio->bio_list = bio->bi_private;
 			spin_unlock_irqrestore(&dio->bio_lock, flags);
-			ret2 = dio_bio_complete(dio, bio);
-			if (ret == 0)
-				ret = ret2;
+			dio_bio_complete(dio, bio);
 		}
 		sdio->reap_counter = 0;
 	}
-	return ret;
 }
 
 /*
@@ -590,19 +585,20 @@ static inline int dio_new_bio(struct dio *dio, struct dio_submit *sdio,
 		sector_t start_sector, struct buffer_head *map_bh)
 {
 	sector_t sector;
-	int ret, nr_pages;
+	int nr_pages;
 
-	ret = dio_bio_reap(dio, sdio);
-	if (ret)
-		goto out;
+	dio_bio_reap(dio, sdio);
+
+	if (dio->io_error)
+		return dio->io_error;
+
 	sector = start_sector << (sdio->blkbits - 9);
 	nr_pages = min(sdio->pages_in_io, bio_get_nr_vecs(map_bh->b_bdev));
 	nr_pages = min(nr_pages, BIO_MAX_PAGES);
 	BUG_ON(nr_pages <= 0);
 	dio_bio_alloc(dio, sdio, map_bh->b_bdev, sector, nr_pages);
 	sdio->boundary = 0;
-out:
-	return ret;
+	return 0;
 }
 
 /*

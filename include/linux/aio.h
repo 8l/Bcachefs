@@ -33,8 +33,6 @@ typedef int (kiocb_cancel_fn)(struct kiocb *);
 struct kiocb {
 	struct rb_node		ki_node;
 
-	atomic_t		ki_users;
-
 	struct file		*ki_filp;
 	struct kioctx		*ki_ctx;	/* NULL for sync ops */
 	kiocb_cancel_fn		*ki_cancel;
@@ -71,7 +69,6 @@ static inline bool is_sync_kiocb(struct kiocb *kiocb)
 static inline void init_sync_kiocb(struct kiocb *kiocb, struct file *filp)
 {
 	*kiocb = (struct kiocb) {
-			.ki_users = ATOMIC_INIT(1),
 			.ki_ctx = NULL,
 			.ki_filp = filp,
 			.ki_obj.tsk = current,
@@ -81,7 +78,6 @@ static inline void init_sync_kiocb(struct kiocb *kiocb, struct file *filp)
 /* prototypes */
 #ifdef CONFIG_AIO
 extern ssize_t wait_on_sync_kiocb(struct kiocb *iocb);
-extern void aio_put_req(struct kiocb *iocb);
 extern void batch_complete_aio(struct batch_complete *batch);
 extern void aio_complete_batch(struct kiocb *iocb, long res, long res2,
 			       struct batch_complete *batch);
@@ -92,7 +88,6 @@ extern long do_io_submit(aio_context_t ctx_id, long nr,
 void kiocb_set_cancel_fn(struct kiocb *req, kiocb_cancel_fn *cancel);
 #else
 static inline ssize_t wait_on_sync_kiocb(struct kiocb *iocb) { return 0; }
-static inline void aio_put_req(struct kiocb *iocb) { }
 
 static inline void batch_complete_aio(struct batch_complete *batch) { }
 static inline void aio_complete_batch(struct kiocb *iocb, long res, long res2,

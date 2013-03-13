@@ -289,9 +289,9 @@ ENDPROC(native_usergs_sysret64)
 #ifdef CONFIG_TRACE_IRQFLAGS
 	bt   $9,EFLAGS-\offset(%rsp)	/* interrupts off? */
 	jnc  1f
-	TRACE_IRQS_ON
 1:
 #endif
+	TRACE_IRQS_ON
 .endm
 
 /*

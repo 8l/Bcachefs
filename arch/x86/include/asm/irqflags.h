@@ -191,11 +191,17 @@ static inline int arch_irqs_disabled(void)
 #endif
 
 #ifdef CONFIG_TRACE_IRQFLAGS
-#  define TRACE_IRQS_ON		call trace_hardirqs_on_thunk;
-#  define TRACE_IRQS_OFF	call trace_hardirqs_off_thunk;
+#  define TRACE_IRQS_ON				\
+	call trace_hardirqs_on_thunk;		\
+	movl $0,PER_CPU_VAR(irq_disable_count);
+#  define TRACE_IRQS_OFF			\
+	movl $1,PER_CPU_VAR(irq_disable_count);	\
+	call trace_hardirqs_off_thunk;
 #else
-#  define TRACE_IRQS_ON
-#  define TRACE_IRQS_OFF
+#  define TRACE_IRQS_ON				\
+	movl $0,PER_CPU_VAR(irq_disable_count);
+#  define TRACE_IRQS_OFF			\
+	movl $1,PER_CPU_VAR(irq_disable_count);
 #endif
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 #  define LOCKDEP_SYS_EXIT	ARCH_LOCKDEP_SYS_EXIT

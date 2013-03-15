@@ -703,19 +703,23 @@ static inline void kioctx_ring_unlock(struct kioctx *ctx, unsigned tail)
 
 	ctx->tail = tail;
 
-	if (waitqueue_active(&ctx->wait))
-		wake_up(&ctx->wait);
+	if (waitqueue_active(&ctx->wait)) {
+		/* Irqs are already disabled */
+		spin_lock(&ctx->wait.lock);
+		wake_up_locked(&ctx->wait);
+		spin_unlock(&ctx->wait.lock);
+	}
 }
 
 void batch_complete_aio(struct batch_complete *batch)
 {
 	struct kioctx *ctx = NULL;
-	struct eventfd_ctx *eventfd = NULL;
 	struct rb_node *n;
 	unsigned long flags;
 	unsigned tail = 0;
 
-	if (RB_EMPTY_ROOT(&batch->kiocb))
+	n = rb_first(&batch->kiocb);
+	if (!n)
 		return;
 
 	/*
@@ -724,6 +728,23 @@ void batch_complete_aio(struct batch_complete *batch)
 	 */
 	rcu_read_lock();
 	local_irq_save(flags);
+
+	for (; n; n = rb_next(n)) {
+		struct kiocb *req = container_of(n, struct kiocb, ki_node);
+
+		if (req->ki_ctx != ctx) {
+			kioctx_ring_unlock(ctx, tail);
+
+			ctx = req->ki_ctx;
+			tail = kioctx_ring_lock(ctx);
+		}
+
+		tail = kioctx_ring_put(ctx, req, tail);
+	}
+
+	kioctx_ring_unlock(ctx, tail);
+	local_irq_restore(flags);
+	rcu_read_unlock();
 
 	n = rb_first(&batch->kiocb);
 	while (n) {
@@ -739,43 +760,10 @@ void batch_complete_aio(struct batch_complete *batch)
 			n = rb_parent(n);
 		}
 
-		if (unlikely(req->ki_eventfd != eventfd)) {
-			if (eventfd) {
-				/* Make event visible */
-				kioctx_ring_unlock(ctx, tail);
-				ctx = NULL;
+		if (req->ki_eventfd)
+			eventfd_signal(req->ki_eventfd, 1);
 
-				eventfd_signal(eventfd, 1);
-				eventfd_ctx_put(eventfd);
-			}
-
-			eventfd = req->ki_eventfd;
-			req->ki_eventfd = NULL;
-		}
-
-		if (unlikely(req->ki_ctx != ctx)) {
-			kioctx_ring_unlock(ctx, tail);
-
-			ctx = req->ki_ctx;
-			tail = kioctx_ring_lock(ctx);
-		}
-
-		tail = kioctx_ring_put(ctx, req, tail);
 		kiocb_free(req);
-	}
-
-	kioctx_ring_unlock(ctx, tail);
-	local_irq_restore(flags);
-	rcu_read_unlock();
-
-	/*
-	 * Check if the user asked us to deliver the result through an
-	 * eventfd. The eventfd_signal() function is safe to be called
-	 * from IRQ context.
-	 */
-	if (eventfd) {
-		eventfd_signal(eventfd, 1);
-		eventfd_ctx_put(eventfd);
 	}
 }
 EXPORT_SYMBOL(batch_complete_aio);

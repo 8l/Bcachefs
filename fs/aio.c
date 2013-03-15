@@ -121,21 +121,14 @@ struct kioctx {
 	struct {
 		struct mutex	ring_lock;
 		wait_queue_head_t wait;
-
-		/*
-		 * Copy of the real tail - to reduce cacheline bouncing. Updated
-		 * by aio_complete() whenever it updates the real tail.
-		 */
-		unsigned	shadow_tail;
 	} ____cacheline_aligned_in_smp;
 
 	struct {
 		/*
 		 * This is the canonical copy of the tail pointer, updated by
 		 * aio_complete(). But aio_complete() also uses it as a lock, so
-		 * other code can't use it; aio_complete() keeps shadow_tail in
-		 * sync with the real value of the tail pointer for other code
-		 * to use.
+		 * other code can't use it; for consuming events ring->tail
+		 * should be used.
 		 */
 		unsigned	tail;
 	} ____cacheline_aligned_in_smp;
@@ -310,7 +303,8 @@ static void free_ioctx(struct kioctx *ctx)
 {
 	struct aio_ring *ring;
 	struct kiocb *req;
-	unsigned cpu, head, avail;
+	unsigned cpu, avail;
+	DEFINE_WAIT(wait);
 
 	spin_lock_irq(&ctx->ctx_lock);
 
@@ -331,22 +325,24 @@ static void free_ioctx(struct kioctx *ctx)
 		kcpu->reqs_available = 0;
 	}
 
-	ring = kmap_atomic(ctx->ring_pages[0]);
-	head = ring->head;
-	kunmap_atomic(ring);
+	while (1) {
+		prepare_to_wait(&ctx->wait, &wait, TASK_UNINTERRUPTIBLE);
 
-	while (atomic_read(&ctx->reqs_available) < ctx->nr_events - 1) {
-		wait_event(ctx->wait,
-			   (head != ctx->shadow_tail) ||
-			   (atomic_read(&ctx->reqs_available) >= ctx->nr_events - 1));
-
-		avail = (head <= ctx->shadow_tail
-			 ? ctx->shadow_tail : ctx->nr_events) - head;
+		ring = kmap_atomic(ctx->ring_pages[0]);
+		avail = (ring->head <= ring->tail)
+			 ? ring->tail - ring->head
+			 : ctx->nr_events - ring->head + ring->tail;
 
 		atomic_add(avail, &ctx->reqs_available);
-		head += avail;
-		head %= ctx->nr_events;
+		ring->head = ring->tail;
+		kunmap_atomic(ring);
+
+		if (atomic_read(&ctx->reqs_available) >= ctx->nr_events - 1)
+			break;
+
+		schedule();
 	}
+	finish_wait(&ctx->wait, &wait);
 
 	WARN_ON(atomic_read(&ctx->reqs_available) > ctx->nr_events - 1);
 
@@ -694,10 +690,8 @@ static inline void kioctx_ring_unlock(struct kioctx *ctx, unsigned tail)
 	if (!ctx)
 		return;
 
-	smp_wmb();
 	/* make event visible before updating tail */
-
-	ctx->shadow_tail = tail;
+	smp_wmb();
 
 	ring = kmap_atomic(ctx->ring_pages[0]);
 	ring->tail = tail;
@@ -856,7 +850,7 @@ static long aio_read_events_ring(struct kioctx *ctx,
 				 struct io_event __user *event, long nr)
 {
 	struct aio_ring *ring;
-	unsigned head, pos;
+	unsigned head, tail, pos;
 	long ret = 0;
 	int copy_ret;
 
@@ -864,20 +858,21 @@ static long aio_read_events_ring(struct kioctx *ctx,
 
 	ring = kmap_atomic(ctx->ring_pages[0]);
 	head = ring->head;
+	tail = ring->tail;
 	kunmap_atomic(ring);
 
-	pr_debug("h%u t%u m%u\n", head, ctx->shadow_tail, ctx->nr_events);
+	pr_debug("h%u t%u m%u\n", head, tail, ctx->nr_events);
 
-	if (head == ctx->shadow_tail)
+	if (head == tail)
 		goto out;
 
 	while (ret < nr) {
-		long avail = (head <= ctx->shadow_tail
-			      ? ctx->shadow_tail : ctx->nr_events) - head;
+		long avail = (head <= tail
+			      ? tail : ctx->nr_events) - head;
 		struct io_event *ev;
 		struct page *page;
 
-		if (head == ctx->shadow_tail)
+		if (head == tail)
 			break;
 
 		avail = min(avail, nr - ret);
@@ -907,7 +902,7 @@ static long aio_read_events_ring(struct kioctx *ctx,
 	kunmap_atomic(ring);
 	flush_dcache_page(ctx->ring_pages[0]);
 
-	pr_debug("%li  h%u t%u\n", ret, head, ctx->shadow_tail);
+	pr_debug("%li  h%u t%u\n", ret, head, tail);
 
 	put_reqs_available(ctx, ret);
 out:

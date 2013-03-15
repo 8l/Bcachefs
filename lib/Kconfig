@@ -404,4 +404,7 @@ config OID_REGISTRY
 	help
 	  Enable fast lookup object identifier registry.
 
+config PERCPU_TAG
+	bool
+
 endmenu

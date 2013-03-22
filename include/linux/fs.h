@@ -310,15 +310,13 @@ int iov_iter_fault_in_readable(struct iov_iter *i, size_t bytes);
 size_t iov_iter_single_seg_count(const struct iov_iter *i);
 
 static inline void iov_iter_init(struct iov_iter *i,
-			const struct iovec *iov, unsigned long nr_segs,
-			size_t count, size_t written)
+				 const struct iovec *iov, unsigned long nr_segs,
+				 size_t count)
 {
 	i->iov = iov;
 	i->nr_segs = nr_segs;
 	i->iov_offset = 0;
-	i->count = count + written;
-
-	iov_iter_advance(i, written);
+	i->count = count;
 }
 
 static inline size_t iov_iter_count(struct iov_iter *i)

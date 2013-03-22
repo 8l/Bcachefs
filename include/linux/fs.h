@@ -293,6 +293,7 @@ struct iov_iter {
 	unsigned long nr_segs;
 	size_t iov_offset;
 	size_t count;
+	loff_t offset;
 };
 
 size_t __iov_iter_copy_to_user_atomic(struct page *page,
@@ -311,12 +312,13 @@ size_t iov_iter_single_seg_count(const struct iov_iter *i);
 
 static inline void iov_iter_init(struct iov_iter *i,
 				 const struct iovec *iov, unsigned long nr_segs,
-				 size_t count)
+				 size_t count, loff_t offset)
 {
 	i->iov = iov;
 	i->nr_segs = nr_segs;
 	i->iov_offset = 0;
 	i->count = count;
+	i->offset = offset;
 }
 
 static inline size_t iov_iter_count(struct iov_iter *i)

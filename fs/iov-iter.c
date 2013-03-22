@@ -180,35 +180,25 @@ void iov_iter_advance(struct iov_iter *i, size_t bytes)
 {
 	BUG_ON(i->count < bytes);
 
-	if (likely(i->nr_segs == 1)) {
-		i->iov_offset += bytes;
-		i->count -= bytes;
-	} else {
-		const struct iovec *iov = i->iov;
-		size_t base = i->iov_offset;
-		unsigned long nr_segs = i->nr_segs;
+	i->count -= bytes;
+	i->offset += bytes;
 
-		/*
-		 * The !iov->iov_len check ensures we skip over unlikely
-		 * zero-length segments (without overruning the iovec).
-		 */
-		while (bytes || unlikely(i->count && !iov->iov_len)) {
-			int copy;
+	while (bytes) {
+		size_t len;
 
-			copy = min(bytes, iov->iov_len - base);
-			BUG_ON(!i->count || i->count < copy);
-			i->count -= copy;
-			bytes -= copy;
-			base += copy;
-			if (iov->iov_len == base) {
-				iov++;
-				nr_segs--;
-				base = 0;
-			}
+		BUG_ON(!i->nr_segs);
+
+		len = i->iov->iov_len - i->iov_offset;
+
+		if (bytes < len) {
+			i->iov_offset += bytes;
+			bytes = 0;
+		} else {
+			bytes -= len;
+			i->iov++;
+			i->nr_segs--;
+			i->iov_offset = 0;
 		}
-		i->iov = iov;
-		i->iov_offset = base;
-		i->nr_segs = nr_segs;
 	}
 }
 EXPORT_SYMBOL(iov_iter_advance);

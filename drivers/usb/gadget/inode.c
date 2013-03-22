@@ -522,6 +522,7 @@ struct kiocb_priv {
 	const struct iovec	*iv;
 	unsigned long		nr_segs;
 	unsigned		actual;
+	int			status;
 };
 
 static int ep_aio_cancel(struct kiocb *iocb)
@@ -577,14 +578,26 @@ static void ep_user_copy_worker(struct work_struct *work)
 	struct kiocb_priv *priv = container_of(work, struct kiocb_priv, work);
 	struct mm_struct *mm = priv->mm;
 	struct kiocb *iocb = priv->iocb;
-	size_t ret;
 
-	use_mm(mm);
-	ret = ep_copy_to_user(priv);
-	unuse_mm(mm);
+	if (priv->iv && priv->actual) {
+		size_t ret;
 
-	/* completing the iocb can drop the ctx and mm, don't touch mm after */
-	aio_complete(iocb, ret, ret);
+		use_mm(mm);
+		ret = ep_copy_to_user(priv);
+		unuse_mm(mm);
+
+		if (!priv->status)
+			priv->status = ret;
+		/*
+		 * completing the iocb can drop the ctx and mm, don't touch mm
+		 * after
+		 */
+	}
+
+
+	/* aio_complete() reports bytes-transferred _and_ faults */
+	aio_complete(iocb, priv->actual ? priv->actual : priv->status,
+		     priv->status);
 
 	kfree(priv->buf);
 	kfree(priv);
@@ -596,36 +609,18 @@ static void ep_aio_complete(struct usb_ep *ep, struct usb_request *req)
 	struct kiocb_priv	*priv = iocb->private;
 	struct ep_data		*epdata = priv->epdata;
 
-	/* lock against disconnect (and ideally, cancel) */
-	spin_lock(&epdata->dev->lock);
-	priv->req = NULL;
-	priv->epdata = NULL;
-
-	/* if this was a write or a read returning no data then we
-	 * don't need to copy anything to userspace, so we can
-	 * complete the aio request immediately.
-	 */
-	if (priv->iv == NULL || unlikely(req->actual == 0)) {
-		kfree(req->buf);
-		kfree(priv);
-		iocb->private = NULL;
-		/* aio_complete() reports bytes-transferred _and_ faults */
-		aio_complete(iocb, req->actual ? req->actual : req->status,
-				req->status);
-	} else {
-		/* ep_copy_to_user() won't report both; we hide some faults */
-		if (unlikely(0 != req->status))
-			DBG(epdata->dev, "%s fault %d len %d\n",
-				ep->name, req->status, req->actual);
-
-		priv->buf = req->buf;
-		priv->actual = req->actual;
-		schedule_work(&priv->work);
-	}
-	spin_unlock(&epdata->dev->lock);
+	priv->buf	= req->buf;
+	priv->actual	= req->actual;
+	priv->status	= req->status;
 
 	usb_ep_free_request(ep, req);
 	put_ep(epdata);
+
+	if ((priv->iv && priv->actual) ||
+	    iocb->ki_cancel == KIOCB_CANCELLING)
+		schedule_work(&priv->work);
+	else
+		ep_user_copy_worker(&priv->work);
 }
 
 static ssize_t

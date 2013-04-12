@@ -104,6 +104,72 @@ struct iocb {
 	__u32	aio_resfd;
 }; /* 64 bytes */
 
+/* V2 abi */
+
+struct iocb_attr_ret {
+	__u64			cookie;
+	__u32			size;
+	__u32			ret;
+	__u8			data[0];
+} __aligned(8);
+
+struct io_event_v2 {
+	__u64		data;		/* the data field from the iocb */
+	__s64		res;		/* result code for this event */
+	__s64		res2;		/* secondary result */
+	__u64		attr_bytes;
+};
+
+struct iocb_attr {
+	__u64			cookie;
+	__u32			size;
+	__u32			id;
+	__u8			data[0];
+} __aligned(8);
+
+struct iocb_v2 {
+	/* these are internal to the kernel/libc. */
+	__u64			aio_data;	/* data to be returned in event's data */
+	__u32			aio_key;	/* the kernel sets aio_key to the req # */
+	__u32			aio_attr_bytes;
+
+	/* common fields */
+	__u16			aio_lio_opcode;	/* see IOCB_CMD_ above */
+	__u16			aio_reserved1;
+	__u32			aio_fildes;
+
+	__u64			aio_buf;
+	__u64			aio_nbytes;
+	__s64			aio_offset;
+	struct iocb_attr	attrs[];
+};
+
+enum {
+	IOCB_ATTR_MAX
+};
+
+/* Context-less aio */
+
+struct iocb_noctx {
+	/* these are internal to the kernel/libc. */
+	__u64			aio_data;	/* data to be returned in event's data */
+	__u32			aio_key;	/* the kernel sets aio_key to the req # */
+	__u32			aio_attr_bytes;
+
+	/* common fields */
+	__u16			aio_lio_opcode;	/* see IOCB_CMD_ above */
+	__u16			aio_reserved1;
+	__u32			aio_fildes;
+
+	__u64			aio_buf;
+	__u64			aio_nbytes;
+	__s64			aio_offset;
+
+	__s64			res;		/* result code for this event */
+	__u64			completion_list;
+	struct iocb_attr	attrs[];
+};
+
 #undef IFBIG
 #undef IFLITTLE
 

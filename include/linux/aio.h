@@ -72,7 +72,10 @@ struct batch_complete;
 typedef int (kiocb_cancel_fn)(struct kiocb *);
 
 struct kiocb {
-	struct rb_node		ki_node;
+	union {
+		struct rb_node	ki_node;
+		struct list_head ki_list;
+	};
 
 	struct file		*ki_filp;
 	struct kioctx		*ki_ctx;	/* NULL for sync ops */
@@ -95,6 +98,11 @@ struct kiocb {
 	 * this is the underlying eventfd context to deliver events to.
 	 */
 	struct eventfd_ctx	*ki_eventfd;
+
+	unsigned		ki_attr_bytes;
+	unsigned		ki_attr_ret_bytes;
+	struct iocb_attr	*ki_attrs;
+	struct iocb_attr_ret	*ki_attr_rets;
 
 	kiocb_cancel_fn		*ki_cancel;
 	unsigned		ki_id;
@@ -152,6 +160,57 @@ static inline void aio_complete(struct kiocb *iocb, long res, long res2)
 {
 	aio_complete_batch(iocb, res, res2, NULL);
 }
+
+#define for_each_iocb_attr(req, attr)					\
+	for (attr = (req)->ki_attrs;					\
+	     attr != ((void *) (req)->ki_attrs) + (req)->ki_attr_bytes;	\
+	     attr = ((void *) attr) + (attr)->size)
+
+static inline struct iocb_attr *iocb_attr_next(struct kiocb *req,
+					       struct iocb_attr *attr)
+{
+	void *end = ((void *) req->ki_attrs) + req->ki_attr_bytes;
+
+	if (attr)
+		attr = ((void *) attr) + attr->size;
+	else
+		attr = req->ki_attrs;
+
+	if (attr == end)
+		return attr;
+
+	return attr;
+}
+
+static inline void *__iocb_attr_lookup(struct kiocb *req, unsigned id)
+{
+	struct iocb_attr *attr = NULL;
+
+	if (!req->ki_attrs)
+		return NULL;
+
+	while (1) {
+		attr = iocb_attr_next(req, attr);
+		if (!attr)
+			return NULL;
+
+		if (attr->id == id)
+			return attr;
+	}
+
+	return NULL;
+}
+
+#define iocb_attr_lookup(attrs, id)					\
+({									\
+	struct iocb_attr *_attr;					\
+									\
+	_attr = __iocb_attr_lookup((attrs), IOCB_ATTR_ ## id);		\
+	if (_attr->size != sizeof(struct iocb_attr_ ## id))		\
+		_attr = NULL;						\
+									\
+	(struct iocb_attr_ ## id *) _attr;				\
+})
 
 /* for sysctl: */
 extern unsigned long aio_nr;

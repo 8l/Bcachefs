@@ -386,7 +386,8 @@ struct mm_struct {
 	struct core_state *core_state; /* coredumping support */
 #ifdef CONFIG_AIO
 	spinlock_t		ioctx_lock;
-	struct hlist_head	ioctx_list;
+	struct hlist_head	ioctx_v1_list;
+	struct hlist_head	ioctx_v2_list;
 #endif
 #ifdef CONFIG_MM_OWNER
 	/*

@@ -73,7 +73,8 @@ void bio_endio_batch(struct bio *bio, int error, struct batch_complete *batch);
 
 static inline bool bio_cancelled(struct bio *bio)
 {
-	return bio->bi_iocb && kiocb_cancelled(bio->bi_iocb);
+	return 0;
+	//return bio->bi_iocb && kiocb_cancelled(bio->bi_iocb);
 }
 
 static inline unsigned int bio_cur_bytes(struct bio *bio)

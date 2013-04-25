@@ -268,6 +268,25 @@ static void invalidate_buckets_random(struct cache *ca)
 
 static void invalidate_buckets(struct cache *ca)
 {
+	size_t pinned = 0, dirty = 0, meta = 0, gen = 0;
+	struct bucket *b;
+
+	pr_debug("need_save_prio %u", ca->need_save_prio);
+
+	for_each_bucket(b, ca) {
+		if (atomic_read(&b->pin))
+			pinned++;
+		if (GC_MARK(b) == GC_MARK_DIRTY)
+			dirty++;
+		if (GC_MARK(b) == GC_MARK_METADATA)
+			meta++;
+		if (!can_inc_bucket_gen(b))
+			gen++;
+	}
+
+	pr_debug("pinned %zu dirty %zu meta %zu gen %zu total %llu",
+		 pinned, dirty, meta, gen, ca->sb.nbuckets);
+
 	if (ca->invalidate_needs_gc)
 		return;
 

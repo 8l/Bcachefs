@@ -177,7 +177,8 @@ void bch_btree_verify(struct btree *b, struct bset *new)
 	mutex_unlock(&b->c->verify_lock);
 }
 
-static void data_verify_endio(struct bio *bio, int error)
+static void data_verify_endio(struct bio *bio, int error,
+			      struct batch_complete *batch)
 {
 	struct closure *cl = bio->bi_private;
 	closure_put(cl);

@@ -5018,7 +5018,8 @@ int btrfs_rmap_block(struct btrfs_mapping_tree *map_tree,
 	return 0;
 }
 
-static void btrfs_end_bio(struct bio *bio, int err)
+static void btrfs_end_bio(struct bio *bio, int err,
+			  struct batch_complete *batch)
 {
 	struct btrfs_bio *bbio = bio->bi_private;
 	int is_orig_bio = 0;
@@ -5073,7 +5074,7 @@ static void btrfs_end_bio(struct bio *bio, int err)
 		}
 		kfree(bbio);
 
-		bio_endio(bio, err);
+		bio_endio_batch(bio, err, batch);
 	} else if (!is_orig_bio) {
 		bio_put(bio);
 	}

@@ -1225,7 +1225,8 @@ _xfs_buf_ioend(
 STATIC void
 xfs_buf_bio_end_io(
 	struct bio		*bio,
-	int			error)
+	int			error,
+	struct batch_complete *batch)
 {
 	xfs_buf_t		*bp = (xfs_buf_t *)bio->bi_private;
 

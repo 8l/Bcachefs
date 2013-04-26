@@ -760,7 +760,8 @@ struct submit_bio_ret {
 	int error;
 };
 
-static void submit_bio_wait_endio(struct bio *bio, int error)
+static void submit_bio_wait_endio(struct bio *bio, int error,
+				  struct batch_complete *batch)
 {
 	struct submit_bio_ret *ret = bio->bi_private;
 
@@ -1414,7 +1415,8 @@ void bio_unmap_user(struct bio *bio)
 }
 EXPORT_SYMBOL(bio_unmap_user);
 
-static void bio_map_kern_endio(struct bio *bio, int err)
+static void bio_map_kern_endio(struct bio *bio, int err,
+			       struct batch_complete *batch)
 {
 	bio_put(bio);
 }
@@ -1486,7 +1488,8 @@ struct bio *bio_map_kern(struct request_queue *q, void *data, unsigned int len,
 }
 EXPORT_SYMBOL(bio_map_kern);
 
-static void bio_copy_kern_endio(struct bio *bio, int err)
+static void bio_copy_kern_endio(struct bio *bio, int err,
+				struct batch_complete *batch)
 {
 	struct bio_vec *bvec;
 	const int read = bio_data_dir(bio) == READ;
@@ -1707,7 +1710,7 @@ void bio_endio(struct bio *bio, int error)
 		error = -EIO;
 
 	if (bio->bi_end_io)
-		bio->bi_end_io(bio, error);
+		bio->bi_end_io(bio, error, NULL);
 }
 EXPORT_SYMBOL(bio_endio);
 
@@ -1722,7 +1725,8 @@ void bio_pair_release(struct bio_pair *bp)
 }
 EXPORT_SYMBOL(bio_pair_release);
 
-static void bio_pair_end_1(struct bio *bi, int err)
+static void bio_pair_end_1(struct bio *bi, int err,
+			   struct batch_complete *batch)
 {
 	struct bio_pair *bp = container_of(bi, struct bio_pair, bio1);
 
@@ -1732,7 +1736,8 @@ static void bio_pair_end_1(struct bio *bi, int err)
 	bio_pair_release(bp);
 }
 
-static void bio_pair_end_2(struct bio *bi, int err)
+static void bio_pair_end_2(struct bio *bi, int err,
+			   struct batch_complete *batch)
 {
 	struct bio_pair *bp = container_of(bi, struct bio_pair, bio2);
 

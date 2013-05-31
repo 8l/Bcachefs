@@ -1,10 +1,10 @@
 /*
- * Percpu refcounts:
+ * Dynamic percpu refcounts:
  * (C) 2012 Google, Inc.
  * Author: Kent Overstreet <koverstreet@google.com>
  *
  * This implements a refcount with similar semantics to atomic_t - atomic_inc(),
- * atomic_dec_and_test() - but percpu.
+ * atomic_dec_and_test() - but potentially percpu.
  *
  * There's one important difference between percpu refs and normal atomic_t
  * refcounts; you have to keep track of your initial refcount, and then when you
@@ -21,6 +21,23 @@
  * issuing the appropriate barriers, and then marks the ref as shutting down so
  * that percpu_ref_put() will check for the ref hitting 0.  After it returns,
  * it's safe to drop the initial ref.
+ *
+ * BACKGROUND:
+ *
+ * Percpu refcounts are quite useful for performance, but if we blindly
+ * converted all refcounts to percpu counters we'd waste quite a bit of memory.
+ *
+ * Think about all the refcounts embedded in kobjects, files, etc. most of which
+ * aren't used much. These start out as simple atomic counters - a little bigger
+ * than a bare atomic_t, 16 bytes instead of 4 - but if we exceed some arbitrary
+ * number of gets in one second, we then switch to percpu counters.
+ *
+ * This heuristic isn't perfect because it'll fire if the refcount was only
+ * being used on one cpu; ideally we'd be able to count the number of cache
+ * misses on percpu_ref_get() or something similar, but that'd make the non
+ * percpu path significantly heavier/more complex. We can count the number of
+ * gets() without any extra atomic instructions on arches that support
+ * atomic64_t - simply by changing the atomic_inc() to atomic_add_return().
  *
  * USAGE:
  *
@@ -54,7 +71,7 @@ struct percpu_ref;
 typedef void (percpu_ref_release)(struct percpu_ref *);
 
 struct percpu_ref {
-	atomic_t		count;
+	atomic64_t		count;
 	/*
 	 * The low bit of the pointer indicates whether the ref is in percpu
 	 * mode; if set, then get/put will manipulate the atomic_t (this is a
@@ -66,16 +83,22 @@ struct percpu_ref {
 	struct rcu_head		rcu;
 };
 
-int percpu_ref_init(struct percpu_ref *, percpu_ref_release *);
+void percpu_ref_init(struct percpu_ref *, percpu_ref_release *);
 void percpu_ref_kill(struct percpu_ref *ref);
 unsigned percpu_ref_count(struct percpu_ref *ref);
+void __percpu_ref_get(struct percpu_ref *ref, unsigned __percpu *pcpu_count);
 
 #define PCPU_STATUS_BITS	2
 #define PCPU_STATUS_MASK	((1 << PCPU_STATUS_BITS) - 1)
+
 #define PCPU_REF_PTR		0
-#define PCPU_REF_DEAD		1
+#define PCPU_REF_NONE		1
+#define PCPU_REF_DEAD		3
 
 #define REF_STATUS(count)	(((unsigned long) count) & PCPU_STATUS_MASK)
+
+#define PCPU_COUNT_BITS		50
+#define PCPU_COUNT_MASK		((1LL << PCPU_COUNT_BITS) - 1)
 
 /**
  * percpu_ref_dead - check if a dynamic percpu refcount is shutting down
@@ -100,10 +123,13 @@ static inline void percpu_ref_get(struct percpu_ref *ref)
 
 	pcpu_count = ACCESS_ONCE(ref->pcpu_count);
 
-	if (likely(REF_STATUS(pcpu_count) == PCPU_REF_PTR))
+	if (likely(REF_STATUS(pcpu_count) == PCPU_REF_PTR)) {
+		/* for rcu - we're not using rcu_dereference() */
+		smp_read_barrier_depends();
 		__this_cpu_inc(*pcpu_count);
-	else
-		atomic_inc(&ref->count);
+	} else {
+		__percpu_ref_get(ref, pcpu_count);
+	}
 
 	preempt_enable();
 }
@@ -143,10 +169,18 @@ static inline void percpu_ref_put(struct percpu_ref *ref)
 
 	pcpu_count = ACCESS_ONCE(ref->pcpu_count);
 
-	if (likely(REF_STATUS(pcpu_count) == PCPU_REF_PTR))
+	if (likely(REF_STATUS(pcpu_count) == PCPU_REF_PTR)) {
+		/* for rcu - we're not using rcu_dereference() */
+		smp_read_barrier_depends();
 		__this_cpu_dec(*pcpu_count);
-	else if (unlikely(atomic_dec_and_test(&ref->count)))
-		ref->release(ref);
+	} else {
+		uint64_t v;
+
+		v = atomic64_dec_return(&ref->count);
+		v &= PCPU_COUNT_MASK;
+		if (unlikely(!v))
+			ref->release(ref);
+	}
 
 	preempt_enable();
 }

@@ -68,6 +68,7 @@ struct percpu_ref {
 
 int percpu_ref_init(struct percpu_ref *, percpu_ref_release *);
 void percpu_ref_kill(struct percpu_ref *ref);
+unsigned percpu_ref_count(struct percpu_ref *ref);
 
 #define PCPU_STATUS_BITS	2
 #define PCPU_STATUS_MASK	((1 << PCPU_STATUS_BITS) - 1)
@@ -75,6 +76,16 @@ void percpu_ref_kill(struct percpu_ref *ref);
 #define PCPU_REF_DEAD		1
 
 #define REF_STATUS(count)	(((unsigned long) count) & PCPU_STATUS_MASK)
+
+/**
+ * percpu_ref_dead - check if a dynamic percpu refcount is shutting down
+ *
+ * Returns true if percpu_ref_kill() has been called on @ref, false otherwise.
+ */
+int percpu_ref_dead(struct percpu_ref *ref)
+{
+	return REF_STATUS(ref->pcpu_count) == PCPU_REF_DEAD;
+}
 
 /**
  * percpu_ref_get - increment a percpu refcount
@@ -95,6 +106,27 @@ static inline void percpu_ref_get(struct percpu_ref *ref)
 		atomic_inc(&ref->count);
 
 	preempt_enable();
+}
+
+/**
+ * percpu_ref_tryget - increment a percpu refcount if not shutting down
+ *
+ * Roughly analagous to atomic_inc_not_zero().
+ */
+static inline int percpu_ref_tryget(struct percpu_ref *ref)
+{
+	int ret = 0;
+
+	preempt_disable();
+
+	if (likely(!percpu_ref_dead(ref))) {
+		percpu_ref_get(ref);
+		ret = 1;
+	}
+
+	preempt_enable();
+
+	return ret;
 }
 
 /**

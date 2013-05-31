@@ -31,6 +31,27 @@
 
 #define PCPU_COUNT_BIAS		(1U << 31)
 
+unsigned percpu_ref_count(struct percpu_ref *ref)
+{
+	unsigned __percpu *pcpu_count;
+	unsigned count = 0;
+	int cpu;
+
+	preempt_disable();
+
+	count = atomic_read(&ref->count);
+
+	pcpu_count = ACCESS_ONCE(ref->pcpu_count);
+
+	if (REF_STATUS(pcpu_count) == PCPU_REF_PTR)
+		for_each_possible_cpu(cpu)
+			count += *per_cpu_ptr(pcpu_count, cpu);
+
+	preempt_enable();
+
+	return count;
+}
+
 /**
  * percpu_ref_init - initialize a percpu refcount
  * @ref:	ref to initialize

@@ -31,6 +31,7 @@
 #include <linux/delay.h>
 #include <linux/ratelimit.h>
 #include <linux/pm_runtime.h>
+#include <linux/aio.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/block.h>
@@ -1744,6 +1745,11 @@ generic_make_request_checks(struct bio *bio)
 		goto end_io;
 	}
 
+	if (bio_cancelled(bio)) {
+		err = -ECANCELED;
+		goto end_io;
+	}
+
 	/*
 	 * Various block parts want %current->io_context and lazy ioc
 	 * allocation ends up trading a lot of pain for a small amount of
@@ -2079,6 +2085,20 @@ static inline struct request *blk_pm_peek_request(struct request_queue *q,
 }
 #endif
 
+static bool request_cancelled(struct request *rq)
+{
+	struct bio *bio;
+
+	if (!rq->bio)
+		return false;
+
+	for (bio = rq->bio; bio; bio = bio->bi_next)
+		if (!bio_cancelled(bio))
+			return false;
+
+	return true;
+}
+
 /**
  * blk_peek_request - peek at the top of a request queue
  * @q: request queue to peek at
@@ -2122,6 +2142,12 @@ struct request *blk_peek_request(struct request_queue *q)
 			 */
 			rq->cmd_flags |= REQ_STARTED;
 			trace_block_rq_issue(q, rq);
+		}
+
+		if (request_cancelled(rq)) {
+			blk_start_request(rq);
+			__blk_end_request_all(rq, -ECANCELED);
+			continue;
 		}
 
 		if (!q->boundary_rq || q->boundary_rq == rq) {
@@ -2308,6 +2334,8 @@ bool blk_update_request(struct request *req, int error, unsigned int nr_bytes,
 		char *error_type;
 
 		switch (error) {
+		case -ECANCELED:
+			goto noerr;
 		case -ENOLINK:
 			error_type = "recoverable transport";
 			break;
@@ -2328,6 +2356,7 @@ bool blk_update_request(struct request *req, int error, unsigned int nr_bytes,
 				   (unsigned long long)blk_rq_pos(req));
 
 	}
+noerr:
 
 	blk_account_io_completion(req, nr_bytes);
 

@@ -439,7 +439,10 @@ struct bcache_device {
 	atomic_t		detaching;
 	int			flush_done;
 
-	atomic_long_t		sectors_dirty;
+	uint64_t		nr_stripes;
+	unsigned		stripe_size_bits;
+	atomic_t		*stripe_sectors_dirty;
+
 	unsigned long		sectors_dirty_last;
 	long			sectors_dirty_derivative;
 
@@ -1174,9 +1177,6 @@ static inline uint8_t bucket_disk_gen(struct bucket *b)
 
 /* Forward declarations */
 
-void bch_writeback_queue(struct cached_dev *);
-void bch_writeback_add(struct cached_dev *, unsigned);
-
 void bch_count_io_errors(struct cache *, int, const char *);
 void bch_bbio_count_io_errors(struct cache_set *, struct bio *,
 			      int, const char *);
@@ -1240,8 +1240,6 @@ void bch_cache_set_stop(struct cache_set *);
 struct cache_set *bch_cache_set_alloc(struct cache_sb *);
 void bch_btree_cache_free(struct cache_set *);
 int bch_btree_cache_alloc(struct cache_set *);
-void bch_sectors_dirty_init(struct cached_dev *);
-void bch_cached_dev_writeback_init(struct cached_dev *);
 void bch_moving_init_cache_set(struct cache_set *);
 
 void bch_cache_allocator_exit(struct cache *ca);

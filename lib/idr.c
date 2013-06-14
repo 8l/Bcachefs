@@ -1019,7 +1019,19 @@ int ida_get_new_above(struct ida *ida, int starting_id, int *p_id)
 
 	return 0;
 }
-EXPORT_SYMBOL(ida_get_new_above);
+
+/**
+ * ida_get_new - allocate new ID
+ * @ida:	idr handle
+ * @p_id:	pointer to the allocated handle
+ *
+ * Simple wrapper around ida_get_new_above() w/ @starting_id of zero.
+ */
+int ida_get_new(struct ida *ida, int *p_id)
+{
+	return ida_get_new_above(ida, 0, p_id);
+}
+EXPORT_SYMBOL(ida_get_new);
 
 static void __ida_remove(struct ida *ida, int id)
 {

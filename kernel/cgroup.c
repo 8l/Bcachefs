@@ -190,7 +190,6 @@ static LIST_HEAD(roots);
 static int root_count;
 
 static DEFINE_IDA(hierarchy_ida);
-static int next_hierarchy_id;
 
 /* dummytop is a shorthand for the dummy hierarchy's top cgroup */
 #define dummytop (&rootnode.top_cgroup)
@@ -1427,15 +1426,11 @@ static void init_cgroup_root(struct cgroupfs_root *root)
 
 static bool init_root_id(struct cgroupfs_root *root)
 {
-	int ret = 0;
-
-	ret = ida_simple_get(&hierarchy_ida, next_hierarchy_id, 0, GFP_KERNEL);
+	int ret = ida_get(&hierarchy_ida, GFP_KERNEL);
 	if (ret < 0)
 		return false;
 
 	root->hierarchy_id = ret;
-	next_hierarchy_id = root->hierarchy_id + 1;
-
 	return true;
 }
 

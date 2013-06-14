@@ -1021,12 +1021,7 @@ int ida_get_new_above(struct ida *ida, int starting_id, int *p_id)
 }
 EXPORT_SYMBOL(ida_get_new_above);
 
-/**
- * ida_remove - remove the given ID
- * @ida:	ida handle
- * @id:		ID to free
- */
-void ida_remove(struct ida *ida, int id)
+static void __ida_remove(struct ida *ida, int id)
 {
 	struct idr_layer *p = ida->idr.top;
 	int shift = (ida->idr.layers - 1) * IDR_BITS;
@@ -1067,7 +1062,6 @@ void ida_remove(struct ida *ida, int id)
 	printk(KERN_WARNING
 	       "ida_remove called for id=%d which is not allocated.\n", id);
 }
-EXPORT_SYMBOL(ida_remove);
 
 /**
  * ida_destroy - release all cached layers within an ida tree
@@ -1090,7 +1084,7 @@ EXPORT_SYMBOL(ida_destroy);
  * Allocates an id in the range start <= id < end, or returns -ENOSPC.
  * On memory allocation failure, returns -ENOMEM.
  *
- * Use ida_simple_remove() to get rid of an id.
+ * Use ida_remove() to get rid of an id.
  */
 int ida_simple_get(struct ida *ida, unsigned int start, unsigned int end,
 		   gfp_t gfp_mask)
@@ -1117,7 +1111,7 @@ again:
 	ret = ida_get_new_above(ida, start, &id);
 	if (!ret) {
 		if (id > max) {
-			ida_remove(ida, id);
+			__ida_remove(ida, id);
 			ret = -ENOSPC;
 		} else {
 			ret = id;
@@ -1133,20 +1127,20 @@ again:
 EXPORT_SYMBOL(ida_simple_get);
 
 /**
- * ida_simple_remove - remove an allocated id.
+ * ida_remove - remove an allocated id.
  * @ida: the (initialized) ida.
  * @id: the id returned by ida_simple_get.
  */
-void ida_simple_remove(struct ida *ida, unsigned int id)
+void ida_remove(struct ida *ida, unsigned int id)
 {
 	unsigned long flags;
 
 	BUG_ON((int)id < 0);
 	spin_lock_irqsave(&simple_ida_lock, flags);
-	ida_remove(ida, id);
+	__ida_remove(ida, id);
 	spin_unlock_irqrestore(&simple_ida_lock, flags);
 }
-EXPORT_SYMBOL(ida_simple_remove);
+EXPORT_SYMBOL(ida_remove);
 
 /**
  * ida_init - initialize ida handle

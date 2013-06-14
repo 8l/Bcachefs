@@ -169,7 +169,7 @@ static void delete_ptp_clock(struct posix_clock *pc)
 	struct ptp_clock *ptp = container_of(pc, struct ptp_clock, clock);
 
 	mutex_destroy(&ptp->tsevq_mux);
-	ida_simple_remove(&ptp_clocks_map, ptp->index);
+	ida_remove(&ptp_clocks_map, ptp->index);
 	kfree(ptp);
 }
 

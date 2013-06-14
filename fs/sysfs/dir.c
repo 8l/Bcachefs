@@ -30,7 +30,6 @@ DEFINE_SPINLOCK(sysfs_assoc_lock);
 
 #define to_sysfs_dirent(X) rb_entry((X), struct sysfs_dirent, s_rb);
 
-static DEFINE_SPINLOCK(sysfs_ino_lock);
 static DEFINE_IDA(sysfs_ino_ida);
 
 /**
@@ -234,28 +233,12 @@ static void sysfs_deactivate(struct sysfs_dirent *sd)
 
 static int sysfs_alloc_ino(unsigned int *pino)
 {
-	int ino, rc;
-
- retry:
-	spin_lock(&sysfs_ino_lock);
-	rc = ida_get_new_above(&sysfs_ino_ida, 2, &ino);
-	spin_unlock(&sysfs_ino_lock);
-
-	if (rc == -EAGAIN) {
-		if (ida_pre_get(&sysfs_ino_ida, GFP_KERNEL))
-			goto retry;
-		rc = -ENOMEM;
-	}
-
-	*pino = ino;
-	return rc;
+	return ida_simple_get(&sysfs_ino_ida, 2, 0, GFP_KERNEL);
 }
 
 static void sysfs_free_ino(unsigned int ino)
 {
-	spin_lock(&sysfs_ino_lock);
 	ida_remove(&sysfs_ino_ida, ino);
-	spin_unlock(&sysfs_ino_lock);
 }
 
 void release_sysfs_dirent(struct sysfs_dirent * sd)

@@ -135,7 +135,7 @@ int watchdog_register_device(struct watchdog_device *wdd)
 
 	ret = watchdog_dev_register(wdd);
 	if (ret) {
-		ida_simple_remove(&watchdog_ida, id);
+		ida_remove(&watchdog_ida, id);
 		if (!(id == 0 && ret == -EBUSY))
 			return ret;
 
@@ -147,7 +147,7 @@ int watchdog_register_device(struct watchdog_device *wdd)
 
 		ret = watchdog_dev_register(wdd);
 		if (ret) {
-			ida_simple_remove(&watchdog_ida, id);
+			ida_remove(&watchdog_ida, id);
 			return ret;
 		}
 	}
@@ -157,7 +157,7 @@ int watchdog_register_device(struct watchdog_device *wdd)
 					NULL, "watchdog%d", wdd->id);
 	if (IS_ERR(wdd->dev)) {
 		watchdog_dev_unregister(wdd);
-		ida_simple_remove(&watchdog_ida, id);
+		ida_remove(&watchdog_ida, id);
 		ret = PTR_ERR(wdd->dev);
 		return ret;
 	}
@@ -186,7 +186,7 @@ void watchdog_unregister_device(struct watchdog_device *wdd)
 	if (ret)
 		pr_err("error unregistering /dev/watchdog (err=%d)\n", ret);
 	device_destroy(watchdog_class, devno);
-	ida_simple_remove(&watchdog_ida, wdd->id);
+	ida_remove(&watchdog_ida, wdd->id);
 	wdd->dev = NULL;
 }
 EXPORT_SYMBOL_GPL(watchdog_unregister_device);

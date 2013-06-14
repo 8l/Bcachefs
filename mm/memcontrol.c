@@ -657,7 +657,7 @@ static void disarm_kmem_keys(struct mem_cgroup *memcg)
 {
 	if (memcg_kmem_is_active(memcg)) {
 		static_key_slow_dec(&memcg_kmem_enabled_key);
-		ida_simple_remove(&kmem_limited_groups, memcg->kmemcg_id);
+		ida_remove(&kmem_limited_groups, memcg->kmemcg_id);
 	}
 	/*
 	 * This check can't live in kmem destruction function,
@@ -3083,7 +3083,7 @@ int memcg_update_cache_sizes(struct mem_cgroup *memcg)
 
 	ret = memcg_update_all_caches(num+1);
 	if (ret) {
-		ida_simple_remove(&kmem_limited_groups, num);
+		ida_remove(&kmem_limited_groups, num);
 		memcg_kmem_clear_activated(memcg);
 		return ret;
 	}

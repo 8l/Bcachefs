@@ -191,7 +191,6 @@ static int root_count;
 
 static DEFINE_IDA(hierarchy_ida);
 static int next_hierarchy_id;
-static DEFINE_SPINLOCK(hierarchy_id_lock);
 
 /* dummytop is a shorthand for the dummy hierarchy's top cgroup */
 #define dummytop (&rootnode.top_cgroup)
@@ -848,7 +847,7 @@ static void cgroup_free_fn(struct work_struct *work)
 	 */
 	dput(cgrp->parent->dentry);
 
-	ida_simple_remove(&cgrp->root->cgroup_ida, cgrp->id);
+	ida_remove(&cgrp->root->cgroup_ida, cgrp->id);
 
 	/*
 	 * Drop the active superblock reference that we took when we
@@ -1430,24 +1429,13 @@ static bool init_root_id(struct cgroupfs_root *root)
 {
 	int ret = 0;
 
-	do {
-		if (!ida_pre_get(&hierarchy_ida, GFP_KERNEL))
-			return false;
-		spin_lock(&hierarchy_id_lock);
-		/* Try to allocate the next unused ID */
-		ret = ida_get_new_above(&hierarchy_ida, next_hierarchy_id,
-					&root->hierarchy_id);
-		if (ret == -ENOSPC)
-			/* Try again starting from 0 */
-			ret = ida_get_new(&hierarchy_ida, &root->hierarchy_id);
-		if (!ret) {
-			next_hierarchy_id = root->hierarchy_id + 1;
-		} else if (ret != -EAGAIN) {
-			/* Can only get here if the 31-bit IDR is full ... */
-			BUG_ON(ret);
-		}
-		spin_unlock(&hierarchy_id_lock);
-	} while (ret);
+	ret = ida_simple_get(&hierarchy_ida, next_hierarchy_id, 0, GFP_KERNEL);
+	if (ret < 0)
+		return false;
+
+	root->hierarchy_id = ret;
+	next_hierarchy_id = root->hierarchy_id + 1;
+
 	return true;
 }
 
@@ -1506,9 +1494,7 @@ static void cgroup_drop_root(struct cgroupfs_root *root)
 		return;
 
 	BUG_ON(!root->hierarchy_id);
-	spin_lock(&hierarchy_id_lock);
 	ida_remove(&hierarchy_ida, root->hierarchy_id);
-	spin_unlock(&hierarchy_id_lock);
 	ida_destroy(&root->cgroup_ida);
 	kfree(root);
 }
@@ -4228,7 +4214,7 @@ err_free_all:
 	/* Release the reference count that we took on the superblock */
 	deactivate_super(sb);
 err_free_id:
-	ida_simple_remove(&root->cgroup_ida, cgrp->id);
+	ida_remove(&root->cgroup_ida, cgrp->id);
 err_free_name:
 	kfree(rcu_dereference_raw(cgrp->name));
 err_free_cgrp:

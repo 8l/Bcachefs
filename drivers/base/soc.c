@@ -16,7 +16,6 @@
 #include <linux/err.h>
 
 static DEFINE_IDA(soc_ida);
-static DEFINE_SPINLOCK(soc_lock);
 
 static ssize_t soc_info_get(struct device *dev,
 			    struct device_attribute *attr,
@@ -121,22 +120,11 @@ struct soc_device *soc_device_register(struct soc_device_attribute *soc_dev_attr
 		goto out1;
 	}
 
-	/* Fetch a unique (reclaimable) SOC ID. */
-	do {
-		if (!ida_pre_get(&soc_ida, GFP_KERNEL)) {
-			ret = -ENOMEM;
-			goto out2;
-		}
-
-		spin_lock(&soc_lock);
-		ret = ida_get_new(&soc_ida, &soc_dev->soc_dev_num);
-		spin_unlock(&soc_lock);
-
-	} while (ret == -EAGAIN);
-
+	ret = ida_get(&soc_ida, GFP_KERNEL);
 	if (ret)
 	         goto out2;
 
+	soc->dev->soc_dev_num = ret;
 	soc_dev->attr = soc_dev_attr;
 	soc_dev->dev.bus = &soc_bus_type;
 	soc_dev->dev.groups = soc_attr_groups;

@@ -221,13 +221,12 @@ struct ida {
 
 int ida_pre_get(struct ida *ida, gfp_t gfp_mask);
 int ida_get_new_above(struct ida *ida, int starting_id, int *p_id);
-void ida_remove(struct ida *ida, int id);
+void ida_remove(struct ida *ida, unsigned id);
 void ida_destroy(struct ida *ida);
 void ida_init(struct ida *ida);
 
 int ida_simple_get(struct ida *ida, unsigned int start, unsigned int end,
 		   gfp_t gfp_mask);
-void ida_simple_remove(struct ida *ida, unsigned int id);
 
 /**
  * ida_get_new - allocate new ID
@@ -239,6 +238,11 @@ void ida_simple_remove(struct ida *ida, unsigned int id);
 static inline int ida_get_new(struct ida *ida, int *p_id)
 {
 	return ida_get_new_above(ida, 0, p_id);
+}
+
+static inline int ida_get(struct ida *ida, gfp_t gfp_mask)
+{
+	return ida_simple_get(ida, 0, 0, gfp_mask);
 }
 
 void __init idr_init_cache(void);

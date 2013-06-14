@@ -50,7 +50,6 @@ module_param(force_legacy, uint, 0444);
 MODULE_PARM_DESC(force_legacy, "Force the use of legacy type PCI interrupts");
 
 static DEFINE_IDA(rsxx_disk_ida);
-static DEFINE_SPINLOCK(rsxx_ida_lock);
 
 /*----------------- Interrupt Control & Handling -------------------*/
 
@@ -538,19 +537,11 @@ static int rsxx_pci_probe(struct pci_dev *dev,
 	card->dev = dev;
 	pci_set_drvdata(dev, card);
 
-	do {
-		if (!ida_pre_get(&rsxx_disk_ida, GFP_KERNEL)) {
-			st = -ENOMEM;
-			goto failed_ida_get;
-		}
-
-		spin_lock(&rsxx_ida_lock);
-		st = ida_get_new(&rsxx_disk_ida, &card->disk_id);
-		spin_unlock(&rsxx_ida_lock);
-	} while (st == -EAGAIN);
-
-	if (st)
+	st = ida_get(&rsxx_disk_ida, GFP_KERNEL);
+	if (st < 0)
 		goto failed_ida_get;
+
+	card->disk_id = st;
 
 	st = pci_enable_device(dev);
 	if (st)
@@ -705,9 +696,7 @@ failed_request_regions:
 failed_dma_mask:
 	pci_disable_device(dev);
 failed_enable:
-	spin_lock(&rsxx_ida_lock);
 	ida_remove(&rsxx_disk_ida, card->disk_id);
-	spin_unlock(&rsxx_ida_lock);
 failed_ida_get:
 	kfree(card);
 

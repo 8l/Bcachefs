@@ -864,7 +864,7 @@ out_free_vq:
 out_free_vblk:
 	kfree(vblk);
 out_free_index:
-	ida_simple_remove(&vd_index_ida, index);
+	ida_remove(&vd_index_ida, index);
 out:
 	return err;
 }
@@ -896,7 +896,7 @@ static void virtblk_remove(struct virtio_device *vdev)
 
 	/* Only free device id if we don't have any users */
 	if (refc == 1)
-		ida_simple_remove(&vd_index_ida, index);
+		ida_remove(&vd_index_ida, index);
 }
 
 #ifdef CONFIG_PM

@@ -219,8 +219,6 @@ struct ida {
 #define IDA_INIT(name)		{ .idr = IDR_INIT((name).idr), .free_bitmap = NULL, }
 #define DEFINE_IDA(name)	struct ida name = IDA_INIT(name)
 
-int ida_pre_get(struct ida *ida, gfp_t gfp_mask);
-int ida_get_new(struct ida *ida, int *p_id);
 void ida_remove(struct ida *ida, unsigned id);
 void ida_destroy(struct ida *ida);
 void ida_init(struct ida *ida);

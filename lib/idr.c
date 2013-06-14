@@ -912,7 +912,7 @@ static void free_bitmap(struct ida *ida, struct ida_bitmap *bitmap)
  * If the system is REALLY out of memory this function returns %0,
  * otherwise %1.
  */
-int ida_pre_get(struct ida *ida, gfp_t gfp_mask)
+static int ida_pre_get(struct ida *ida, gfp_t gfp_mask)
 {
 	/* allocate idr_layers */
 	if (!__idr_pre_get(&ida->idr, gfp_mask))
@@ -931,7 +931,6 @@ int ida_pre_get(struct ida *ida, gfp_t gfp_mask)
 
 	return 1;
 }
-EXPORT_SYMBOL(ida_pre_get);
 
 /**
  * ida_get_new_above - allocate new ID above or equal to a start id
@@ -1019,19 +1018,6 @@ int ida_get_new_above(struct ida *ida, int starting_id, int *p_id)
 
 	return 0;
 }
-
-/**
- * ida_get_new - allocate new ID
- * @ida:	idr handle
- * @p_id:	pointer to the allocated handle
- *
- * Simple wrapper around ida_get_new_above() w/ @starting_id of zero.
- */
-int ida_get_new(struct ida *ida, int *p_id)
-{
-	return ida_get_new_above(ida, 0, p_id);
-}
-EXPORT_SYMBOL(ida_get_new);
 
 static void __ida_remove(struct ida *ida, int id)
 {

@@ -15,43 +15,37 @@
 #include <linux/init.h>
 #include <linux/bitmap-tree.h>
 #include <linux/bitops.h>
+#include <linux/gfp.h>
+#include <linux/radix-tree.h>
 #include <linux/rcupdate.h>
 #include <linux/types.h>
 
-/*
- * We want shallower trees and thus more bits covered at each layer.  8
- * bits gives us large enough first layer for most use cases and maximum
- * tree depth of 4.  Each idr_layer is slightly larger than 2k on 64bit and
- * 1k on 32bit.
- */
-#define IDR_BITS 8
-#define IDR_SIZE (1 << IDR_BITS)
-#define IDR_MASK ((1 << IDR_BITS)-1)
+/* IDA */
 
-struct idr_layer {
-	int			prefix;	/* the ID prefix of this idr_layer */
-	DECLARE_BITMAP(bitmap, IDR_SIZE); /* A zero bit means "space here" */
-	struct idr_layer __rcu	*ary[1<<IDR_BITS];
-	int			count;	/* When zero, we can release it */
-	int			layer;	/* distance from leaf */
-	struct rcu_head		rcu_head;
+struct ida {
+	struct bitmap_tree	map;
 };
 
-struct idr {
-	struct idr_layer __rcu	*hint;	/* the last layer allocated from */
-	struct idr_layer __rcu	*top;
-	struct idr_layer	*id_free;
-	int			layers;	/* only valid w/o concurrent changes */
-	int			id_free_cnt;
-	int			cur;	/* current pos for cyclic allocation */
-	spinlock_t		lock;
-};
-
-#define IDR_INIT(name)							\
-{									\
-	.lock			= __SPIN_LOCK_UNLOCKED(name.lock),	\
+#define IDA_INIT(name)						\
+{								\
+	.map	= BITMAP_TREE_INIT(name.map),			\
 }
-#define DEFINE_IDR(name)	struct idr name = IDR_INIT(name)
+#define DEFINE_IDA(name)	struct ida name = IDA_INIT(name)
+
+void ida_remove(struct ida *ida, unsigned id);
+
+void ida_destroy(struct ida *ida);
+void ida_init(struct ida *ida);
+
+int ida_get_range(struct ida *ida, unsigned int start,
+		  unsigned int end, gfp_t gfp_mask);
+
+static inline int ida_get(struct ida *ida, gfp_t gfp_mask)
+{
+	return ida_get_range(ida, 0, 0, gfp_mask);
+}
+
+/* IDR */
 
 /**
  * DOC: idr sync
@@ -70,22 +64,73 @@ struct idr {
  * period).
  */
 
-/*
- * This is what we export.
- */
+struct idr;
 
-void *idr_find_slowpath(struct idr *idp, int id);
-void idr_preload(gfp_t gfp_mask);
-int idr_alloc_range(struct idr *idp, void *ptr, int start, int end, gfp_t gfp_mask);
-int idr_alloc_cyclic(struct idr *idr, void *ptr, int start, int end, gfp_t gfp_mask);
-int idr_for_each(struct idr *idp,
+void *idr_find_next(struct idr *idr, int *nextid);
+int idr_for_each(struct idr *idr,
 		 int (*fn)(int id, void *p, void *data), void *data);
-void *idr_find_next(struct idr *idp, int *nextid);
-void *idr_replace(struct idr *idp, void *ptr, int id);
-void idr_remove(struct idr *idp, int id);
-void idr_free(struct idr *idp, int id);
-void idr_destroy(struct idr *idp);
-void idr_init(struct idr *idp);
+void *idr_replace(struct idr *idr, void *ptr, unsigned id);
+void idr_remove(struct idr *idr, unsigned id);
+int idr_alloc_range(struct idr *idr, void *ptr, unsigned start,
+		    unsigned end, gfp_t gfp);
+int idr_alloc_cyclic(struct idr *idr, void *ptr, unsigned start,
+		     unsigned end, gfp_t gfp_mask);
+void idr_destroy(struct idr *idr);
+void idr_init(struct idr *idr);
+
+/**
+ * idr_for_each_entry - iterate over an idr's elements of a given type
+ * @idr:     idr handle
+ * @entry:   the type * to use as cursor
+ * @id:      id entry's key
+ *
+ * @entry and @id do not need to be initialized before the loop, and
+ * after normal terminatinon @entry is left with the value NULL.  This
+ * is convenient for a "not found" value.
+ */
+#define idr_for_each_entry(idr, entry, id)			\
+	for (id = 0; ((entry) = idr_find_next(idr, &(id))) != NULL; ++id)
+
+static inline int idr_alloc(struct idr *idr, void *ptr, gfp_t gfp)
+{
+	return idr_alloc_range(idr, ptr, 0, 0, gfp);
+}
+
+struct idr {
+	struct ida		ida;
+	unsigned		cur;
+	struct radix_tree_root	ptrs;
+};
+
+#define IDR_INIT(name)							\
+{									\
+	.ida			= IDA_INIT(name.ida),			\
+	.ptrs			= RADIX_TREE_INIT(GFP_NOWAIT),		\
+}
+#define DEFINE_IDR(name)	struct idr name = IDR_INIT(name)
+
+/**
+ * idr_find - return pointer for given id
+ * @idr: idr handle
+ * @id: lookup key
+ *
+ * Return the pointer given the id it has been registered with.  A %NULL
+ * return indicates that @id is not valid or you passed %NULL in
+ * idr_alloc().
+ *
+ * This function can be called under rcu_read_lock(), given that the leaf
+ * pointers lifetimes are correctly managed.
+ */
+static inline void *idr_find(struct idr *idr, unsigned id)
+{
+	void *ret;
+
+	rcu_read_lock();
+	ret = radix_tree_lookup(&idr->ptrs, id);
+	rcu_read_unlock();
+
+	return ret;
+}
 
 /**
  * idr_preload_end - end preload section started with idr_preload()
@@ -95,131 +140,41 @@ void idr_init(struct idr *idp);
  */
 static inline void idr_preload_end(void)
 {
-	preempt_enable();
+	radix_tree_preload_end();
 }
 
 /**
- * idr_find - return pointer for given id
- * @idr: idr handle
- * @id: lookup key
+ * idr_preload - preload for idr_alloc_range()
+ * @gfp: allocation mask to use for preloading
  *
- * Return the pointer given the id it has been registered with.  A %NULL
- * return indicates that @id is not valid or you passed %NULL in
- * idr_get_new().
+ * Preload per-cpu layer buffer for idr_alloc_range().  Can only be used from
+ * process context and each idr_preload() invocation should be matched with
+ * idr_preload_end().  Note that preemption is disabled while preloaded.
  *
- * This function can be called under rcu_read_lock(), given that the leaf
- * pointers lifetimes are correctly managed.
+ * The first idr_alloc_range() in the preloaded section can be treated as if it
+ * were invoked with @gfp_mask used for preloading.  This allows using more
+ * permissive allocation masks for idrs protected by spinlocks.
+ *
+ * For example, if idr_alloc_range() below fails, the failure can be treated as
+ * if idr_alloc_range() were called with GFP_KERNEL rather than GFP_NOWAIT.
+ *
+ *	idr_preload(GFP_KERNEL);
+ *	spin_lock(lock);
+ *
+ *	id = idr_alloc_range(idr, ptr, start, end, GFP_NOWAIT);
+ *
+ *	spin_unlock(lock);
+ *	idr_preload_end();
+ *	if (id < 0)
+ *		error;
  */
-static inline void *idr_find(struct idr *idr, int id)
+static inline void idr_preload(gfp_t gfp)
 {
-	struct idr_layer *hint = rcu_dereference_raw(idr->hint);
+	might_sleep_if(gfp & __GFP_WAIT);
 
-	if (hint && (id & ~IDR_MASK) == hint->prefix)
-		return rcu_dereference_raw(hint->ary[id & IDR_MASK]);
-
-	return idr_find_slowpath(idr, id);
-}
-
-/**
- * idr_for_each_entry - iterate over an idr's elements of a given type
- * @idp:     idr handle
- * @entry:   the type * to use as cursor
- * @id:      id entry's key
- *
- * @entry and @id do not need to be initialized before the loop, and
- * after normal terminatinon @entry is left with the value NULL.  This
- * is convenient for a "not found" value.
- */
-#define idr_for_each_entry(idp, entry, id)			\
-	for (id = 0; ((entry) = idr_find_next(idp, &(id))) != NULL; ++id)
-
-/*
- * Don't use the following functions.  These exist only to suppress
- * deprecated warnings on EXPORT_SYMBOL()s.
- */
-int __idr_pre_get(struct idr *idp, gfp_t gfp_mask);
-int __idr_get_new_above(struct idr *idp, void *ptr, int starting_id, int *id);
-void __idr_remove_all(struct idr *idp);
-
-/**
- * idr_pre_get - reserve resources for idr allocation
- * @idp:	idr handle
- * @gfp_mask:	memory allocation flags
- *
- * Part of old alloc interface.  This is going away.  Use
- * idr_preload[_end]() and idr_alloc_range() instead.
- */
-static inline int __deprecated idr_pre_get(struct idr *idp, gfp_t gfp_mask)
-{
-	return __idr_pre_get(idp, gfp_mask);
-}
-
-/**
- * idr_get_new_above - allocate new idr entry above or equal to a start id
- * @idp: idr handle
- * @ptr: pointer you want associated with the id
- * @starting_id: id to start search at
- * @id: pointer to the allocated handle
- *
- * Part of old alloc interface.  This is going away.  Use
- * idr_preload[_end]() and idr_alloc_range() instead.
- */
-static inline int __deprecated idr_get_new_above(struct idr *idp, void *ptr,
-						 int starting_id, int *id)
-{
-	return __idr_get_new_above(idp, ptr, starting_id, id);
-}
-
-/**
- * idr_get_new - allocate new idr entry
- * @idp: idr handle
- * @ptr: pointer you want associated with the id
- * @id: pointer to the allocated handle
- *
- * Part of old alloc interface.  This is going away.  Use
- * idr_preload[_end]() and idr_alloc_range() instead.
- */
-static inline int __deprecated idr_get_new(struct idr *idp, void *ptr, int *id)
-{
-	return __idr_get_new_above(idp, ptr, 0, id);
-}
-
-/**
- * idr_remove_all - remove all ids from the given idr tree
- * @idp: idr handle
- *
- * If you're trying to destroy @idp, calling idr_destroy() is enough.
- * This is going away.  Don't use.
- */
-static inline void __deprecated idr_remove_all(struct idr *idp)
-{
-	__idr_remove_all(idp);
-}
-
-void __init idr_init_cache(void);
-
-/* IDA */
-
-struct ida {
-	struct bitmap_tree	map;
-};
-
-#define IDA_INIT(name)						\
-{								\
-	.map	= BITMAP_TREE_INIT(name.map),			\
-}
-#define DEFINE_IDA(name)	struct ida name = IDA_INIT(name)
-
-void ida_remove(struct ida *ida, unsigned id);
-void ida_destroy(struct ida *ida);
-void ida_init(struct ida *ida);
-
-int ida_get_range(struct ida *ida, unsigned int start,
-		  unsigned int end, gfp_t gfp_mask);
-
-static inline int ida_get(struct ida *ida, gfp_t gfp_mask)
-{
-	return ida_get_range(ida, 0, 0, gfp_mask);
+	/* Well this is horrible, but idr_preload doesn't return errors */
+	if (radix_tree_preload(gfp))
+		preempt_disable();
 }
 
 #endif /* __IDR_H__ */

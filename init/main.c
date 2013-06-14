@@ -541,7 +541,6 @@ asmlinkage void __init start_kernel(void)
 	preempt_disable();
 	if (WARN(!irqs_disabled(), "Interrupts were enabled *very* early, fixing it\n"))
 		local_irq_disable();
-	idr_init_cache();
 	perf_event_init();
 	rcu_init();
 	tick_nohz_init();

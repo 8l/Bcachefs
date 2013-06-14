@@ -76,7 +76,7 @@ struct idr {
 
 void *idr_find_slowpath(struct idr *idp, int id);
 void idr_preload(gfp_t gfp_mask);
-int idr_alloc(struct idr *idp, void *ptr, int start, int end, gfp_t gfp_mask);
+int idr_alloc_range(struct idr *idp, void *ptr, int start, int end, gfp_t gfp_mask);
 int idr_alloc_cyclic(struct idr *idr, void *ptr, int start, int end, gfp_t gfp_mask);
 int idr_for_each(struct idr *idp,
 		 int (*fn)(int id, void *p, void *data), void *data);
@@ -147,7 +147,7 @@ void __idr_remove_all(struct idr *idp);
  * @gfp_mask:	memory allocation flags
  *
  * Part of old alloc interface.  This is going away.  Use
- * idr_preload[_end]() and idr_alloc() instead.
+ * idr_preload[_end]() and idr_alloc_range() instead.
  */
 static inline int __deprecated idr_pre_get(struct idr *idp, gfp_t gfp_mask)
 {
@@ -162,7 +162,7 @@ static inline int __deprecated idr_pre_get(struct idr *idp, gfp_t gfp_mask)
  * @id: pointer to the allocated handle
  *
  * Part of old alloc interface.  This is going away.  Use
- * idr_preload[_end]() and idr_alloc() instead.
+ * idr_preload[_end]() and idr_alloc_range() instead.
  */
 static inline int __deprecated idr_get_new_above(struct idr *idp, void *ptr,
 						 int starting_id, int *id)
@@ -177,7 +177,7 @@ static inline int __deprecated idr_get_new_above(struct idr *idp, void *ptr,
  * @id: pointer to the allocated handle
  *
  * Part of old alloc interface.  This is going away.  Use
- * idr_preload[_end]() and idr_alloc() instead.
+ * idr_preload[_end]() and idr_alloc_range() instead.
  */
 static inline int __deprecated idr_get_new(struct idr *idp, void *ptr, int *id)
 {

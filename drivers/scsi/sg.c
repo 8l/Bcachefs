@@ -1395,7 +1395,7 @@ static Sg_device *sg_alloc(struct gendisk *disk, struct scsi_device *scsidp)
 	idr_preload(GFP_KERNEL);
 	write_lock_irqsave(&sg_index_lock, iflags);
 
-	error = idr_alloc(&sg_index_idr, sdp, 0, SG_MAX_DEVS, GFP_NOWAIT);
+	error = idr_alloc_range(&sg_index_idr, sdp, 0, SG_MAX_DEVS, GFP_NOWAIT);
 	if (error < 0) {
 		if (error == -ENOSPC) {
 			sdev_printk(KERN_WARNING, scsidp,

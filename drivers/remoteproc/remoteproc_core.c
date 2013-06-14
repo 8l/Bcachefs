@@ -217,9 +217,9 @@ int rproc_alloc_vring(struct rproc_vdev *rvdev, int i)
 	 * TODO: assign a notifyid for rvdev updates as well
 	 * TODO: support predefined notifyids (via resource table)
 	 */
-	ret = idr_alloc(&rproc->notifyids, rvring, 0, 0, GFP_KERNEL);
+	ret = idr_alloc_range(&rproc->notifyids, rvring, 0, 0, GFP_KERNEL);
 	if (ret < 0) {
-		dev_err(dev, "idr_alloc failed: %d\n", ret);
+		dev_err(dev, "idr_alloc_range failed: %d\n", ret);
 		dma_free_coherent(dev->parent, size, va, dma);
 		return ret;
 	}

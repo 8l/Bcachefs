@@ -523,10 +523,10 @@ bfad_im_scsi_host_alloc(struct bfad_s *bfad, struct bfad_im_port_s *im_port,
 	int error = 1;
 
 	mutex_lock(&bfad_mutex);
-	error = idr_alloc(&bfad_im_port_index, im_port, 0, 0, GFP_KERNEL);
+	error = idr_alloc_range(&bfad_im_port_index, im_port, 0, 0, GFP_KERNEL);
 	if (error < 0) {
 		mutex_unlock(&bfad_mutex);
-		printk(KERN_WARNING "idr_alloc failure\n");
+		printk(KERN_WARNING "idr_alloc_range failure\n");
 		goto out;
 	}
 	im_port->idr_id = error;

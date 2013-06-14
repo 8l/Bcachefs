@@ -421,7 +421,7 @@ int blk_alloc_devt(struct hd_struct *part, dev_t *devt)
 
 	/* allocate ext devt */
 	mutex_lock(&ext_devt_mutex);
-	idx = idr_alloc(&ext_devt_idr, part, 0, NR_EXT_DEVT, GFP_KERNEL);
+	idx = idr_alloc_range(&ext_devt_idr, part, 0, NR_EXT_DEVT, GFP_KERNEL);
 	mutex_unlock(&ext_devt_mutex);
 	if (idx < 0)
 		return idx == -ENOSPC ? -EBUSY : idx;

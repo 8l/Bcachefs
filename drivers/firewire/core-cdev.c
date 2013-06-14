@@ -496,7 +496,7 @@ static int add_client_resource(struct client *client,
 	if (client->in_shutdown)
 		ret = -ECANCELED;
 	else
-		ret = idr_alloc(&client->resource_idr, resource, 0, 0,
+		ret = idr_alloc_range(&client->resource_idr, resource, 0, 0,
 				GFP_NOWAIT);
 	if (ret >= 0) {
 		resource->handle = ret;

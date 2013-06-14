@@ -128,7 +128,7 @@ static int sis_drm_alloc(struct drm_device *dev, struct drm_file *file,
 	if (retval)
 		goto fail_alloc;
 
-	retval = idr_alloc(&dev_priv->object_idr, item, 1, 0, GFP_KERNEL);
+	retval = idr_alloc_range(&dev_priv->object_idr, item, 1, 0, GFP_KERNEL);
 	if (retval < 0)
 		goto fail_idr;
 	user_key = retval;

@@ -77,7 +77,7 @@ static int drm_ctxbitmap_next(struct drm_device * dev)
 	int ret;
 
 	mutex_lock(&dev->struct_mutex);
-	ret = idr_alloc(&dev->ctx_idr, NULL, DRM_RESERVED_CONTEXTS, 0,
+	ret = idr_alloc_range(&dev->ctx_idr, NULL, DRM_RESERVED_CONTEXTS, 0,
 			GFP_KERNEL);
 	mutex_unlock(&dev->struct_mutex);
 	return ret;

@@ -313,7 +313,7 @@ static int recover_idr_add(struct dlm_rsb *r)
 		rv = -1;
 		goto out_unlock;
 	}
-	rv = idr_alloc(&ls->ls_recover_idr, r, 1, 0, GFP_NOWAIT);
+	rv = idr_alloc_range(&ls->ls_recover_idr, r, 1, 0, GFP_NOWAIT);
 	if (rv < 0)
 		goto out_unlock;
 

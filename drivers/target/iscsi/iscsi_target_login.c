@@ -291,14 +291,14 @@ static int iscsi_login_zero_tsih_s1(
 
 	idr_preload(GFP_KERNEL);
 	spin_lock_bh(&sess_idr_lock);
-	ret = idr_alloc(&sess_idr, NULL, 0, 0, GFP_NOWAIT);
+	ret = idr_alloc_range(&sess_idr, NULL, 0, 0, GFP_NOWAIT);
 	if (ret >= 0)
 		sess->session_index = ret;
 	spin_unlock_bh(&sess_idr_lock);
 	idr_preload_end();
 
 	if (ret < 0) {
-		pr_err("idr_alloc() for sess_idr failed\n");
+		pr_err("idr_alloc_range() for sess_idr failed\n");
 		iscsit_tx_login_rsp(conn, ISCSI_STATUS_CLS_TARGET_ERR,
 				ISCSI_LOGIN_STATUS_NO_RESOURCES);
 		kfree(sess);

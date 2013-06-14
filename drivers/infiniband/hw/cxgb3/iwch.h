@@ -157,7 +157,7 @@ static inline int insert_handle(struct iwch_dev *rhp, struct idr *idr,
 	idr_preload(GFP_KERNEL);
 	spin_lock_irq(&rhp->lock);
 
-	ret = idr_alloc(idr, handle, id, id + 1, GFP_NOWAIT);
+	ret = idr_alloc_range(idr, handle, id, id + 1, GFP_NOWAIT);
 
 	spin_unlock_irq(&rhp->lock);
 	idr_preload_end();

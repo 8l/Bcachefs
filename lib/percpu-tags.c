@@ -7,9 +7,8 @@
 
 #include <asm/cmpxchg.h>
 #include <linux/bitmap.h>
-#include <linux/freezer.h>
+#include <linux/export.h>
 #include <linux/gfp.h>
-#include <linux/module.h>
 #include <linux/percpu.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
@@ -114,14 +113,15 @@ static inline bool steal_tags(struct percpu_tag_pool *pool,
 static inline bool alloc_global_tags(struct percpu_tag_pool *pool,
 				     struct percpu_tag_cpu *tags)
 {
-	if (pool->nr_free) {
-		move_tags(tags->freelist, &tags->nr_free,
-			  pool->freelist, &pool->nr_free,
-			  min(pool->nr_free, TAG_CPU_BATCH_MOVE));
-		return true;
-	}
+	int nr_free = bitmap_tree_find_set_bits(&pool->map,
+						tags->freelist,
+						TAG_CPU_BATCH_MOVE);
 
-	return false;
+	if (nr_free <= 0)
+		return false;
+
+	tags->nr_free = nr_free;
+	return true;
 }
 
 static inline unsigned alloc_local_tag(struct percpu_tag_pool *pool,
@@ -211,7 +211,6 @@ unsigned percpu_tag_alloc(struct percpu_tag_pool *pool, gfp_t gfp)
 			break;
 
 		schedule();
-		try_to_freeze();
 
 		local_irq_save(flags);
 		this_cpu = smp_processor_id();
@@ -272,14 +271,12 @@ void percpu_tag_free(struct percpu_tag_pool *pool, unsigned tag)
 
 	if (new == TAG_CPU_SIZE) {
 		spin_lock(&pool->lock);
-		/* Might have had our tags stolen before we took global lock */
-		if (tags->nr_free == TAG_CPU_SIZE) {
-			move_tags(pool->freelist, &pool->nr_free,
-				  tags->freelist, &tags->nr_free,
-				  TAG_CPU_BATCH_MOVE);
 
-			wake_up(&pool->wait);
-		}
+		while (tags->nr_free > TAG_CPU_SIZE - TAG_CPU_BATCH_MOVE)
+			bitmap_tree_clear_bit(&pool->map,
+					      tags->freelist[--tags->nr_free]);
+
+		wake_up(&pool->wait);
 		spin_unlock(&pool->lock);
 	}
 
@@ -297,8 +294,7 @@ void percpu_tag_pool_free(struct percpu_tag_pool *pool)
 {
 	free_percpu(pool->tag_cpu);
 	kfree(pool->cpus_have_tags);
-	free_pages((unsigned long) pool->freelist,
-		   get_order(pool->nr_tags * sizeof(unsigned)));
+	bitmap_tree_free(&pool->map);
 }
 EXPORT_SYMBOL_GPL(percpu_tag_pool_free);
 
@@ -316,8 +312,6 @@ EXPORT_SYMBOL_GPL(percpu_tag_pool_free);
  */
 int percpu_tag_pool_init(struct percpu_tag_pool *pool, unsigned long nr_tags)
 {
-	unsigned i, order;
-
 	memset(pool, 0, sizeof(*pool));
 
 	spin_lock_init(&pool->lock);
@@ -330,15 +324,8 @@ int percpu_tag_pool_init(struct percpu_tag_pool *pool, unsigned long nr_tags)
 		return -EINVAL;
 	}
 
-	order = get_order(nr_tags * sizeof(unsigned));
-	pool->freelist = (void *) __get_free_pages(GFP_KERNEL, order);
-	if (!pool->freelist)
-		goto err;
-
-	for (i = 0; i < nr_tags; i++)
-		pool->freelist[i] = i;
-
-	pool->nr_free = nr_tags;
+	if (bitmap_tree_init(&pool->map, nr_tags))
+		return -ENOMEM;
 
 	pool->cpus_have_tags = kzalloc(BITS_TO_LONGS(nr_cpu_ids) *
 				       sizeof(unsigned long), GFP_KERNEL);

@@ -28,6 +28,7 @@
 #ifndef _LINUX_TAGS_H
 #define _LINUX_TAGS_H
 
+#include <linux/bitmap-tree.h>
 #include <linux/spinlock_types.h>
 #include <linux/wait.h>
 
@@ -62,15 +63,11 @@ struct percpu_tag_pool {
 		 */
 		unsigned		cpu_last_stolen;
 
-		/*
-		 * Global freelist - it's a stack where nr_free points to the
-		 * top
-		 */
-		unsigned		nr_free;
-		unsigned		*freelist;
-
 		/* For sleeping on allocation failure */
 		wait_queue_head_t	wait;
+
+		/* Global freelist */
+		struct bitmap_tree	map;
 	} ____cacheline_aligned_in_smp;
 };
 

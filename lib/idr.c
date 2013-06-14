@@ -1073,7 +1073,7 @@ void ida_destroy(struct ida *ida)
 EXPORT_SYMBOL(ida_destroy);
 
 /**
- * ida_simple_get - get a new id.
+ * ida_get_range - get a new id.
  * @ida: the (initialized) ida.
  * @start: the minimum id (inclusive, < 0x8000000)
  * @end: the maximum id (exclusive, < 0x8000000 or 0)
@@ -1084,8 +1084,8 @@ EXPORT_SYMBOL(ida_destroy);
  *
  * Use ida_remove() to get rid of an id.
  */
-int ida_simple_get(struct ida *ida, unsigned int start, unsigned int end,
-		   gfp_t gfp_mask)
+int ida_get_range(struct ida *ida, unsigned int start,
+		  unsigned int end, gfp_t gfp_mask)
 {
 	int ret, id;
 	unsigned int max;
@@ -1122,12 +1122,12 @@ again:
 
 	return ret;
 }
-EXPORT_SYMBOL(ida_simple_get);
+EXPORT_SYMBOL(ida_get_range);
 
 /**
  * ida_remove - remove an allocated id.
  * @ida: the (initialized) ida.
- * @id: the id returned by ida_simple_get.
+ * @id: the id returned by ida_get_range.
  */
 void ida_remove(struct ida *ida, unsigned int id)
 {

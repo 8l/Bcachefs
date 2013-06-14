@@ -2184,7 +2184,7 @@ int hci_register_dev(struct hci_dev *hdev)
 		id = ida_get(&hci_index_ida, GFP_KERNEL);
 		break;
 	case HCI_AMP:
-		id = ida_simple_get(&hci_index_ida, 1, 0, GFP_KERNEL);
+		id = ida_get_range(&hci_index_ida, 1, 0, GFP_KERNEL);
 		break;
 	default:
 		return -EINVAL;

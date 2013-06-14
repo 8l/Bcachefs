@@ -190,7 +190,7 @@ struct ptp_clock *ptp_clock_register(struct ptp_clock_info *info,
 	if (ptp == NULL)
 		goto no_memory;
 
-	index = ida_simple_get(&ptp_clocks_map, 0, MINORMASK + 1, GFP_KERNEL);
+	index = ida_get_range(&ptp_clocks_map, 0, MINORMASK + 1, GFP_KERNEL);
 	if (index < 0) {
 		err = index;
 		goto no_slot;

@@ -88,7 +88,7 @@ static void mnt_free_id(struct mount *mnt)
  */
 static int mnt_alloc_group_id(struct mount *mnt)
 {
-	int res = ida_simple_get(&mnt_id_ida, 1, 0, GFP_KERNEL);
+	int res = ida_get_range(&mnt_id_ida, 1, 0, GFP_KERNEL);
 	if (res < 0)
 		return res;
 

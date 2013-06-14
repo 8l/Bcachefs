@@ -129,7 +129,7 @@ static DEFINE_IDA(proc_inum_ida);
  */
 int proc_alloc_inum(unsigned int *inum)
 {
-	int i = ida_simple_get(&proc_inum_ida, 0,
+	int i = ida_get_range(&proc_inum_ida, 0,
 			       UINT_MAX - PROC_DYNAMIC_FIRST,
 			       GFP_KERNEL);
 	if (i < 0)

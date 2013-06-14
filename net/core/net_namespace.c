@@ -500,7 +500,7 @@ static int register_pernet_operations(struct list_head *list,
 	int error;
 
 	if (ops->id) {
-		int id = ida_simple_get(&net_generic_ids, 1, 0, GFP_KERNEL);
+		int id = ida_get_range(&net_generic_ids, 1, 0, GFP_KERNEL);
 		if (id < 0)
 			return id;
 

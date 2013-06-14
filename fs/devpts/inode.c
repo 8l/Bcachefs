@@ -522,7 +522,7 @@ int devpts_new_index(struct inode *ptmx_inode)
 	struct pts_fs_info *fsi = DEVPTS_SB(sb);
 	int index;
 
-	index = ida_simple_get(&fsi->allocated_ptys, 0,
+	index = ida_get_range(&fsi->allocated_ptys, 0,
 			       fsi->mount_opts.max, GFP_KERNEL);
 	if (index < 0)
 		return index;

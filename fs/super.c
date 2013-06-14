@@ -823,8 +823,7 @@ int get_anon_bdev(dev_t *p)
 {
 	int dev;
 
-	dev = ida_simple_get(&unnamed_dev_ida, 0,
-			     1 << MINORBITS, GFP_ATOMIC);
+	dev = ida_get_range(&unnamed_dev_ida, 0, 1 << MINORBITS, GFP_ATOMIC);
 	if (dev == -ENOSPC)
 		return -EMFILE;
 	if (dev < 0)

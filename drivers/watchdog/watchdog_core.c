@@ -128,7 +128,7 @@ int watchdog_register_device(struct watchdog_device *wdd)
 	 */
 
 	mutex_init(&wdd->lock);
-	id = ida_simple_get(&watchdog_ida, 0, MAX_DOGS, GFP_KERNEL);
+	id = ida_get_range(&watchdog_ida, 0, MAX_DOGS, GFP_KERNEL);
 	if (id < 0)
 		return id;
 	wdd->id = id;
@@ -140,7 +140,7 @@ int watchdog_register_device(struct watchdog_device *wdd)
 			return ret;
 
 		/* Retry in case a legacy watchdog module exists */
-		id = ida_simple_get(&watchdog_ida, 1, MAX_DOGS, GFP_KERNEL);
+		id = ida_get_range(&watchdog_ida, 1, MAX_DOGS, GFP_KERNEL);
 		if (id < 0)
 			return id;
 		wdd->id = id;

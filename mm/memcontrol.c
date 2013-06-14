@@ -3068,7 +3068,7 @@ int memcg_update_cache_sizes(struct mem_cgroup *memcg)
 {
 	int num, ret;
 
-	num = ida_simple_get(&kmem_limited_groups,
+	num = ida_get_range(&kmem_limited_groups,
 				0, MEMCG_CACHES_MAX_SIZE, GFP_KERNEL);
 	if (num < 0)
 		return num;

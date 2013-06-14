@@ -233,7 +233,7 @@ static void sysfs_deactivate(struct sysfs_dirent *sd)
 
 static int sysfs_alloc_ino(unsigned int *pino)
 {
-	return ida_simple_get(&sysfs_ino_ida, 2, 0, GFP_KERNEL);
+	return ida_get_range(&sysfs_ino_ida, 2, 0, GFP_KERNEL);
 }
 
 static void sysfs_free_ino(unsigned int ino)

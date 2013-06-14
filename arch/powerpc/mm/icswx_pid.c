@@ -27,7 +27,7 @@ static DEFINE_IDA(cop_ida);
 
 static int new_cop_pid(struct ida *ida)
 {
-	return ida_simple_get(ida, COP_PID_MIN, COP_PID_MAX, GFP_KERNEL);
+	return ida_get_range(ida, COP_PID_MIN, COP_PID_MAX, GFP_KERNEL);
 }
 
 int get_cop_pid(struct mm_struct *mm)

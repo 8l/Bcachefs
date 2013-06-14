@@ -31,7 +31,7 @@ static DEFINE_IDA(mmu_context_ida);
 
 int __init_new_context(void)
 {
-	return ida_simple_get(ida, 1, MAX_USER_CONTEXT, GFP_KERNEL);
+	return ida_get_range(ida, 1, MAX_USER_CONTEXT, GFP_KERNEL);
 }
 EXPORT_SYMBOL_GPL(__init_new_context);
 

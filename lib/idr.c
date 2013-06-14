@@ -113,6 +113,242 @@ void ida_init(struct ida *ida)
 EXPORT_SYMBOL(ida_init);
 
 /* IDR */
+#if 0
+/**
+ * idr_find_next - lookup next object of id to given id.
+ * @idp: idr handle
+ * @nextidp:  pointer to lookup key
+ *
+ * Returns pointer to registered object with id, which is next number to
+ * given id. After being looked up, *@nextidp will be updated for the next
+ * iteration.
+ *
+ * This function can be called under rcu_read_lock(), given that the leaf
+ * pointers lifetimes are correctly managed.
+ */
+void *idr_find_next(struct idr *idr, int *nextidp)
+{
+	unsigned layer, id_this_layer, id = *nextidp, slot = id;
+	void **layer_p, *ret = NULL;
+
+	layer = __idr_layer_from_id(&slot);
+	id_this_layer = id - slot;
+
+	rcu_read_lock();
+
+	for (; layer < IDR_LAYERS; layer++) {
+		if (!idr->layers[layer])
+			goto next;
+
+		layer_p = rcu_dereference(idr->layers[layer]);
+
+		for (; slot < IDR_FIRST_LAYER_SIZE << layer; slot++) {
+			if (layer_p[slot]) {
+				ret = rcu_dereference(layer_p[slot]);
+				*nextidp = id_this_layer + slot;
+				goto out;
+
+			}
+		}
+next:
+		id_this_layer += IDR_FIRST_LAYER_SIZE << layer;
+		slot = 0;
+	}
+out:
+	rcu_read_unlock();
+	return ret;
+}
+EXPORT_SYMBOL(idr_find_next);
+
+/**
+ * idr_for_each - iterate through all stored pointers
+ * @idp: idr handle
+ * @fn: function to be called for each pointer
+ * @data: data passed back to callback function
+ *
+ * Iterate over the pointers registered with the given idr.  The
+ * callback function will be called for each pointer currently
+ * registered, passing the id, the pointer and the data pointer passed
+ * to this function.  It is not safe to modify the idr tree while in
+ * the callback, so functions such as idr_remove are not allowed.
+ *
+ * We check the return of @fn each time. If it returns anything other
+ * than %0, we break out and return that value.
+ *
+ * The caller must serialize idr_for_each() vs idr_remove().
+ */
+int idr_for_each(struct idr *idr,
+		 int (*fn)(int id, void *p, void *data), void *data)
+{
+	void *p;
+	unsigned id;
+	int error = 0;
+
+	idr_for_each_entry(idr, p, id) {
+		error = fn(id, (void *)p, data);
+		if (error)
+			break;
+	}
+
+	return error;
+}
+EXPORT_SYMBOL(idr_for_each);
+
+/**
+ * idr_replace - replace pointer for given id
+ * @idp: idr handle
+ * @ptr: pointer you want associated with the id
+ * @id: lookup key
+ *
+ * Replace the pointer registered with an id and return the old value.
+ * A %-ENOENT return indicates that @id was not found.
+ * A %-EINVAL return indicates that @id was not within valid constraints.
+ *
+ * The caller must serialize with writers.
+ */
+void *idr_replace(struct idr *idr, void *ptr, unsigned id)
+{
+	void *old = ERR_PTR(-ENOENT);
+	unsigned layer;
+
+	rcu_read_lock();
+
+	layer = __idr_layer_from_id(&id);
+
+	if (layer < IDR_LAYERS && idr->layers[layer]) {
+		old = rcu_dereference(rcu_dereference(idr->layers[layer])[id]);
+		if (old)
+			rcu_assign_pointer(idr->layers[layer][id], ptr);
+	}
+
+	rcu_read_unlock();
+
+	return old;
+}
+EXPORT_SYMBOL(idr_replace);
+
+/**
+ * idr_remove - remove the given id and free its slot
+ * @idp: idr handle
+ * @id: unique key
+ */
+void idr_remove(struct idr *idr, unsigned id)
+{
+	unsigned layer, slot = id;
+
+	layer = __idr_layer_from_id(&slot);
+	BUG_ON(!idr->layers[layer]);
+
+	rcu_assign_pointer(idr->layers[layer][slot], NULL);
+	ida_remove(&idr->ida, id);
+}
+EXPORT_SYMBOL(idr_remove);
+
+/**
+ * idr_alloc_range - allocate new idr entry
+ * @idr: the (initialized) idr
+ * @ptr: pointer to be associated with the new id
+ * @start: the minimum id (inclusive)
+ * @end: the maximum id (exclusive, <= 0 for max)
+ * @gfp: memory allocation flags
+ *
+ * Allocate an id in [start, end) and associate it with @ptr.  If no ID is
+ * available in the specified range, returns -ENOSPC.  On memory allocation
+ * failure, returns -ENOMEM.
+ *
+ * Note that @end is treated as max when <= 0.  This is to always allow
+ * using @start + N as @end as long as N is inside integer range.
+ *
+ * The user is responsible for exclusively synchronizing all operations
+ * which may modify @idr.  However, read-only accesses such as idr_find()
+ * or iteration can be performed under RCU read lock provided the user
+ * destroys @ptr in RCU-safe way after removal from idr.
+ */
+int idr_alloc_range(struct idr *idr, void *ptr, unsigned start,
+		    unsigned end, gfp_t gfp)
+{
+	void **layer_p;
+	unsigned layer, slot;
+	int id;
+
+	might_sleep_if(gfp & __GFP_WAIT);
+
+	id = ida_get_range(&idr->ida, start, end, gfp);
+	if (unlikely(id < 0))
+		return id;
+
+	slot = id;
+
+	layer = __idr_layer_from_id(&slot);
+	if (layer >= IDR_LAYERS) {
+		ida_remove(&idr->ida, id);
+		return -ENOSPC;
+	}
+
+	if (!idr->layers[layer]) {
+		/* allocate */
+		size_t size = (IDR_FIRST_LAYER_SIZE << layer) * sizeof(void *);
+
+		layer_p = (size < PAGE_SIZE)
+			? kzalloc(size, gfp)
+			: (void **) __get_free_pages(gfp, get_order(size));
+		if (!layer_p) {
+			ida_remove(&idr->ida, id);
+			return -ENOMEM;
+		}
+
+		rcu_assign_pointer(idr->layers[layer], layer_p);
+	}
+
+	rcu_assign_pointer(idr->layers[layer][slot], ptr);
+	return id;
+}
+EXPORT_SYMBOL_GPL(idr_alloc_range);
+
+/**
+ * idr_destroy - release all cached layers within an idr tree
+ * @idp: idr handle
+ *
+ * Free all id mappings and all idp_layers.  After this function, @idp is
+ * completely unused and can be freed / recycled.  The caller is
+ * responsible for ensuring that no one else accesses @idp during or after
+ * idr_destroy().
+ *
+ * A typical clean-up sequence for objects stored in an idr tree will use
+ * idr_for_each() to free all objects, if necessay, then idr_destroy() to
+ * free up the id mappings and cached idr_layers.
+ */
+void idr_destroy(struct idr *idr)
+{
+	unsigned i, size = IDR_FIRST_LAYER_SIZE * sizeof(void *);
+
+	for (i = 0; i < IDR_LAYERS; i++) {
+		if (size < PAGE_SIZE)
+			kfree(idr->layers[i]);
+		else
+			free_pages((unsigned long) idr->layers[i],
+				   get_order(size));
+
+		size *= 2;
+	}
+
+	ida_destroy(&idr->ida);
+}
+EXPORT_SYMBOL(idr_destroy);
+
+/**
+ * idr_init - initialize idr handle
+ * @idp:	idr handle
+ *
+ * This function is use to set up the handle (@idp) that you will pass
+ * to the rest of the functions.
+ */
+void idr_init(struct idr *idr)
+{
+	ida_init(&idr->ida);
+}
+EXPORT_SYMBOL(idr_init);
+#endif
 
 /**
  * idr_find_next - lookup next object of id to given id.

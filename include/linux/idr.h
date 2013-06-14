@@ -96,6 +96,53 @@ static inline int idr_alloc(struct idr *idr, void *ptr, gfp_t gfp)
 	return idr_alloc_range(idr, ptr, 0, 0, gfp);
 }
 
+#if 0
+#define IDR_FIRST_LAYER_SIZE	(1 << 7)
+#define IDR_LAYERS		14
+
+struct idr {
+	struct ida	ida;
+	void __rcu	**layers[IDR_LAYERS];
+};
+
+static inline unsigned __idr_layer_from_id(unsigned *id)
+{
+	unsigned i, size = IDR_FIRST_LAYER_SIZE;
+
+	for (i = 0; *id >= size; i++) {
+		*id -= size;
+		size *= 2;
+	}
+
+	return i;
+}
+
+/**
+ * idr_find - return pointer for given id
+ * @idr: idr handle
+ * @id: lookup key
+ *
+ * Return the pointer given the id it has been registered with.  A %NULL
+ * return indicates that @id is not valid or you passed %NULL in
+ * idr_alloc().
+ */
+static inline void *idr_find(struct idr *idr, unsigned id)
+{
+	unsigned layer;
+	void *ptr = NULL;
+
+	rcu_read_lock();
+	layer = __idr_layer_from_id(&id);
+
+	if (layer < IDR_LAYERS && idr->layers[layer])
+		ptr = rcu_dereference(rcu_dereference(idr->layers[layer])[id]);
+
+	rcu_read_unlock();
+
+	return ptr;
+}
+#endif
+
 struct idr {
 	struct ida		ida;
 	unsigned		cur;

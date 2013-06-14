@@ -50,7 +50,6 @@
 static struct kmem_cache *idr_layer_cache;
 static DEFINE_PER_CPU(struct idr_layer *, idr_preload_head);
 static DEFINE_PER_CPU(int, idr_preload_cnt);
-static DEFINE_SPINLOCK(simple_ida_lock);
 
 /* the maximum ID which can be allocated given idr->layers */
 static int idr_max(int layers)
@@ -871,6 +870,9 @@ void idr_init(struct idr *idp)
 }
 EXPORT_SYMBOL(idr_init);
 
+/* IDA */
+
+
 
 /**
  * DOC: IDA description
@@ -884,191 +886,13 @@ EXPORT_SYMBOL(idr_init);
  * 2007-04-25  written by Tejun Heo <htejun@gmail.com>
  */
 
-static void free_bitmap(struct ida *ida, struct ida_bitmap *bitmap)
-{
-	unsigned long flags;
-
-	if (!ida->free_bitmap) {
-		spin_lock_irqsave(&ida->idr.lock, flags);
-		if (!ida->free_bitmap) {
-			ida->free_bitmap = bitmap;
-			bitmap = NULL;
-		}
-		spin_unlock_irqrestore(&ida->idr.lock, flags);
-	}
-
-	kfree(bitmap);
-}
-
-/**
- * ida_pre_get - reserve resources for ida allocation
- * @ida:	ida handle
- * @gfp_mask:	memory allocation flag
- *
- * This function should be called prior to locking and calling the
- * following function.  It preallocates enough memory to satisfy the
- * worst possible allocation.
- *
- * If the system is REALLY out of memory this function returns %0,
- * otherwise %1.
- */
-static int ida_pre_get(struct ida *ida, gfp_t gfp_mask)
-{
-	/* allocate idr_layers */
-	if (!__idr_pre_get(&ida->idr, gfp_mask))
-		return 0;
-
-	/* allocate free_bitmap */
-	if (!ida->free_bitmap) {
-		struct ida_bitmap *bitmap;
-
-		bitmap = kmalloc(sizeof(struct ida_bitmap), gfp_mask);
-		if (!bitmap)
-			return 0;
-
-		free_bitmap(ida, bitmap);
-	}
-
-	return 1;
-}
-
-/**
- * ida_get_new_above - allocate new ID above or equal to a start id
- * @ida:	ida handle
- * @starting_id: id to start search at
- * @p_id:	pointer to the allocated handle
- *
- * Allocate new ID above or equal to @starting_id.  It should be called
- * with any required locks.
- *
- * If memory is required, it will return %-EAGAIN, you should unlock
- * and go back to the ida_pre_get() call.  If the ida is full, it will
- * return %-ENOSPC.
- *
- * @p_id returns a value in the range @starting_id ... %0x7fffffff.
- */
-int ida_get_new_above(struct ida *ida, int starting_id, int *p_id)
-{
-	struct idr_layer *pa[MAX_IDR_LEVEL + 1];
-	struct ida_bitmap *bitmap;
-	unsigned long flags;
-	int idr_id = starting_id / IDA_BITMAP_BITS;
-	int offset = starting_id % IDA_BITMAP_BITS;
-	int t, id;
-
- restart:
-	/* get vacant slot */
-	t = idr_get_empty_slot(&ida->idr, idr_id, pa, 0, &ida->idr);
-	if (t < 0)
-		return t == -ENOMEM ? -EAGAIN : t;
-
-	if (t * IDA_BITMAP_BITS >= MAX_IDR_BIT)
-		return -ENOSPC;
-
-	if (t != idr_id)
-		offset = 0;
-	idr_id = t;
-
-	/* if bitmap isn't there, create a new one */
-	bitmap = (void *)pa[0]->ary[idr_id & IDR_MASK];
-	if (!bitmap) {
-		spin_lock_irqsave(&ida->idr.lock, flags);
-		bitmap = ida->free_bitmap;
-		ida->free_bitmap = NULL;
-		spin_unlock_irqrestore(&ida->idr.lock, flags);
-
-		if (!bitmap)
-			return -EAGAIN;
-
-		memset(bitmap, 0, sizeof(struct ida_bitmap));
-		rcu_assign_pointer(pa[0]->ary[idr_id & IDR_MASK],
-				(void *)bitmap);
-		pa[0]->count++;
-	}
-
-	/* lookup for empty slot */
-	t = find_next_zero_bit(bitmap->bitmap, IDA_BITMAP_BITS, offset);
-	if (t == IDA_BITMAP_BITS) {
-		/* no empty slot after offset, continue to the next chunk */
-		idr_id++;
-		offset = 0;
-		goto restart;
-	}
-
-	id = idr_id * IDA_BITMAP_BITS + t;
-	if (id >= MAX_IDR_BIT)
-		return -ENOSPC;
-
-	__set_bit(t, bitmap->bitmap);
-	if (++bitmap->nr_busy == IDA_BITMAP_BITS)
-		idr_mark_full(pa, idr_id);
-
-	*p_id = id;
-
-	/* Each leaf node can handle nearly a thousand slots and the
-	 * whole idea of ida is to have small memory foot print.
-	 * Throw away extra resources one by one after each successful
-	 * allocation.
-	 */
-	if (ida->idr.id_free_cnt || ida->free_bitmap) {
-		struct idr_layer *p = get_from_free_list(&ida->idr);
-		if (p)
-			kmem_cache_free(idr_layer_cache, p);
-	}
-
-	return 0;
-}
-
-static void __ida_remove(struct ida *ida, int id)
-{
-	struct idr_layer *p = ida->idr.top;
-	int shift = (ida->idr.layers - 1) * IDR_BITS;
-	int idr_id = id / IDA_BITMAP_BITS;
-	int offset = id % IDA_BITMAP_BITS;
-	int n;
-	struct ida_bitmap *bitmap;
-
-	/* clear full bits while looking up the leaf idr_layer */
-	while ((shift > 0) && p) {
-		n = (idr_id >> shift) & IDR_MASK;
-		__clear_bit(n, p->bitmap);
-		p = p->ary[n];
-		shift -= IDR_BITS;
-	}
-
-	if (p == NULL)
-		goto err;
-
-	n = idr_id & IDR_MASK;
-	__clear_bit(n, p->bitmap);
-
-	bitmap = (void *)p->ary[n];
-	if (!test_bit(offset, bitmap->bitmap))
-		goto err;
-
-	/* update bitmap and remove it if empty */
-	__clear_bit(offset, bitmap->bitmap);
-	if (--bitmap->nr_busy == 0) {
-		__set_bit(n, p->bitmap);	/* to please idr_remove() */
-		idr_remove(&ida->idr, idr_id);
-		free_bitmap(ida, bitmap);
-	}
-
-	return;
-
- err:
-	printk(KERN_WARNING
-	       "ida_remove called for id=%d which is not allocated.\n", id);
-}
-
 /**
  * ida_destroy - release all cached layers within an ida tree
  * @ida:		ida handle
  */
 void ida_destroy(struct ida *ida)
 {
-	idr_destroy(&ida->idr);
-	kfree(ida->free_bitmap);
+	bitmap_tree_destroy(&ida->map);
 }
 EXPORT_SYMBOL(ida_destroy);
 
@@ -1085,42 +909,15 @@ EXPORT_SYMBOL(ida_destroy);
  * Use ida_remove() to get rid of an id.
  */
 int ida_get_range(struct ida *ida, unsigned int start,
-		  unsigned int end, gfp_t gfp_mask)
+		  unsigned int end, gfp_t gfp)
 {
-	int ret, id;
-	unsigned int max;
-	unsigned long flags;
+	unsigned id;
+	int ret = bitmap_tree_find_set_bits_from(&ida->map, &id, 1,
+						 start, end ?: INT_MAX, gfp);
+	if (ret < 0)
+		return ret;
 
-	BUG_ON((int)start < 0);
-	BUG_ON((int)end < 0);
-
-	if (end == 0)
-		max = 0x80000000;
-	else {
-		BUG_ON(end < start);
-		max = end - 1;
-	}
-
-again:
-	if (!ida_pre_get(ida, gfp_mask))
-		return -ENOMEM;
-
-	spin_lock_irqsave(&simple_ida_lock, flags);
-	ret = ida_get_new_above(ida, start, &id);
-	if (!ret) {
-		if (id > max) {
-			__ida_remove(ida, id);
-			ret = -ENOSPC;
-		} else {
-			ret = id;
-		}
-	}
-	spin_unlock_irqrestore(&simple_ida_lock, flags);
-
-	if (unlikely(ret == -EAGAIN))
-		goto again;
-
-	return ret;
+	return id;
 }
 EXPORT_SYMBOL(ida_get_range);
 
@@ -1131,12 +928,8 @@ EXPORT_SYMBOL(ida_get_range);
  */
 void ida_remove(struct ida *ida, unsigned int id)
 {
-	unsigned long flags;
-
-	BUG_ON((int)id < 0);
-	spin_lock_irqsave(&simple_ida_lock, flags);
-	__ida_remove(ida, id);
-	spin_unlock_irqrestore(&simple_ida_lock, flags);
+	BUG_ON(id > INT_MAX);
+	bitmap_tree_clear_bit(&ida->map, id);
 }
 EXPORT_SYMBOL(ida_remove);
 
@@ -1149,8 +942,7 @@ EXPORT_SYMBOL(ida_remove);
  */
 void ida_init(struct ida *ida)
 {
-	memset(ida, 0, sizeof(struct ida));
-	idr_init(&ida->idr);
+	bitmap_tree_init(&ida->map, 0);
 
 }
 EXPORT_SYMBOL(ida_init);

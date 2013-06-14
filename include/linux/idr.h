@@ -12,10 +12,11 @@
 #ifndef __IDR_H__
 #define __IDR_H__
 
-#include <linux/types.h>
-#include <linux/bitops.h>
 #include <linux/init.h>
+#include <linux/bitmap-tree.h>
+#include <linux/bitops.h>
 #include <linux/rcupdate.h>
+#include <linux/types.h>
 
 /*
  * We want shallower trees and thus more bits covered at each layer.  8
@@ -195,28 +196,18 @@ static inline void __deprecated idr_remove_all(struct idr *idp)
 	__idr_remove_all(idp);
 }
 
-/*
- * IDA - IDR based id allocator, use when translation from id to
- * pointer isn't necessary.
- *
- * IDA_BITMAP_LONGS is calculated to be one less to accommodate
- * ida_bitmap->nr_busy so that the whole struct fits in 128 bytes.
- */
-#define IDA_CHUNK_SIZE		128	/* 128 bytes per chunk */
-#define IDA_BITMAP_LONGS	(IDA_CHUNK_SIZE / sizeof(long) - 1)
-#define IDA_BITMAP_BITS 	(IDA_BITMAP_LONGS * sizeof(long) * 8)
+void __init idr_init_cache(void);
 
-struct ida_bitmap {
-	long			nr_busy;
-	unsigned long		bitmap[IDA_BITMAP_LONGS];
-};
+/* IDA */
 
 struct ida {
-	struct idr		idr;
-	struct ida_bitmap	*free_bitmap;
+	struct bitmap_tree	map;
 };
 
-#define IDA_INIT(name)		{ .idr = IDR_INIT((name).idr), .free_bitmap = NULL, }
+#define IDA_INIT(name)						\
+{								\
+	.map	= BITMAP_TREE_INIT(name.map),			\
+}
 #define DEFINE_IDA(name)	struct ida name = IDA_INIT(name)
 
 void ida_remove(struct ida *ida, unsigned id);
@@ -230,7 +221,5 @@ static inline int ida_get(struct ida *ida, gfp_t gfp_mask)
 {
 	return ida_get_range(ida, 0, 0, gfp_mask);
 }
-
-void __init idr_init_cache(void);
 
 #endif /* __IDR_H__ */

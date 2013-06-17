@@ -521,32 +521,20 @@ int devpts_new_index(struct inode *ptmx_inode)
 	struct super_block *sb = pts_sb_from_inode(ptmx_inode);
 	struct pts_fs_info *fsi = DEVPTS_SB(sb);
 	int index;
-	int ida_ret;
 
-retry:
-	if (!ida_pre_get(&fsi->allocated_ptys, GFP_KERNEL))
-		return -ENOMEM;
+	index = ida_simple_get(&fsi->allocated_ptys, 0,
+			       fsi->mount_opts.max, GFP_KERNEL);
+	if (index < 0)
+		return index;
 
 	mutex_lock(&allocated_ptys_lock);
 	if (pty_count >= pty_limit -
 			(fsi->mount_opts.newinstance ? pty_reserve : 0)) {
 		mutex_unlock(&allocated_ptys_lock);
+		ida_simple_remove(&fsi->allocated_ptys, index);
 		return -ENOSPC;
 	}
 
-	ida_ret = ida_get_new(&fsi->allocated_ptys, &index);
-	if (ida_ret < 0) {
-		mutex_unlock(&allocated_ptys_lock);
-		if (ida_ret == -EAGAIN)
-			goto retry;
-		return -EIO;
-	}
-
-	if (index >= fsi->mount_opts.max) {
-		ida_remove(&fsi->allocated_ptys, index);
-		mutex_unlock(&allocated_ptys_lock);
-		return -ENOSPC;
-	}
 	pty_count++;
 	mutex_unlock(&allocated_ptys_lock);
 	return index;
@@ -557,8 +545,8 @@ void devpts_kill_index(struct inode *ptmx_inode, int idx)
 	struct super_block *sb = pts_sb_from_inode(ptmx_inode);
 	struct pts_fs_info *fsi = DEVPTS_SB(sb);
 
+	ida_simple_remove(&fsi->allocated_ptys, idx);
 	mutex_lock(&allocated_ptys_lock);
-	ida_remove(&fsi->allocated_ptys, idx);
 	pty_count--;
 	mutex_unlock(&allocated_ptys_lock);
 }

@@ -52,7 +52,6 @@ static int vmw_gmrid_man_get_node(struct ttm_mem_type_manager *man,
 	struct vmwgfx_gmrid_man *gman =
 		(struct vmwgfx_gmrid_man *)man->priv;
 	int ret = 0;
-	int id;
 
 	mem->mm_node = NULL;
 
@@ -64,34 +63,20 @@ static int vmw_gmrid_man_get_node(struct ttm_mem_type_manager *man,
 			goto out_err_locked;
 	}
 
-	do {
-		spin_unlock(&gman->lock);
-		if (unlikely(ida_pre_get(&gman->gmr_ida, GFP_KERNEL) == 0)) {
-			ret = -ENOMEM;
-			goto out_err;
-		}
-		spin_lock(&gman->lock);
+	spin_unlock(&gman->lock);
+	ret = ida_simple_get(&gman->gmr_ida, 0, gman->max_gmr_ids, GFP_KERNEL);
+	spin_lock(&gman->lock);
 
-		ret = ida_get_new(&gman->gmr_ida, &id);
-		if (unlikely(ret == 0 && id >= gman->max_gmr_ids)) {
-			ida_remove(&gman->gmr_ida, id);
-			ret = 0;
-			goto out_err_locked;
-		}
-	} while (ret == -EAGAIN);
-
-	if (likely(ret == 0)) {
-		mem->mm_node = gman;
-		mem->start = id;
-		mem->num_pages = bo->num_pages;
-	} else
+	if (ret < 0)
 		goto out_err_locked;
+
+	mem->mm_node = gman;
+	mem->start = ret;
+	mem->num_pages = bo->num_pages;
 
 	spin_unlock(&gman->lock);
 	return 0;
 
-out_err:
-	spin_lock(&gman->lock);
 out_err_locked:
 	gman->used_gmr_pages -= bo->num_pages;
 	spin_unlock(&gman->lock);
@@ -106,7 +91,7 @@ static void vmw_gmrid_man_put_node(struct ttm_mem_type_manager *man,
 
 	if (mem->mm_node) {
 		spin_lock(&gman->lock);
-		ida_remove(&gman->gmr_ida, mem->start);
+		ida_simple_remove(&gman->gmr_ida, mem->start);
 		gman->used_gmr_pages -= mem->num_pages;
 		spin_unlock(&gman->lock);
 		mem->mm_node = NULL;

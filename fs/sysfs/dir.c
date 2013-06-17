@@ -233,7 +233,7 @@ static void sysfs_deactivate(struct sysfs_dirent *sd)
 
 static int sysfs_alloc_ino(unsigned int *pino)
 {
-	int ino = ida_simple_get(&sysfs_ino_ida, 2, 0, GFP_KERNEL);
+	int ino = ida_alloc_range(&sysfs_ino_ida, 2, 0, GFP_KERNEL);
 
 	if (ino < 0)
 		return ino;
@@ -245,7 +245,7 @@ static int sysfs_alloc_ino(unsigned int *pino)
 
 static void sysfs_free_ino(unsigned int ino)
 {
-	ida_simple_remove(&sysfs_ino_ida, ino);
+	ida_remove(&sysfs_ino_ida, ino);
 }
 
 void release_sysfs_dirent(struct sysfs_dirent * sd)

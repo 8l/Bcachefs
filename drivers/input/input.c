@@ -2329,7 +2329,7 @@ int input_get_new_minor(int legacy_base, unsigned int legacy_num,
 	 * locking is needed here.
 	 */
 	if (legacy_base >= 0) {
-		int minor = ida_simple_get(&input_ida,
+		int minor = ida_alloc_range(&input_ida,
 					   legacy_base,
 					   legacy_base + legacy_num,
 					   GFP_KERNEL);
@@ -2337,7 +2337,7 @@ int input_get_new_minor(int legacy_base, unsigned int legacy_num,
 			return minor;
 	}
 
-	return ida_simple_get(&input_ida,
+	return ida_alloc_range(&input_ida,
 			      INPUT_FIRST_DYNAMIC_DEV, INPUT_MAX_CHAR_DEVICES,
 			      GFP_KERNEL);
 }
@@ -2352,7 +2352,7 @@ EXPORT_SYMBOL(input_get_new_minor);
  */
 void input_free_minor(unsigned int minor)
 {
-	ida_simple_remove(&input_ida, minor);
+	ida_remove(&input_ida, minor);
 }
 EXPORT_SYMBOL(input_free_minor);
 

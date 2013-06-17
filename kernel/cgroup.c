@@ -846,7 +846,7 @@ static void cgroup_free_fn(struct work_struct *work)
 	 */
 	dput(cgrp->parent->dentry);
 
-	ida_simple_remove(&cgrp->root->cgroup_ida, cgrp->id);
+	ida_remove(&cgrp->root->cgroup_ida, cgrp->id);
 
 	/*
 	 * Drop the active superblock reference that we took when we
@@ -1426,7 +1426,7 @@ static void init_cgroup_root(struct cgroupfs_root *root)
 
 static bool init_root_id(struct cgroupfs_root *root)
 {
-	int ret = ida_simple_get(&hierarchy_ida, 0, 0, GFP_KERNEL);
+	int ret = ida_alloc(&hierarchy_ida, GFP_KERNEL);
 	if (ret < 0)
 		return false;
 
@@ -1489,7 +1489,7 @@ static void cgroup_drop_root(struct cgroupfs_root *root)
 		return;
 
 	BUG_ON(!root->hierarchy_id);
-	ida_simple_remove(&hierarchy_ida, root->hierarchy_id);
+	ida_remove(&hierarchy_ida, root->hierarchy_id);
 	ida_destroy(&root->cgroup_ida);
 	kfree(root);
 }
@@ -4101,7 +4101,7 @@ static long cgroup_create(struct cgroup *parent, struct dentry *dentry,
 		goto err_free_cgrp;
 	rcu_assign_pointer(cgrp->name, name);
 
-	cgrp->id = ida_simple_get(&root->cgroup_ida, 1, 0, GFP_KERNEL);
+	cgrp->id = ida_alloc_range(&root->cgroup_ida, 1, 0, GFP_KERNEL);
 	if (cgrp->id < 0)
 		goto err_free_name;
 
@@ -4210,7 +4210,7 @@ err_free_all:
 	/* Release the reference count that we took on the superblock */
 	deactivate_super(sb);
 err_free_id:
-	ida_simple_remove(&root->cgroup_ida, cgrp->id);
+	ida_remove(&root->cgroup_ida, cgrp->id);
 err_free_name:
 	kfree(rcu_dereference_raw(cgrp->name));
 err_free_cgrp:

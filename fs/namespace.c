@@ -68,7 +68,7 @@ static inline unsigned long hash(struct vfsmount *mnt, struct dentry *dentry)
  */
 static int mnt_alloc_id(struct mount *mnt)
 {
-	int res = ida_simple_get(&mnt_id_ida, 0, 0, GFP_KERNEL);
+	int res = ida_alloc(&mnt_id_ida, GFP_KERNEL);
 	if (res < 0)
 		return res;
 
@@ -78,7 +78,7 @@ static int mnt_alloc_id(struct mount *mnt)
 
 static void mnt_free_id(struct mount *mnt)
 {
-	ida_simple_remove(&mnt_id_ida, mnt->mnt_id);
+	ida_remove(&mnt_id_ida, mnt->mnt_id);
 }
 
 /*
@@ -88,7 +88,7 @@ static void mnt_free_id(struct mount *mnt)
  */
 static int mnt_alloc_group_id(struct mount *mnt)
 {
-	int res = ida_simple_get(&mnt_id_ida, 1, 0, GFP_KERNEL);
+	int res = ida_alloc_range(&mnt_id_ida, 1, 0, GFP_KERNEL);
 	if (res < 0)
 		return res;
 
@@ -101,7 +101,7 @@ static int mnt_alloc_group_id(struct mount *mnt)
  */
 void mnt_release_group_id(struct mount *mnt)
 {
-	ida_simple_remove(&mnt_group_ida, mnt->mnt_group_id);
+	ida_remove(&mnt_group_ida, mnt->mnt_group_id);
 }
 
 /*

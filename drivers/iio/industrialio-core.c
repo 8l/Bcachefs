@@ -856,7 +856,7 @@ static void iio_dev_release(struct device *device)
 	iio_device_unregister_sysfs(indio_dev);
 	iio_device_unregister_debugfs(indio_dev);
 
-	ida_simple_remove(&iio_ida, indio_dev->id);
+	ida_remove(&iio_ida, indio_dev->id);
 	kfree(indio_dev);
 }
 
@@ -890,7 +890,7 @@ struct iio_dev *iio_device_alloc(int sizeof_priv)
 		mutex_init(&dev->info_exist_lock);
 		INIT_LIST_HEAD(&dev->channel_attr_list);
 
-		dev->id = ida_simple_get(&iio_ida, 0, 0, GFP_KERNEL);
+		dev->id = ida_alloc(&iio_ida, GFP_KERNEL);
 		if (dev->id < 0) {
 			/* cannot use a dev_err as the name isn't available */
 			printk(KERN_ERR "Failed to get id\n");

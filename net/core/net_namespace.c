@@ -500,7 +500,7 @@ static int register_pernet_operations(struct list_head *list,
 	int error;
 
 	if (ops->id) {
-		int id = ida_simple_get(&net_generic_ids, 1, 0, GFP_KERNEL);
+		int id = ida_alloc_range(&net_generic_ids, 1, 0, GFP_KERNEL);
 		if (id < 0)
 			return id;
 
@@ -511,7 +511,7 @@ static int register_pernet_operations(struct list_head *list,
 	if (error) {
 		rcu_barrier();
 		if (ops->id)
-			ida_simple_remove(&net_generic_ids, *ops->id);
+			ida_remove(&net_generic_ids, *ops->id);
 	}
 
 	return error;
@@ -522,7 +522,7 @@ static void unregister_pernet_operations(struct pernet_operations *ops)
 	__unregister_pernet_operations(ops);
 	rcu_barrier();
 	if (ops->id)
-		ida_simple_remove(&net_generic_ids, *ops->id);
+		ida_remove(&net_generic_ids, *ops->id);
 }
 
 /**

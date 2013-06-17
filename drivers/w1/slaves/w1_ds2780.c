@@ -115,7 +115,7 @@ static int w1_ds2780_add_slave(struct w1_slave *sl)
 	int id;
 	struct platform_device *pdev;
 
-	id = ida_simple_get(&bat_ida, 0, 0, GFP_KERNEL);
+	id = ida_alloc(&bat_ida, GFP_KERNEL);
 	if (id < 0) {
 		ret = id;
 		goto noid;
@@ -145,7 +145,7 @@ bin_attr_failed:
 pdev_add_failed:
 	platform_device_put(pdev);
 pdev_alloc_failed:
-	ida_simple_remove(&bat_ida, id);
+	ida_remove(&bat_ida, id);
 noid:
 	return ret;
 }
@@ -156,7 +156,7 @@ static void w1_ds2780_remove_slave(struct w1_slave *sl)
 	int id = pdev->id;
 
 	platform_device_unregister(pdev);
-	ida_simple_remove(&bat_ida, id);
+	ida_remove(&bat_ida, id);
 	sysfs_remove_bin_file(&sl->dev.kobj, &w1_ds2780_bin_attr);
 }
 

@@ -193,7 +193,7 @@ int register_virtio_device(struct virtio_device *dev)
 	dev->dev.bus = &virtio_bus;
 
 	/* Assign a unique device index and hence name. */
-	err = ida_simple_get(&virtio_index_ida, 0, 0, GFP_KERNEL);
+	err = ida_alloc(&virtio_index_ida, GFP_KERNEL);
 	if (err < 0)
 		goto out;
 
@@ -224,7 +224,7 @@ void unregister_virtio_device(struct virtio_device *dev)
 	int index = dev->index; /* save for after device release */
 
 	device_unregister(&dev->dev);
-	ida_simple_remove(&virtio_index_ida, index);
+	ida_remove(&virtio_index_ida, index);
 }
 EXPORT_SYMBOL_GPL(unregister_virtio_device);
 

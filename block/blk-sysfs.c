@@ -546,7 +546,7 @@ static void blk_release_queue(struct kobject *kobj)
 
 	bdi_destroy(&q->backing_dev_info);
 
-	ida_simple_remove(&blk_queue_ida, q->id);
+	ida_remove(&blk_queue_ida, q->id);
 	call_rcu(&q->rcu_head, blk_free_queue_rcu);
 }
 

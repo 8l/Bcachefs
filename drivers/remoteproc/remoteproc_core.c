@@ -1223,7 +1223,7 @@ static void rproc_type_release(struct device *dev)
 	idr_destroy(&rproc->notifyids);
 
 	if (rproc->index >= 0)
-		ida_simple_remove(&rproc_dev_index, rproc->index);
+		ida_remove(&rproc_dev_index, rproc->index);
 
 	kfree(rproc);
 }
@@ -1301,9 +1301,9 @@ struct rproc *rproc_alloc(struct device *dev, const char *name,
 	rproc->dev.type = &rproc_type;
 
 	/* Assign a unique device index and name */
-	rproc->index = ida_simple_get(&rproc_dev_index, 0, 0, GFP_KERNEL);
+	rproc->index = ida_alloc(&rproc_dev_index, GFP_KERNEL);
 	if (rproc->index < 0) {
-		dev_err(dev, "ida_simple_get failed: %d\n", rproc->index);
+		dev_err(dev, "ida_alloc failed: %d\n", rproc->index);
 		put_device(&rproc->dev);
 		return NULL;
 	}

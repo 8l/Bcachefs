@@ -30,7 +30,7 @@ int get_cop_pid(struct mm_struct *mm)
 	int pid;
 
 	if (mm->context.cop_pid == COP_PID_NONE) {
-		pid = ida_simple_get(&cop_ida, COP_PID_MIN,
+		pid = ida_alloc_range(&cop_ida, COP_PID_MIN,
 				     COP_PID_MAX, GFP_KERNEL);
 		if (pid >= 0)
 			mm->context.cop_pid = pid;
@@ -51,5 +51,5 @@ int disable_cop_pid(struct mm_struct *mm)
 
 void free_cop_pid(int free_pid)
 {
-	ida_simple_remove(&cop_ida, free_pid);
+	ida_remove(&cop_ida, free_pid);
 }

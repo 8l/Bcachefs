@@ -595,7 +595,7 @@ struct request_queue *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
 	if (!q)
 		return NULL;
 
-	q->id = ida_simple_get(&blk_queue_ida, 0, 0, gfp_mask);
+	q->id = ida_alloc(&blk_queue_ida, gfp_mask);
 	if (q->id < 0)
 		goto fail_q;
 
@@ -650,7 +650,7 @@ struct request_queue *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
 	return q;
 
 fail_id:
-	ida_simple_remove(&blk_queue_ida, q->id);
+	ida_remove(&blk_queue_ida, q->id);
 fail_q:
 	kmem_cache_free(blk_requestq_cachep, q);
 	return NULL;

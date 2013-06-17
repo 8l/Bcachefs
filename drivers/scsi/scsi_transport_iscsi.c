@@ -1686,7 +1686,7 @@ static void __iscsi_unbind_session(struct work_struct *work)
 	mutex_unlock(&ihost->mutex);
 
 	if (session->ida_used)
-		ida_simple_remove(&iscsi_sess_ida, target_id);
+		ida_remove(&iscsi_sess_ida, target_id);
 
 	scsi_remove_target(&session->dev);
 	iscsi_session_event(session, ISCSI_KEVENT_UNBIND_SESSION);
@@ -1741,7 +1741,7 @@ int iscsi_add_session(struct iscsi_cls_session *session, unsigned int target_id)
 	session->sid = atomic_add_return(1, &iscsi_session_nr);
 
 	if (target_id == ISCSI_MAX_TARGET) {
-		id = ida_simple_get(&iscsi_sess_ida, 0, 0, GFP_KERNEL);
+		id = ida_alloc(&iscsi_sess_ida, GFP_KERNEL);
 
 		if (id < 0) {
 			iscsi_cls_session_printk(KERN_ERR, session,
@@ -1772,7 +1772,7 @@ int iscsi_add_session(struct iscsi_cls_session *session, unsigned int target_id)
 
 release_ida:
 	if (session->ida_used)
-		ida_simple_remove(&iscsi_sess_ida, session->target_id);
+		ida_remove(&iscsi_sess_ida, session->target_id);
 
 	return err;
 }

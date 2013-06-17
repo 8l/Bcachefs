@@ -222,9 +222,14 @@ struct ida {
 void ida_destroy(struct ida *ida);
 void ida_init(struct ida *ida);
 
-int ida_simple_get(struct ida *ida, unsigned int start, unsigned int end,
+int ida_alloc_range(struct ida *ida, unsigned int start, unsigned int end,
 		   gfp_t gfp_mask);
-void ida_simple_remove(struct ida *ida, unsigned int id);
+void ida_remove(struct ida *ida, unsigned int id);
+
+static inline int ida_alloc(struct ida *ida, gfp_t gfp_mask)
+{
+	return ida_alloc_range(ida, 0, 0, gfp_mask);
+}
 
 void __init idr_init_cache(void);
 

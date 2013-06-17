@@ -3980,7 +3980,7 @@ static int mtip_block_initialize(struct driver_data *dd)
 		goto alloc_disk_error;
 	}
 
-	rv = ida_simple_get(&rssd_index_ida, 0, 0, GFP_KERNEL);
+	rv = ida_alloc(&rssd_index_ida, GFP_KERNEL);
 	if (rv < 0)
 		goto ida_alloc_error;
 
@@ -4102,7 +4102,7 @@ read_capacity_error:
 
 block_queue_alloc_init_error:
 disk_index_error:
-	ida_simple_remove(&rssd_index_ida, index);
+	ida_remove(&rssd_index_ida, index);
 
 ida_alloc_error:
 	put_disk(dd->disk);
@@ -4155,7 +4155,7 @@ static int mtip_block_remove(struct driver_data *dd)
 			put_disk(dd->disk);
 	}
 
-	ida_simple_remove(&rssd_index_ida, dd->index);
+	ida_remove(&rssd_index_ida, dd->index);
 
 	blk_cleanup_queue(dd->queue);
 	dd->disk  = NULL;
@@ -4195,7 +4195,7 @@ static int mtip_block_shutdown(struct driver_data *dd)
 		dd->queue = NULL;
 	}
 
-	ida_simple_remove(&rssd_index_ida, dd->index);
+	ida_remove(&rssd_index_ida, dd->index);
 
 	mtip_hw_shutdown(dd);
 	return 0;

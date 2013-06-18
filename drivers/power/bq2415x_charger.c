@@ -1516,7 +1516,7 @@ static int bq2415x_probe(struct i2c_client *client,
 
 	/* Get new ID for the new device */
 	mutex_lock(&bq2415x_id_mutex);
-	num = idr_alloc(&bq2415x_id, client, 0, 0, GFP_KERNEL);
+	num = idr_alloc(&bq2415x_id, client, GFP_KERNEL);
 	mutex_unlock(&bq2415x_id_mutex);
 	if (num < 0)
 		return num;

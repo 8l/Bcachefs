@@ -1025,11 +1025,11 @@ static void push_rxbufs(ns_dev * card, struct sk_buff *skb)
 				card->lbfqc += 2;
 		}
 
-		id1 = idr_alloc(&card->idr, handle1, 0, 0, GFP_ATOMIC);
+		id1 = idr_alloc(&card->idr, handle1, GFP_ATOMIC);
 		if (id1 < 0)
 			goto out;
 
-		id2 = idr_alloc(&card->idr, handle2, 0, 0, GFP_ATOMIC);
+		id2 = idr_alloc(&card->idr, handle2, GFP_ATOMIC);
 		if (id2 < 0)
 			goto out;
 

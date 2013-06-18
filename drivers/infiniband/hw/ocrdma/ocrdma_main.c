@@ -404,7 +404,7 @@ static struct ocrdma_dev *ocrdma_add(struct be_dev_info *dev_info)
 		goto idr_err;
 
 	memcpy(&dev->nic_info, dev_info, sizeof(*dev_info));
-	dev->id = idr_alloc(&ocrdma_dev_id, NULL, 0, 0, GFP_KERNEL);
+	dev->id = idr_alloc(&ocrdma_dev_id, NULL, GFP_KERNEL);
 	if (dev->id < 0)
 		goto idr_err;
 

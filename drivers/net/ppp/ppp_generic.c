@@ -2958,7 +2958,7 @@ static int unit_set(struct idr *p, void *ptr, int n)
 {
 	int unit;
 
-	unit = idr_alloc(p, ptr, n, n + 1, GFP_KERNEL);
+	unit = idr_alloc_range(p, ptr, n, n + 1, GFP_KERNEL);
 	if (unit == -ENOSPC)
 		unit = -EINVAL;
 	return unit;
@@ -2967,7 +2967,7 @@ static int unit_set(struct idr *p, void *ptr, int n)
 /* get new free unit number and associate pointer with it */
 static int unit_get(struct idr *p, void *ptr)
 {
-	return idr_alloc(p, ptr, 0, 0, GFP_KERNEL);
+	return idr_alloc_range(p, ptr, 0, 0, GFP_KERNEL);
 }
 
 /* put unit number back to a pool */

@@ -75,7 +75,7 @@ static int get_idr(struct idr *idr, int *id)
 	int ret;
 
 	mutex_lock(&cooling_cpufreq_lock);
-	ret = idr_alloc(idr, NULL, 0, 0, GFP_KERNEL);
+	ret = idr_alloc(idr, NULL, GFP_KERNEL);
 	mutex_unlock(&cooling_cpufreq_lock);
 	if (unlikely(ret < 0))
 		return ret;

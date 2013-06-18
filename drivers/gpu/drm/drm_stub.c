@@ -121,7 +121,7 @@ static int drm_minor_get_id(struct drm_device *dev, int type)
         }
 
 	mutex_lock(&dev->struct_mutex);
-	ret = idr_alloc(&drm_minors_idr, NULL, base, limit, GFP_KERNEL);
+	ret = idr_alloc_range(&drm_minors_idr, NULL, base, limit, GFP_KERNEL);
 	mutex_unlock(&dev->struct_mutex);
 
 	return ret == -ENOSPC ? -EINVAL : ret;

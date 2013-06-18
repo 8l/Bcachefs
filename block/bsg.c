@@ -1016,7 +1016,7 @@ int bsg_register_queue(struct request_queue *q, struct device *parent,
 
 	mutex_lock(&bsg_mutex);
 
-	ret = idr_alloc(&bsg_minor_idr, bcd, 0, BSG_MAX_DEVS, GFP_KERNEL);
+	ret = idr_alloc_range(&bsg_minor_idr, bcd, 0, BSG_MAX_DEVS, GFP_KERNEL);
 	if (ret < 0) {
 		if (ret == -ENOSPC) {
 			printk(KERN_ERR "bsg: too many bsg devices\n");

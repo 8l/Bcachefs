@@ -291,7 +291,7 @@ static int iscsi_login_zero_tsih_s1(
 
 	idr_preload(GFP_KERNEL);
 	spin_lock_bh(&sess_idr_lock);
-	ret = idr_alloc(&sess_idr, NULL, 0, 0, GFP_NOWAIT);
+	ret = idr_alloc(&sess_idr, NULL, GFP_NOWAIT);
 	if (ret >= 0)
 		sess->session_index = ret;
 	spin_unlock_bh(&sess_idr_lock);

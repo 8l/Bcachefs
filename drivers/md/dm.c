@@ -1793,7 +1793,7 @@ static int specific_minor(int minor)
 	idr_preload(GFP_KERNEL);
 	spin_lock(&_minor_lock);
 
-	r = idr_alloc(&_minor_idr, MINOR_ALLOCED, minor, minor + 1, GFP_NOWAIT);
+	r = idr_alloc_range(&_minor_idr, MINOR_ALLOCED, minor, minor + 1, GFP_NOWAIT);
 
 	spin_unlock(&_minor_lock);
 	idr_preload_end();
@@ -1809,7 +1809,7 @@ static int next_free_minor(int *minor)
 	idr_preload(GFP_KERNEL);
 	spin_lock(&_minor_lock);
 
-	r = idr_alloc(&_minor_idr, MINOR_ALLOCED, 0, 1 << MINORBITS, GFP_NOWAIT);
+	r = idr_alloc_range(&_minor_idr, MINOR_ALLOCED, 0, 1 << MINORBITS, GFP_NOWAIT);
 
 	spin_unlock(&_minor_lock);
 	idr_preload_end();

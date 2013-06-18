@@ -792,7 +792,7 @@ static int bq27x00_battery_probe(struct i2c_client *client,
 
 	/* Get new ID for the new battery device */
 	mutex_lock(&battery_mutex);
-	num = idr_alloc(&battery_id, client, 0, 0, GFP_KERNEL);
+	num = idr_alloc(&battery_id, client, GFP_KERNEL);
 	mutex_unlock(&battery_mutex);
 	if (num < 0)
 		return num;

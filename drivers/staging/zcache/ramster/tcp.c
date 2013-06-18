@@ -303,7 +303,7 @@ static int r2net_prep_nsw(struct r2net_node *nn, struct r2net_status_wait *nsw)
 	int ret;
 
 	spin_lock(&nn->nn_lock);
-	ret = idr_alloc(&nn->nn_status_idr, nsw, 0, 0, GFP_ATOMIC);
+	ret = idr_alloc(&nn->nn_status_idr, nsw, GFP_ATOMIC);
 	if (ret >= 0) {
 		nsw->ns_id = ret;
 		list_add_tail(&nsw->ns_node_item, &nn->nn_status_list);

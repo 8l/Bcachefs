@@ -242,9 +242,9 @@ static struct rpmsg_endpoint *__rpmsg_create_ept(struct virtproc_info *vrp,
 	mutex_lock(&vrp->endpoints_lock);
 
 	/* bind the endpoint to an rpmsg address (and allocate one if needed) */
-	id = idr_alloc(&vrp->endpoints, ept, id_min, id_max, GFP_KERNEL);
+	id = idr_alloc_range(&vrp->endpoints, ept, id_min, id_max, GFP_KERNEL);
 	if (id < 0) {
-		dev_err(dev, "idr_alloc failed: %d\n", id);
+		dev_err(dev, "idr_alloc_range failed: %d\n", id);
 		goto free_ept;
 	}
 	ept->addr = id;

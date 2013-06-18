@@ -515,7 +515,7 @@ int memstick_add_host(struct memstick_host *host)
 	idr_preload(GFP_KERNEL);
 	spin_lock(&memstick_host_lock);
 
-	rc = idr_alloc(&memstick_host_idr, host, 0, 0, GFP_NOWAIT);
+	rc = idr_alloc(&memstick_host_idr, host, GFP_NOWAIT);
 	if (rc >= 0)
 		host->id = rc;
 

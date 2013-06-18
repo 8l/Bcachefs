@@ -94,7 +94,7 @@ int p9_idpool_get(struct p9_idpool *p)
 	spin_lock_irqsave(&p->lock, flags);
 
 	/* no need to store exactly p, we just need something non-null */
-	i = idr_alloc(&p->pool, p, 0, 0, GFP_NOWAIT);
+	i = idr_alloc(&p->pool, p, GFP_NOWAIT);
 
 	spin_unlock_irqrestore(&p->lock, flags);
 	idr_preload_end();

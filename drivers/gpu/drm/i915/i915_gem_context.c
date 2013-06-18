@@ -171,7 +171,7 @@ create_hw_context(struct drm_device *dev,
 
 	ctx->file_priv = file_priv;
 
-	ret = idr_alloc(&file_priv->context_idr, ctx, DEFAULT_CONTEXT_ID + 1, 0,
+	ret = idr_alloc_range(&file_priv->context_idr, ctx, DEFAULT_CONTEXT_ID + 1, 0,
 			GFP_KERNEL);
 	if (ret < 0)
 		goto err_out;

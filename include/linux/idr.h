@@ -16,6 +16,92 @@
 #include <linux/bitops.h>
 #include <linux/init.h>
 #include <linux/rcupdate.h>
+#include <linux/spinlock_types.h>
+#include <linux/wait.h>
+
+/* IDA */
+
+struct ida {
+	spinlock_t		lock;
+
+	/*
+	 * cur_id and allocated_ids are for ida_alloc_cyclic. For cyclic
+	 * allocations we search for new ids to allocate starting from the last
+	 * id allocated - cur_id is the next id to try allocating.
+	 *
+	 * But we also don't want the allocated ids to be arbitrarily sparse -
+	 * the memory usage for the bitmap could be arbitrarily bad, and if
+	 * they're used as keys in a radix tree the memory overhead of the radix
+	 * tree could be quite bad as well. So we use allocated_ids to decide
+	 * when to restart cur_id from 0, and bound how sparse the bitmap can
+	 * be.
+	 */
+	unsigned		cur_id;
+	unsigned		allocated_ids;
+
+	/* size of ida->tree */
+	unsigned		nodes;
+
+	/*
+	 * Index of first leaf node in ida->tree; equal to the number of non
+	 * leaf nodes, ida->nodes - ida->first_leaf == number of leaf nodes
+	 */
+	unsigned		first_leaf;
+	unsigned		sections;
+
+	unsigned long		**tree;
+	unsigned long		*inline_section;
+	unsigned long		inline_node;
+};
+
+#define IDA_INIT(name)						\
+{								\
+	.lock		= __SPIN_LOCK_UNLOCKED(name.lock),	\
+	.nodes		= 1,					\
+	.first_leaf	= 0,					\
+	.sections	= 1,					\
+	.tree		= &name.inline_section,			\
+	.inline_section	= &name.inline_node,			\
+}
+#define DEFINE_IDA(name)	struct ida name = IDA_INIT(name)
+
+void ida_remove(struct ida *ida, unsigned id);
+int ida_alloc_range(struct ida *ida, unsigned int start,
+		  unsigned int end, gfp_t gfp);
+int ida_alloc_cyclic(struct ida *ida, unsigned start, unsigned end, gfp_t gfp);
+void ida_destroy(struct ida *ida);
+int ida_init_prealloc(struct ida *ida, unsigned prealloc);
+
+/**
+ * ida_alloc_range - allocate a new id.
+ * @ida: the (initialized) ida.
+ * @gfp_mask: memory allocation flags
+ *
+ * Allocates an id in the range [0, INT_MAX]. Returns -ENOSPC if no ids are
+ * available, or -ENOMEM on memory allocation failure.
+ *
+ * Returns the smallest available id
+ *
+ * Use ida_remove() to get rid of an id.
+ */
+static inline int ida_alloc(struct ida *ida, gfp_t gfp_mask)
+{
+	return ida_alloc_range(ida, 0, 0, gfp_mask);
+}
+
+/**
+ * ida_init - initialize ida handle
+ * @ida:	ida handle
+ *
+ * This function is use to set up the handle (@ida) that you will pass
+ * to the rest of the functions.
+ */
+static inline void ida_init(struct ida *ida)
+{
+	ida_init_prealloc(ida, 0);
+}
+
+/* IDR */
 
 /*
  * We want shallower trees and thus more bits covered at each layer.  8
@@ -193,42 +279,6 @@ static inline int __deprecated idr_get_new(struct idr *idp, void *ptr, int *id)
 static inline void __deprecated idr_remove_all(struct idr *idp)
 {
 	__idr_remove_all(idp);
-}
-
-/*
- * IDA - IDR based id allocator, use when translation from id to
- * pointer isn't necessary.
- *
- * IDA_BITMAP_LONGS is calculated to be one less to accommodate
- * ida_bitmap->nr_busy so that the whole struct fits in 128 bytes.
- */
-#define IDA_CHUNK_SIZE		128	/* 128 bytes per chunk */
-#define IDA_BITMAP_LONGS	(IDA_CHUNK_SIZE / sizeof(long) - 1)
-#define IDA_BITMAP_BITS 	(IDA_BITMAP_LONGS * sizeof(long) * 8)
-
-struct ida_bitmap {
-	long			nr_busy;
-	unsigned long		bitmap[IDA_BITMAP_LONGS];
-};
-
-struct ida {
-	struct idr		idr;
-	struct ida_bitmap	*free_bitmap;
-};
-
-#define IDA_INIT(name)		{ .idr = IDR_INIT((name).idr), .free_bitmap = NULL, }
-#define DEFINE_IDA(name)	struct ida name = IDA_INIT(name)
-
-void ida_destroy(struct ida *ida);
-void ida_init(struct ida *ida);
-
-int ida_alloc_range(struct ida *ida, unsigned int start, unsigned int end,
-		   gfp_t gfp_mask);
-void ida_remove(struct ida *ida, unsigned int id);
-
-static inline int ida_alloc(struct ida *ida, gfp_t gfp_mask)
-{
-	return ida_alloc_range(ida, 0, 0, gfp_mask);
 }
 
 void __init idr_init_cache(void);

@@ -41,7 +41,6 @@
  */
 
 struct p9_idpool {
-	spinlock_t lock;
 	struct idr pool;
 };
 
@@ -58,7 +57,6 @@ struct p9_idpool *p9_idpool_create(void)
 	if (!p)
 		return ERR_PTR(-ENOMEM);
 
-	spin_lock_init(&p->lock);
 	idr_init(&p->pool);
 
 	return p;
@@ -88,16 +86,9 @@ EXPORT_SYMBOL(p9_idpool_destroy);
 int p9_idpool_get(struct p9_idpool *p)
 {
 	int i;
-	unsigned long flags;
-
-	idr_preload(GFP_NOFS);
-	spin_lock_irqsave(&p->lock, flags);
 
 	/* no need to store exactly p, we just need something non-null */
-	i = idr_alloc(&p->pool, p, GFP_NOWAIT);
-
-	spin_unlock_irqrestore(&p->lock, flags);
-	idr_preload_end();
+	i = idr_alloc(&p->pool, p, GFP_NOFS);
 	if (i < 0)
 		return -1;
 
@@ -117,13 +108,9 @@ EXPORT_SYMBOL(p9_idpool_get);
 
 void p9_idpool_put(int id, struct p9_idpool *p)
 {
-	unsigned long flags;
-
 	p9_debug(P9_DEBUG_MUX, " id %d pool %p\n", id, p);
 
-	spin_lock_irqsave(&p->lock, flags);
 	idr_remove(&p->pool, id);
-	spin_unlock_irqrestore(&p->lock, flags);
 }
 EXPORT_SYMBOL(p9_idpool_put);
 

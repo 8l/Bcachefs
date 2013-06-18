@@ -71,7 +71,6 @@
 struct sctp_globals sctp_globals __read_mostly;
 
 struct idr sctp_assocs_id;
-DEFINE_SPINLOCK(sctp_assocs_id_lock);
 
 static struct sctp_pf *sctp_pf_inet6_specific;
 static struct sctp_pf *sctp_pf_inet_specific;

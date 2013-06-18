@@ -20,7 +20,6 @@
 
 static struct workqueue_struct *workqueue;
 static DEFINE_IDR(tifm_adapter_idr);
-static DEFINE_SPINLOCK(tifm_adapter_lock);
 
 static const char *tifm_media_type_name(unsigned char type, unsigned char nt)
 {
@@ -196,22 +195,16 @@ int tifm_add_adapter(struct tifm_adapter *fm)
 {
 	int rc;
 
-	idr_preload(GFP_KERNEL);
-	spin_lock(&tifm_adapter_lock);
-	rc = idr_alloc(&tifm_adapter_idr, fm, GFP_NOWAIT);
-	if (rc >= 0)
-		fm->id = rc;
-	spin_unlock(&tifm_adapter_lock);
-	idr_preload_end();
+	rc = idr_alloc(&tifm_adapter_idr, fm, GFP_KERNEL);
 	if (rc < 0)
 		return rc;
+
+	fm->id = rc;
 
 	dev_set_name(&fm->dev, "tifm%u", fm->id);
 	rc = device_add(&fm->dev);
 	if (rc) {
-		spin_lock(&tifm_adapter_lock);
 		idr_remove(&tifm_adapter_idr, fm->id);
-		spin_unlock(&tifm_adapter_lock);
 	}
 
 	return rc;
@@ -228,9 +221,7 @@ void tifm_remove_adapter(struct tifm_adapter *fm)
 			device_unregister(&fm->sockets[cnt]->dev);
 	}
 
-	spin_lock(&tifm_adapter_lock);
 	idr_remove(&tifm_adapter_idr, fm->id);
-	spin_unlock(&tifm_adapter_lock);
 	device_del(&fm->dev);
 }
 EXPORT_SYMBOL(tifm_remove_adapter);

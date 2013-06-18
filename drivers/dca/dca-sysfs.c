@@ -31,7 +31,6 @@
 
 static struct class *dca_class;
 static struct idr dca_idr;
-static spinlock_t dca_idr_lock;
 
 int dca_sysfs_add_req(struct dca_provider *dca, struct device *dev, int slot)
 {
@@ -55,23 +54,15 @@ int dca_sysfs_add_provider(struct dca_provider *dca, struct device *dev)
 	struct device *cd;
 	int ret;
 
-	idr_preload(GFP_KERNEL);
-	spin_lock(&dca_idr_lock);
-
-	ret = idr_alloc(&dca_idr, dca, GFP_NOWAIT);
-	if (ret >= 0)
-		dca->id = ret;
-
-	spin_unlock(&dca_idr_lock);
-	idr_preload_end();
+	ret = idr_alloc(&dca_idr, dca, GFP_KERNEL);
 	if (ret < 0)
 		return ret;
 
+	dca->id = ret;
+
 	cd = device_create(dca_class, dev, MKDEV(0, 0), NULL, "dca%d", dca->id);
 	if (IS_ERR(cd)) {
-		spin_lock(&dca_idr_lock);
 		idr_remove(&dca_idr, dca->id);
-		spin_unlock(&dca_idr_lock);
 		return PTR_ERR(cd);
 	}
 	dca->cd = cd;
@@ -82,15 +73,12 @@ void dca_sysfs_remove_provider(struct dca_provider *dca)
 {
 	device_unregister(dca->cd);
 	dca->cd = NULL;
-	spin_lock(&dca_idr_lock);
 	idr_remove(&dca_idr, dca->id);
-	spin_unlock(&dca_idr_lock);
 }
 
 int __init dca_sysfs_init(void)
 {
 	idr_init(&dca_idr);
-	spin_lock_init(&dca_idr_lock);
 
 	dca_class = class_create(THIS_MODULE, "dca");
 	if (IS_ERR(dca_class)) {

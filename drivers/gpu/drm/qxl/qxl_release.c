@@ -43,7 +43,6 @@ qxl_release_alloc(struct qxl_device *qdev, int type,
 		  struct qxl_release **ret)
 {
 	struct qxl_release *release;
-	int handle;
 	size_t size = sizeof(*release);
 	int idr_ret;
 
@@ -57,20 +56,16 @@ qxl_release_alloc(struct qxl_device *qdev, int type,
 	release->release_offset = 0;
 	release->surface_release_id = 0;
 
-	idr_preload(GFP_KERNEL);
-	spin_lock(&qdev->release_idr_lock);
-	idr_ret = idr_alloc_range(&qdev->release_idr, release, 1, 0, GFP_NOWAIT);
-	spin_unlock(&qdev->release_idr_lock);
-	idr_preload_end();
-	handle = idr_ret;
+	idr_ret = idr_alloc_range(&qdev->release_idr, release,
+				  1, 0, GFP_KERNEL);
 	if (idr_ret < 0)
 		goto release_fail;
 	*ret = release;
-	QXL_INFO(qdev, "allocated release %lld\n", handle);
-	release->id = handle;
+	QXL_INFO(qdev, "allocated release %lld\n", idr_ret);
+	release->id = idr_ret;
 release_fail:
 
-	return handle;
+	return idr_ret;
 }
 
 void
@@ -92,9 +87,7 @@ qxl_release_free(struct qxl_device *qdev,
 		qxl_fence_remove_release(&release->bos[i]->fence, release->id);
 		qxl_bo_unref(&release->bos[i]);
 	}
-	spin_lock(&qdev->release_idr_lock);
 	idr_remove(&qdev->release_idr, release->id);
-	spin_unlock(&qdev->release_idr_lock);
 	kfree(release);
 }
 
@@ -266,9 +259,7 @@ struct qxl_release *qxl_release_from_id_locked(struct qxl_device *qdev,
 {
 	struct qxl_release *release;
 
-	spin_lock(&qdev->release_idr_lock);
 	release = idr_find(&qdev->release_idr, id);
-	spin_unlock(&qdev->release_idr_lock);
 	if (!release) {
 		DRM_ERROR("failed to find id in release_idr\n");
 		return NULL;

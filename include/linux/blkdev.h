@@ -878,6 +878,7 @@ static inline unsigned int blk_rq_count_bios(struct request *rq)
  */
 extern struct request *blk_peek_request(struct request_queue *q);
 extern void blk_start_request(struct request *rq);
+extern void blk_start_abort_request(struct request *req, int error);
 extern struct request *blk_fetch_request(struct request_queue *q);
 
 /*

@@ -470,8 +470,7 @@ static struct request *ace_get_next_request(struct request_queue *q)
 	while ((req = blk_peek_request(q)) != NULL) {
 		if (req->cmd_type == REQ_TYPE_FS)
 			break;
-		blk_start_request(req);
-		__blk_end_request_all(req, -EIO);
+		blk_start_abort_request(req, -EIO);
 	}
 	return req;
 }

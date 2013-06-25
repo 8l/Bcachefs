@@ -2534,8 +2534,7 @@ static void __dasd_process_request_queue(struct dasd_block *block)
 			DBF_DEV_EVENT(DBF_ERR, basedev,
 				      "Rejecting write request %p",
 				      req);
-			blk_start_request(req);
-			__blk_end_request_all(req, -EIO);
+			blk_start_abort_request(req, -EIO);
 			continue;
 		}
 		if (test_bit(DASD_FLAG_ABORTALL, &basedev->flags) &&
@@ -2576,8 +2575,7 @@ static void __dasd_process_request_queue(struct dasd_block *block)
 				      "CCW creation failed (rc=%ld) "
 				      "on request %p",
 				      PTR_ERR(cqr), req);
-			blk_start_request(req);
-			__blk_end_request_all(req, -EIO);
+			blk_start_abort_request(req, -EIO);
 			continue;
 		}
 		/*

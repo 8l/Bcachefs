@@ -2166,12 +2166,7 @@ struct request *blk_peek_request(struct request_queue *q)
 			break;
 		} else if (ret == BLKPREP_KILL) {
 			rq->cmd_flags |= REQ_QUIET;
-			/*
-			 * Mark this request as started so we don't trigger
-			 * any debug logic in the end I/O path.
-			 */
-			blk_start_request(rq);
-			__blk_end_request_all(rq, -EIO);
+			blk_start_abort_request(rq, -EIO);
 		} else {
 			printk(KERN_ERR "%s: bad return=%d\n", __func__, ret);
 			break;
@@ -2202,6 +2197,19 @@ void blk_dequeue_request(struct request *rq)
 	}
 }
 
+static void __blk_start_request(struct request *req)
+{
+	blk_dequeue_request(req);
+
+	/*
+	 * We are now handing the request to the hardware, initialize
+	 * resid_len to full count and add the timeout handler.
+	 */
+	req->resid_len = blk_rq_bytes(req);
+	if (unlikely(blk_bidi_rq(req)))
+		req->next_rq->resid_len = blk_rq_bytes(req->next_rq);
+}
+
 /**
  * blk_start_request - start request processing on the driver
  * @req: request to dequeue
@@ -2218,19 +2226,21 @@ void blk_dequeue_request(struct request *rq)
  */
 void blk_start_request(struct request *req)
 {
-	blk_dequeue_request(req);
-
-	/*
-	 * We are now handing the request to the hardware, initialize
-	 * resid_len to full count and add the timeout handler.
-	 */
-	req->resid_len = blk_rq_bytes(req);
-	if (unlikely(blk_bidi_rq(req)))
-		req->next_rq->resid_len = blk_rq_bytes(req->next_rq);
-
+	__blk_start_request(req);
 	blk_add_timer(req);
 }
 EXPORT_SYMBOL(blk_start_request);
+
+void blk_start_abort_request(struct request *req, int error)
+{
+	/*
+	 * Mark this request as started so we don't trigger
+	 * any debug logic in the end I/O path.
+	 */
+	__blk_start_request(req);
+	__blk_end_request_all(req, error);
+}
+EXPORT_SYMBOL(blk_start_abort_request);
 
 /**
  * blk_fetch_request - fetch a request from a request queue

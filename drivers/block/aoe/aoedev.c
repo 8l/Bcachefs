@@ -225,12 +225,9 @@ aoedev_downdev(struct aoedev *d)
 	aoe_failip(d);
 
 	/* fast fail all pending I/O */
-	if (d->blkq) {
-		while ((rq = blk_peek_request(d->blkq))) {
-			blk_start_request(rq);
-			aoe_end_request(d, rq, 1);
-		}
-	}
+	if (d->blkq)
+		while ((rq = blk_peek_request(d->blkq)))
+			blk_start_abort_request(rq, -EIO);
 
 	if (d->gd)
 		set_capacity(d->gd, 0);

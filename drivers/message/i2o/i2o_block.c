@@ -930,8 +930,7 @@ static void i2o_block_request_fn(struct request_queue *q)
 				break;
 			}
 		} else {
-			blk_start_request(req);
-			__blk_end_request_all(req, -EIO);
+			blk_start_abort_request(req, -EIO);
 		}
 	}
 };

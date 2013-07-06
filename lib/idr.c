@@ -86,10 +86,15 @@ static void *kgalloc(size_t size, gfp_t gfp)
 #define IDA_SECTION_SIZE	(PAGE_SIZE << IDA_ALLOC_ORDER_MAX)
 #define IDA_NODES_PER_SECTION	(IDA_SECTION_SIZE / sizeof(unsigned long))
 
-static inline unsigned long *ida_index_to_node(struct ida *ida, unsigned node)
+static inline unsigned long *__ida_index_to_node(struct ida *ida, unsigned node)
 {
 	return ida->tree[node / IDA_NODES_PER_SECTION] +
 		node % IDA_NODES_PER_SECTION;
+}
+
+static inline unsigned long *ida_index_to_node(struct ida *ida, unsigned node)
+{
+	return __ida_index_to_node(ida, node + ida->pad);
 }
 
 /*
@@ -101,6 +106,16 @@ static unsigned first_leaf_from_nodes(unsigned nodes)
 	unsigned ret = 0;
 
 	while (ret * IDA_TREE_ARY + 1 < nodes)
+		ret = ret * IDA_TREE_ARY + 1;
+
+	return ret;
+}
+
+static unsigned first_leaf_from_leaves(unsigned leaves)
+{
+	unsigned ret = 0;
+
+	while (ret * IDA_TREE_ARY + 1 - ret < leaves)
 		ret = ret * IDA_TREE_ARY + 1;
 
 	return ret;
@@ -150,51 +165,136 @@ void ida_remove(struct ida *ida, unsigned int id)
 EXPORT_SYMBOL(ida_remove);
 
 static void ida_increase_depth(struct ida *ida, unsigned new_nodes,
-			       unsigned new_first_leaf)
+			       unsigned new_first_leaf, unsigned new_pad)
 {
 	unsigned old_leaves = ida->nodes - ida->first_leaf;
-	unsigned src = ida->nodes;
-	unsigned dst = new_first_leaf + old_leaves;
 	unsigned n, i, bit;
 	unsigned long *node;
 
 	/* Shift leaves up to new position */
-	while (src != ida->first_leaf) {
-		i = min((src - 1) % IDA_NODES_PER_SECTION + 1,
-			(dst - 1) % IDA_NODES_PER_SECTION + 1);
 
-		i = min(i, src - ida->first_leaf);
+	if (!((ida->pad + ida->first_leaf) % IDA_NODES_PER_SECTION) &&
+	    !((new_pad + new_first_leaf) % IDA_NODES_PER_SECTION)) {
+		unsigned sections_to_move =
+			(new_pad + new_first_leaf -
+			 (ida->pad + ida->first_leaf)) / IDA_NODES_PER_SECTION;
 
-		src -= i;
-		dst -= i;
+		unsigned src = (ida->pad + ida->first_leaf) / IDA_NODES_PER_SECTION;
 
-		memmove(ida_index_to_node(ida, dst),
-			ida_index_to_node(ida, src),
-			i * sizeof(unsigned long));
+		while (sections_to_move--) {
+			unsigned long *tmp = ida->tree[ida->sections - 1];
+
+			memmove(ida->tree + src + 1,
+				ida->tree + src,
+				(ida->sections - src - 1) * sizeof(unsigned long *));
+
+			ida->tree[src] = tmp;
+		}
+	} else if (ida->first_leaf + ida->pad != new_first_leaf + new_pad) {
+		unsigned src = ida->nodes + ida->pad;
+		unsigned dst = new_first_leaf + old_leaves + new_pad;
+
+		while (src != ida->first_leaf + ida->pad) {
+			i = min((src - 1) % IDA_NODES_PER_SECTION + 1,
+				(dst - 1) % IDA_NODES_PER_SECTION + 1);
+
+			i = min(i, src - (ida->first_leaf + ida->pad));
+
+			src -= i;
+			dst -= i;
+
+			memmove(__ida_index_to_node(ida, dst),
+				__ida_index_to_node(ida, src),
+				i * sizeof(unsigned long));
+		}
 	}
 
 	/* Zero out parent nodes */
-	for (n = 0; n < new_first_leaf; n += i) {
-		i = min_t(unsigned, new_first_leaf - n,
+	for (n = 0; n < new_first_leaf + new_pad; n += i) {
+		i = min_t(unsigned, new_pad + new_first_leaf - n,
 			  IDA_NODES_PER_SECTION);
 
-		memset(ida_index_to_node(ida, n),
+		memset(__ida_index_to_node(ida, n),
 		       0, i * sizeof(unsigned long));
 	}
 
 	/* Reconstruct parent nodes */
 	for (n = new_first_leaf; n < new_first_leaf + old_leaves; n++) {
 		i = n;
-		node = ida_index_to_node(ida, i);
+		node = __ida_index_to_node(ida, i + new_pad);
 
 		while (!~*node && i) {
 			bit = (i - 1) % IDA_TREE_ARY;
 			i = (i - 1) / IDA_TREE_ARY;
 
-			node = ida_index_to_node(ida, i);
+			node = __ida_index_to_node(ida, i + new_pad);
 			__set_bit(bit, node);
 		}
 	}
+}
+
+static int do_ida_resize(struct ida *ida, unsigned long *tree,
+			 unsigned long **sections, unsigned new_nodes,
+			 unsigned new_first_leaf)
+{
+	unsigned new_pad = 0;
+
+	if (sections) {
+		memcpy(sections, ida->tree,
+		       ida->sections  * sizeof(unsigned long *));
+
+		if (ida->tree != &ida->inline_section)
+			kgfree(ida->tree, ida->sections * sizeof(unsigned long *));
+
+		ida->tree = sections;
+	}
+
+	if (ida->nodes < IDA_NODES_PER_SECTION) {
+		BUG_ON(new_nodes > IDA_NODES_PER_SECTION);
+
+		memcpy(tree, ida_index_to_node(ida, 0),
+		       ida->nodes * sizeof(unsigned long));
+
+		if (ida->tree[0] != &ida->inline_node)
+			kgfree(ida->tree[0], ida->nodes * sizeof(unsigned long));
+
+		ida->tree[0] = tree;
+
+		BUG_ON(new_nodes - new_first_leaf < ida->nodes - ida->first_leaf);
+	} else {
+		unsigned leaf_sections, new_leaves;
+
+		ida->tree[ida->sections++] = tree;
+
+		leaf_sections = ida->sections - 1;
+
+		while (1) {
+			new_leaves = leaf_sections * IDA_NODES_PER_SECTION;
+
+			if (new_leaves < ida->nodes - ida->first_leaf)
+				return -1;
+
+			new_first_leaf = first_leaf_from_leaves(new_leaves);
+			new_pad = round_up(new_first_leaf, IDA_NODES_PER_SECTION) -
+				new_first_leaf;
+			new_nodes = new_first_leaf + new_leaves;
+
+			if (new_nodes <= ida->sections * IDA_NODES_PER_SECTION)
+				break;
+
+			leaf_sections--;
+		}
+	}
+
+	if (new_first_leaf != ida->first_leaf ||
+	    ida->pad != new_pad)
+		ida_increase_depth(ida, new_nodes, new_first_leaf, new_pad);
+
+	ida->nodes	= new_nodes;
+	ida->first_leaf	= new_first_leaf;
+	ida->pad	= new_pad;
+
+	return 0;
 }
 
 /*
@@ -223,8 +323,8 @@ again:
 	sections = NULL;
 	cur_sections = ida->sections;
 
-	BUG_ON(ida->nodes > IDA_NODES_PER_SECTION &&
-	       ida->nodes % IDA_NODES_PER_SECTION);
+	BUG_ON((ida->pad + ida->nodes) > IDA_NODES_PER_SECTION &&
+	       (ida->pad + ida->nodes) % IDA_NODES_PER_SECTION);
 
 	//spin_unlock_irqrestore(&ida->lock, *flags);
 
@@ -250,43 +350,10 @@ again:
 		return 0;
 	}
 
-	if (sections) {
-		memcpy(sections, ida->tree,
-		       ida->sections  * sizeof(unsigned long *));
-
-		if (ida->tree != &ida->inline_section)
-			kgfree(ida->tree, ida->sections * sizeof(unsigned long *));
-
-		ida->tree = sections;
+	if (do_ida_resize(ida, tree, sections, new_nodes, new_first_leaf)) {
+		/* Depth increases, but need to allocate more new nodes first */
+		goto again;
 	}
-
-	if (ida->nodes < IDA_NODES_PER_SECTION) {
-		BUG_ON(new_nodes > IDA_NODES_PER_SECTION);
-
-		memcpy(tree, ida_index_to_node(ida, 0),
-		       ida->nodes * sizeof(unsigned long));
-
-		if (ida->tree[0] != &ida->inline_node)
-			kgfree(ida->tree[0], ida->nodes * sizeof(unsigned long));
-
-		ida->tree[0] = tree;
-
-		BUG_ON(new_nodes - new_first_leaf < ida->nodes - ida->first_leaf);
-	} else {
-		ida->tree[ida->sections++] = tree;
-
-		new_nodes = ida->sections * IDA_NODES_PER_SECTION;
-		new_first_leaf = first_leaf_from_nodes(new_nodes);
-
-		if (new_nodes - new_first_leaf < ida->nodes - ida->first_leaf)
-			goto again;
-	}
-
-	if (new_first_leaf != ida->first_leaf)
-		ida_increase_depth(ida, new_nodes, new_first_leaf);
-
-	ida->nodes	= new_nodes;
-	ida->first_leaf	= new_first_leaf;
 
 	return 0;
 err:

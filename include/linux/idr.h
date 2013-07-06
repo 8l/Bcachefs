@@ -45,6 +45,8 @@ struct ida {
 	 * leaf nodes, ida->nodes - ida->first_leaf == number of leaf nodes
 	 */
 	unsigned		first_leaf;
+	unsigned		pad;
+
 	unsigned		sections;
 
 	unsigned long		**tree;

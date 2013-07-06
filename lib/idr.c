@@ -204,7 +204,8 @@ static void ida_increase_depth(struct ida *ida, unsigned new_nodes,
  * just return 0 - but the caller needs to recheck for the tree being full in
  * case we _really_ raced badly.
  */
-static int __ida_resize(struct ida *ida, gfp_t gfp, unsigned long *flags)
+noinline
+int __ida_resize(struct ida *ida, gfp_t gfp, unsigned long *flags)
 	__releases(&ida->lock)
 	__acquires(&ida->lock)
 {
@@ -225,7 +226,7 @@ again:
 	BUG_ON(ida->nodes > IDA_NODES_PER_SECTION &&
 	       ida->nodes % IDA_NODES_PER_SECTION);
 
-	spin_unlock_irqrestore(&ida->lock, *flags);
+	//spin_unlock_irqrestore(&ida->lock, *flags);
 
 	if (ida->nodes >= IDA_NODES_PER_SECTION &&
 	    is_power_of_2(cur_sections)) {
@@ -240,7 +241,7 @@ again:
 	if (!tree)
 		goto err;
 
-	spin_lock_irqsave(&ida->lock, *flags);
+	//spin_lock_irqsave(&ida->lock, *flags);
 
 	if (cur_nodes != ida->nodes || cur_sections != ida->sections) {
 		kgfree(sections, cur_sections * 2 * sizeof(unsigned long *));
@@ -290,7 +291,7 @@ again:
 	return 0;
 err:
 	kgfree(sections, cur_sections * 2 * sizeof(unsigned long));
-	spin_lock_irqsave(&ida->lock, *flags);
+	//spin_lock_irqsave(&ida->lock, *flags);
 	return -ENOMEM;
 }
 
@@ -299,14 +300,14 @@ static int ida_preload(struct ida *ida, unsigned start, gfp_t gfp)
 	int ret = 0;
 	unsigned long flags;
 
-	spin_lock_irqsave(&ida->lock, flags);
+	//spin_lock_irqsave(&ida->lock, flags);
 
 	while (!ret &&
 	       (ida->nodes - ida->first_leaf * BITS_PER_LONG <
 		start + ida->allocated_ids + num_possible_cpus()))
 		ret = __ida_resize(ida, gfp, &flags);
 
-	spin_unlock_irqrestore(&ida->lock, flags);
+	//spin_unlock_irqrestore(&ida->lock, flags);
 
 	return ret;
 }
@@ -477,9 +478,9 @@ int ida_alloc_range(struct ida *ida, unsigned int start,
 	unsigned id;
 	unsigned long flags;
 
-	spin_lock_irqsave(&ida->lock, flags);
+	//spin_lock_irqsave(&ida->lock, flags);
 	ret = __ida_alloc_range_multiple(ida, &id, 1, start, end, gfp, &flags);
-	spin_unlock_irqrestore(&ida->lock, flags);
+	//spin_unlock_irqrestore(&ida->lock, flags);
 
 	return ret == 1 ? id : ret;
 }

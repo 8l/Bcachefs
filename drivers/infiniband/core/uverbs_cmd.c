@@ -125,7 +125,7 @@ static int idr_add_uobj(struct idr *idr, struct ib_uobject *uobj)
 {
 	int ret;
 
-	idr_preload(GFP_KERNEL);
+	idr_preload(idr, 0, GFP_KERNEL);
 	spin_lock(&ib_uverbs_idr_lock);
 
 	ret = idr_alloc(idr, uobj, GFP_NOWAIT);

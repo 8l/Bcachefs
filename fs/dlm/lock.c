@@ -1199,7 +1199,7 @@ static int create_lkb(struct dlm_ls *ls, struct dlm_lkb **lkb_ret)
 	mutex_init(&lkb->lkb_cb_mutex);
 	INIT_WORK(&lkb->lkb_cb_work, dlm_callback_work);
 
-	idr_preload(GFP_NOFS);
+	idr_preload(&ls->ls_lkbidr, 1, GFP_NOFS);
 	spin_lock(&ls->ls_lkbidr_spin);
 	rv = idr_alloc_range(&ls->ls_lkbidr, lkb, 1, 0, GFP_NOWAIT);
 	if (rv >= 0)

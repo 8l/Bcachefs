@@ -636,7 +636,7 @@ static struct ehca_qp *internal_create_qp(
 		my_qp->send_cq =
 			container_of(init_attr->send_cq, struct ehca_cq, ib_cq);
 
-	idr_preload(GFP_KERNEL);
+	idr_preload(&ehca_qp_idr, 0, GFP_KERNEL);
 	write_lock_irqsave(&ehca_qp_idr_lock, flags);
 
 	ret = idr_alloc_range(&ehca_qp_idr, my_qp, 0, 0x2000000, GFP_NOWAIT);

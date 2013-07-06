@@ -177,7 +177,7 @@ int vmw_resource_alloc_id(struct vmw_resource *res)
 
 	BUG_ON(res->id != -1);
 
-	idr_preload(GFP_KERNEL);
+	idr_preload(idr, 1, GFP_KERNEL);
 	write_lock(&dev_priv->resource_lock);
 
 	ret = idr_alloc_range(idr, res, 1, 0, GFP_NOWAIT);

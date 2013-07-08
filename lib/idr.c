@@ -1074,19 +1074,6 @@ static void idr_mark_full(struct idr_layer **pa, int id)
 	}
 }
 
-int __idr_pre_get(struct idr *idp, gfp_t gfp_mask)
-{
-	while (idp->id_free_cnt < MAX_IDR_FREE) {
-		struct idr_layer *new;
-		new = kmem_cache_zalloc(idr_layer_cache, gfp_mask);
-		if (new == NULL)
-			return (0);
-		move_to_free_list(idp, new);
-	}
-	return 1;
-}
-EXPORT_SYMBOL(__idr_pre_get);
-
 /**
  * sub_alloc - try to allocate an id without growing the tree depth
  * @idp: idr handle
@@ -1251,21 +1238,6 @@ static void idr_fill_slot(struct idr *idr, void *ptr, int id,
 	pa[0]->count++;
 	idr_mark_full(pa, id);
 }
-
-int __idr_get_new_above(struct idr *idp, void *ptr, int starting_id, int *id)
-{
-	struct idr_layer *pa[MAX_IDR_LEVEL + 1];
-	int rv;
-
-	rv = idr_get_empty_slot(idp, starting_id, pa, 0, idp);
-	if (rv < 0)
-		return rv == -ENOMEM ? -EAGAIN : rv;
-
-	idr_fill_slot(idp, ptr, rv, pa);
-	*id = rv;
-	return 0;
-}
-EXPORT_SYMBOL(__idr_get_new_above);
 
 /**
  * idr_preload - preload for idr_alloc()
@@ -1485,7 +1457,7 @@ void idr_remove(struct idr *idp, int id)
 }
 EXPORT_SYMBOL(idr_remove);
 
-void __idr_remove_all(struct idr *idp)
+static void __idr_remove_all(struct idr *idp)
 {
 	int n, id, max;
 	int bt_mask;
@@ -1518,7 +1490,6 @@ void __idr_remove_all(struct idr *idp)
 	}
 	idp->layers = 0;
 }
-EXPORT_SYMBOL(__idr_remove_all);
 
 /**
  * idr_destroy - release all cached layers within an idr tree
@@ -1580,13 +1551,12 @@ EXPORT_SYMBOL(idr_find_slowpath);
  * callback function will be called for each pointer currently
  * registered, passing the id, the pointer and the data pointer passed
  * to this function.  It is not safe to modify the idr tree while in
- * the callback, so functions such as idr_get_new and idr_remove are
- * not allowed.
+ * the callback, so functions such as idr_remove are not allowed.
  *
  * We check the return of @fn each time. If it returns anything other
  * than %0, we break out and return that value.
  *
- * The caller must serialize idr_for_each() vs idr_get_new() and idr_remove().
+ * The caller must serialize idr_for_each() vs idr_remove().
  */
 int idr_for_each(struct idr *idp,
 		 int (*fn)(int id, void *p, void *data), void *data)

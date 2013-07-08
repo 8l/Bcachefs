@@ -31,8 +31,8 @@ static DEFINE_IDA(mmu_context_ida);
 
 int __init_new_context(void)
 {
-	return ida_simple_get(&mmu_context_ida, 1,
-			      MAX_USER_CONTEXT, GFP_KERNEL);
+	return ida_alloc_range(&mmu_context_ida, 1,
+			       MAX_USER_CONTEXT, GFP_KERNEL);
 }
 EXPORT_SYMBOL_GPL(__init_new_context);
 
@@ -71,7 +71,7 @@ int init_new_context(struct task_struct *tsk, struct mm_struct *mm)
 
 void __destroy_context(int context_id)
 {
-	ida_simple_remove(&mmu_context_ida, context_id);
+	ida_remove(&mmu_context_ida, context_id);
 }
 EXPORT_SYMBOL_GPL(__destroy_context);
 

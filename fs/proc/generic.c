@@ -129,7 +129,7 @@ static DEFINE_IDA(proc_inum_ida);
  */
 int proc_alloc_inum(unsigned int *inum)
 {
-	int i = ida_simple_get(&proc_inum_ida, 0,
+	int i = ida_alloc_range(&proc_inum_ida, 0,
 			       UINT_MAX - PROC_DYNAMIC_FIRST,
 			       GFP_KERNEL);
 	if (i < 0)
@@ -141,7 +141,7 @@ int proc_alloc_inum(unsigned int *inum)
 
 void proc_free_inum(unsigned int inum)
 {
-	ida_simple_remove(&proc_inum_ida, inum - PROC_DYNAMIC_FIRST);
+	ida_remove(&proc_inum_ida, inum - PROC_DYNAMIC_FIRST);
 }
 
 static void *proc_follow_link(struct dentry *dentry, struct nameidata *nd)

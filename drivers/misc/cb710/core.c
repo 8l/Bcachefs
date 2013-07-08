@@ -254,7 +254,7 @@ static int cb710_probe(struct pci_dev *pdev,
 	if (err)
 		return err;
 
-	err = ida_simple_get(&cb710_ida, 0, 0, GFP_KERNEL);
+	err = ida_alloc(&cb710_ida, GFP_KERNEL);
 	if (err < 0)
 		return err;
 
@@ -307,7 +307,7 @@ static void cb710_remove_one(struct pci_dev *pdev)
 	BUG_ON(atomic_read(&chip->slot_refs_count) != 0);
 #endif
 
-	ida_simple_remove(&cb710_ida, chip->platform_id);
+	ida_remove(&cb710_ida, chip->platform_id);
 }
 
 static const struct pci_device_id cb710_pci_tbl[] = {

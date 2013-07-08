@@ -1057,7 +1057,7 @@ int nfc_register_device(struct nfc_dev *dev)
 
 	pr_debug("dev_name=%s\n", dev_name(&dev->dev));
 
-	dev->idx = ida_simple_get(&nfc_index_ida, 0, 0, GFP_KERNEL);
+	dev->idx = ida_alloc(&nfc_index_ida, GFP_KERNEL);
 	if (dev->idx < 0)
 		return dev->idx;
 
@@ -1133,7 +1133,7 @@ void nfc_unregister_device(struct nfc_dev *dev)
 	device_del(&dev->dev);
 	mutex_unlock(&nfc_devlist_mutex);
 
-	ida_simple_remove(&nfc_index_ida, id);
+	ida_remove(&nfc_index_ida, id);
 }
 EXPORT_SYMBOL(nfc_unregister_device);
 

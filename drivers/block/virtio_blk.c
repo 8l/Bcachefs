@@ -692,7 +692,7 @@ static int virtblk_probe(struct virtio_device *vdev)
 	u16 min_io_size;
 	u8 physical_block_exp, alignment_offset;
 
-	err = ida_simple_get(&vd_index_ida, 0, minor_to_index(1 << MINORBITS),
+	err = ida_alloc_range(&vd_index_ida, 0, minor_to_index(1 << MINORBITS),
 			     GFP_KERNEL);
 	if (err < 0)
 		goto out;
@@ -864,7 +864,7 @@ out_free_vq:
 out_free_vblk:
 	kfree(vblk);
 out_free_index:
-	ida_simple_remove(&vd_index_ida, index);
+	ida_remove(&vd_index_ida, index);
 out:
 	return err;
 }
@@ -896,7 +896,7 @@ static void virtblk_remove(struct virtio_device *vdev)
 
 	/* Only free device id if we don't have any users */
 	if (refc == 1)
-		ida_simple_remove(&vd_index_ida, index);
+		ida_remove(&vd_index_ida, index);
 }
 
 #ifdef CONFIG_PM

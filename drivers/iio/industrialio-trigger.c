@@ -69,7 +69,7 @@ int iio_trigger_register(struct iio_trigger *trig_info)
 {
 	int ret;
 
-	trig_info->id = ida_simple_get(&iio_trigger_ida, 0, 0, GFP_KERNEL);
+	trig_info->id = ida_alloc(&iio_trigger_ida, GFP_KERNEL);
 	if (trig_info->id < 0) {
 		ret = trig_info->id;
 		goto error_ret;
@@ -90,7 +90,7 @@ int iio_trigger_register(struct iio_trigger *trig_info)
 	return 0;
 
 error_unregister_id:
-	ida_simple_remove(&iio_trigger_ida, trig_info->id);
+	ida_remove(&iio_trigger_ida, trig_info->id);
 error_ret:
 	return ret;
 }
@@ -102,7 +102,7 @@ void iio_trigger_unregister(struct iio_trigger *trig_info)
 	list_del(&trig_info->list);
 	mutex_unlock(&iio_trigger_list_lock);
 
-	ida_simple_remove(&iio_trigger_ida, trig_info->id);
+	ida_remove(&iio_trigger_ida, trig_info->id);
 	/* Possible issue in here */
 	device_del(&trig_info->dev);
 }

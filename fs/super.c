@@ -818,7 +818,7 @@ int get_anon_bdev(dev_t *p)
 {
 	int dev;
 
-	dev = ida_simple_get(&unnamed_dev_ida, 0,
+	dev = ida_alloc_range(&unnamed_dev_ida, 0,
 			     1 << MINORBITS, GFP_ATOMIC);
 	if (dev == -ENOSPC)
 		return -EMFILE;
@@ -832,7 +832,7 @@ EXPORT_SYMBOL(get_anon_bdev);
 
 void free_anon_bdev(dev_t dev)
 {
-	ida_simple_remove(&unnamed_dev_ida, MINOR(dev));
+	ida_remove(&unnamed_dev_ida, MINOR(dev));
 }
 EXPORT_SYMBOL(free_anon_bdev);
 

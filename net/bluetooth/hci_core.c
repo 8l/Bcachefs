@@ -2151,10 +2151,10 @@ int hci_register_dev(struct hci_dev *hdev)
 	 */
 	switch (hdev->dev_type) {
 	case HCI_BREDR:
-		id = ida_simple_get(&hci_index_ida, 0, 0, GFP_KERNEL);
+		id = ida_alloc(&hci_index_ida, GFP_KERNEL);
 		break;
 	case HCI_AMP:
-		id = ida_simple_get(&hci_index_ida, 1, 0, GFP_KERNEL);
+		id = ida_alloc_range(&hci_index_ida, 1, 0, GFP_KERNEL);
 		break;
 	default:
 		return -EINVAL;
@@ -2217,7 +2217,7 @@ err_wqueue:
 	destroy_workqueue(hdev->workqueue);
 	destroy_workqueue(hdev->req_workqueue);
 err:
-	ida_simple_remove(&hci_index_ida, hdev->id);
+	ida_remove(&hci_index_ida, hdev->id);
 
 	return error;
 }
@@ -2278,7 +2278,7 @@ void hci_unregister_dev(struct hci_dev *hdev)
 
 	hci_dev_put(hdev);
 
-	ida_simple_remove(&hci_index_ida, id);
+	ida_remove(&hci_index_ida, id);
 }
 EXPORT_SYMBOL(hci_unregister_dev);
 

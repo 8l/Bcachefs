@@ -299,7 +299,7 @@ int platform_device_add(struct platform_device *pdev)
 		 * that we remember it must be freed, and we append a suffix
 		 * to avoid namespace collision with explicit IDs.
 		 */
-		ret = ida_simple_get(&platform_devid_ida, 0, 0, GFP_KERNEL);
+		ret = ida_alloc(&platform_devid_ida, GFP_KERNEL);
 		if (ret < 0)
 			goto err_out;
 		pdev->id = ret;
@@ -338,7 +338,7 @@ int platform_device_add(struct platform_device *pdev)
 
  failed:
 	if (pdev->id_auto) {
-		ida_simple_remove(&platform_devid_ida, pdev->id);
+		ida_remove(&platform_devid_ida, pdev->id);
 		pdev->id = PLATFORM_DEVID_AUTO;
 	}
 
@@ -371,7 +371,7 @@ void platform_device_del(struct platform_device *pdev)
 		device_del(&pdev->dev);
 
 		if (pdev->id_auto) {
-			ida_simple_remove(&platform_devid_ida, pdev->id);
+			ida_remove(&platform_devid_ida, pdev->id);
 			pdev->id = PLATFORM_DEVID_AUTO;
 		}
 

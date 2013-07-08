@@ -29,7 +29,7 @@ struct class *rtc_class;
 static void rtc_device_release(struct device *dev)
 {
 	struct rtc_device *rtc = to_rtc_device(dev);
-	ida_simple_remove(&rtc_ida, rtc->id);
+	ida_remove(&rtc_ida, rtc->id);
 	kfree(rtc);
 }
 
@@ -159,7 +159,7 @@ struct rtc_device *rtc_device_register(const char *name, struct device *dev,
 	struct rtc_wkalrm alrm;
 	int id, err;
 
-	id = ida_simple_get(&rtc_ida, 0, 0, GFP_KERNEL);
+	id = ida_alloc(&rtc_ida, GFP_KERNEL);
 	if (id < 0) {
 		err = id;
 		goto exit;
@@ -227,7 +227,7 @@ exit_kfree:
 	kfree(rtc);
 
 exit_ida:
-	ida_simple_remove(&rtc_ida, id);
+	ida_remove(&rtc_ida, id);
 
 exit:
 	dev_err(dev, "rtc core: unable to register %s, err = %d\n",

@@ -2912,7 +2912,7 @@ static int sd_probe(struct device *dev)
 	if (!gd)
 		goto out_free;
 
-	index = ida_simple_get(&sd_index_ida, 0, 0, GFP_KERNEL);
+	index = ida_alloc(&sd_index_ida, GFP_KERNEL);
 	if (index < 0) {
 		error = index;
 		goto out_put;
@@ -2956,7 +2956,7 @@ static int sd_probe(struct device *dev)
 	return 0;
 
  out_free_index:
-	ida_simple_remove(&sd_index_ida, index);
+	ida_remove(&sd_index_ida, index);
  out_put:
 	put_disk(gd);
  out_free:
@@ -3017,7 +3017,7 @@ static void scsi_disk_release(struct device *dev)
 	struct scsi_disk *sdkp = to_scsi_disk(dev);
 	struct gendisk *disk = sdkp->disk;
 	
-	ida_simple_remove(&sd_index_ida, sdkp->index);
+	ida_remove(&sd_index_ida, sdkp->index);
 
 	disk->private_data = NULL;
 	put_disk(disk);

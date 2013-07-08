@@ -120,7 +120,7 @@ struct soc_device *soc_device_register(struct soc_device_attribute *soc_dev_attr
 		goto out1;
 	}
 
-	ret = ida_simple_get(&soc_ida, 0, 0, GFP_KERNEL);
+	ret = ida_alloc(&soc_ida, GFP_KERNEL);
 	if (ret < 0)
 		goto out2;
 
@@ -139,7 +139,7 @@ struct soc_device *soc_device_register(struct soc_device_attribute *soc_dev_attr
 	return soc_dev;
 
 out3:
-	ida_simple_remove(&soc_ida, soc_dev->soc_dev_num);
+	ida_remove(&soc_ida, soc_dev->soc_dev_num);
 out2:
 	kfree(soc_dev);
 out1:
@@ -149,7 +149,7 @@ out1:
 /* Ensure soc_dev->attr is freed prior to calling soc_device_unregister. */
 void soc_device_unregister(struct soc_device *soc_dev)
 {
-	ida_simple_remove(&soc_ida, soc_dev->soc_dev_num);
+	ida_remove(&soc_ida, soc_dev->soc_dev_num);
 
 	device_unregister(&soc_dev->dev);
 }

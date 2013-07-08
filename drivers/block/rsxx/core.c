@@ -826,7 +826,7 @@ static int rsxx_pci_probe(struct pci_dev *dev,
 	card->dev = dev;
 	pci_set_drvdata(dev, card);
 
-	st = ida_simple_get(&rsxx_disk_ida, 0, 0, GFP_KERNEL);
+	st = ida_alloc(&rsxx_disk_ida, GFP_KERNEL);
 	if (st < 0)
 		goto failed_ida_alloc;
 
@@ -1031,7 +1031,7 @@ failed_request_regions:
 failed_dma_mask:
 	pci_disable_device(dev);
 failed_enable:
-	ida_simple_remove(&rsxx_disk_ida, card->disk_id);
+	ida_remove(&rsxx_disk_ida, card->disk_id);
 failed_ida_alloc:
 	kfree(card);
 

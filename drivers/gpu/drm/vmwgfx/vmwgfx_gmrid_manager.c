@@ -64,7 +64,7 @@ static int vmw_gmrid_man_get_node(struct ttm_mem_type_manager *man,
 	}
 
 	spin_unlock(&gman->lock);
-	ret = ida_simple_get(&gman->gmr_ida, 0, gman->max_gmr_ids, GFP_KERNEL);
+	ret = ida_alloc_range(&gman->gmr_ida, 0, gman->max_gmr_ids, GFP_KERNEL);
 	spin_lock(&gman->lock);
 
 	if (ret < 0)
@@ -91,7 +91,7 @@ static void vmw_gmrid_man_put_node(struct ttm_mem_type_manager *man,
 
 	if (mem->mm_node) {
 		spin_lock(&gman->lock);
-		ida_simple_remove(&gman->gmr_ida, mem->start);
+		ida_remove(&gman->gmr_ida, mem->start);
 		gman->used_gmr_pages -= mem->num_pages;
 		spin_unlock(&gman->lock);
 		mem->mm_node = NULL;

@@ -1523,12 +1523,12 @@ static DEFINE_IDA(nvme_index_ida);
 
 static int nvme_get_ns_idx(void)
 {
-	return ida_simple_get(&nvme_index_ida, 0, 0, GFP_KERNEL);
+	return ida_alloc(&nvme_index_ida, GFP_KERNEL);
 }
 
 static void nvme_put_ns_idx(int index)
 {
-	ida_simple_remove(&nvme_index_ida, index);
+	ida_remove(&nvme_index_ida, index);
 }
 
 static void nvme_config_discard(struct nvme_ns *ns)
@@ -1830,7 +1830,7 @@ static int nvme_set_instance(struct nvme_dev *dev)
 {
 	int instance;
 
-	instance = ida_simple_get(&nvme_index_ida, 0, 0, GFP_KERNEL);
+	instance = ida_alloc(&nvme_index_ida, GFP_KERNEL);
 	if (instance < 0)
 		return -ENODEV;
 
@@ -1840,7 +1840,7 @@ static int nvme_set_instance(struct nvme_dev *dev)
 
 static void nvme_release_instance(struct nvme_dev *dev)
 {
-	ida_simple_remove(&nvme_instance_ida, dev->instance);
+	ida_remove(&nvme_instance_ida, dev->instance);
 }
 
 static void nvme_free_dev(struct kref *kref)

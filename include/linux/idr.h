@@ -177,6 +177,7 @@ int idr_for_each(struct idr *idr,
 		 int (*fn)(int id, void *p, void *data), void *data);
 void *idr_replace(struct idr *idr, void *ptr, unsigned id);
 void idr_remove(struct idr *idr, unsigned id);
+int idr_preload(struct idr *idr, unsigned start, gfp_t gfp);
 int idr_alloc_range(struct idr *idr, void *ptr, unsigned start,
 		    unsigned end, gfp_t gfp);
 int idr_alloc_cyclic(struct idr *idr, void *ptr, unsigned start,
@@ -197,41 +198,7 @@ static inline int idr_alloc(struct idr *idr, void *ptr, gfp_t gfp)
  */
 static inline void idr_preload_end(void)
 {
-	radix_tree_preload_end();
-}
-
-/**
- * idr_preload - preload for idr_alloc_range()
- * @gfp: allocation mask to use for preloading
- *
- * Preload per-cpu layer buffer for idr_alloc_range().  Can only be used from
- * process context and each idr_preload() invocation should be matched with
- * idr_preload_end().  Note that preemption is disabled while preloaded.
- *
- * The first idr_alloc_range() in the preloaded section can be treated as if it
- * were invoked with @gfp_mask used for preloading.  This allows using more
- * permissive allocation masks for idrs protected by spinlocks.
- *
- * For example, if idr_alloc_range() below fails, the failure can be treated as
- * if idr_alloc_range() were called with GFP_KERNEL rather than GFP_NOWAIT.
- *
- *	idr_preload(GFP_KERNEL);
- *	spin_lock(lock);
- *
- *	id = idr_alloc_range(idr, ptr, start, end, GFP_NOWAIT);
- *
- *	spin_unlock(lock);
- *	idr_preload_end();
- *	if (id < 0)
- *		error;
- */
-static inline void idr_preload(gfp_t gfp)
-{
-	might_sleep_if(gfp & __GFP_WAIT);
-
-	/* Well this is horrible, but idr_preload doesn't return errors */
-	if (radix_tree_preload(gfp))
-		preempt_disable();
+	preempt_enable();
 }
 
 /* radix tree can't store NULL pointers, so we have to translate...  */

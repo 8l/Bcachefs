@@ -163,7 +163,7 @@ struct ib_cq *ehca_create_cq(struct ib_device *device, int cqe, int comp_vector,
 	adapter_handle = shca->ipz_hca_handle;
 	param.eq_handle = shca->eq.ipz_eq_handle;
 
-	idr_preload(GFP_KERNEL);
+	idr_preload(&ehca_cq_idr, 0, GFP_KERNEL);
 	write_lock_irqsave(&ehca_cq_idr_lock, flags);
 	my_cq->token = idr_alloc_range(&ehca_cq_idr, my_cq, 0,
 				       0x2000000, GFP_NOWAIT);

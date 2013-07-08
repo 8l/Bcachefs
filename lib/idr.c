@@ -295,6 +295,23 @@ err:
 	return -ENOMEM;
 }
 
+static int ida_preload(struct ida *ida, unsigned start, gfp_t gfp)
+{
+	int ret = 0;
+	unsigned long flags;
+
+	spin_lock_irqsave(&ida->lock, flags);
+
+	while (!ret &&
+	       (ida->nodes - ida->first_leaf * BITS_PER_LONG <
+		start + ida->allocated_ids + num_possible_cpus()))
+		ret = __ida_resize(ida, gfp, &flags);
+
+	spin_unlock_irqrestore(&ida->lock, flags);
+
+	return ret;
+}
+
 /*
  * Ganged allocation - amortize locking and tree traversal for when we've got
  * another allocator (i.e. a percpu version) acting as a frontend to this code
@@ -1031,6 +1048,55 @@ void idr_remove(struct idr *idr, unsigned id)
 	spin_unlock_irqrestore(&idr->ida.lock, flags);
 }
 EXPORT_SYMBOL(idr_remove);
+
+/**
+ * idr_preload - preload for idr_alloc_range()
+ * @idr: idr to ensure has room to allocate an id
+ * @start: value that will be passed to ida_alloc_range()
+ * @gfp: allocation mask to use for preloading
+ *
+ * On success, guarantees that one call of idr_alloc()/idr_alloc_range() won't
+ * fail. Returns with preemption disabled; use idr_preload_end() when
+ * finished.
+ *
+ * It's not required to check for failure if you're still checking for
+ * idr_alloc() failure.
+ *
+ * In order to guarantee idr_alloc() won't fail, all allocations from @idr must
+ * make use of idr_preload().
+ */
+int idr_preload(struct idr *idr, unsigned start, gfp_t gfp)
+{
+	int radix_ret, ida_ret = 0;
+
+	might_sleep_if(gfp & __GFP_WAIT);
+
+	while (1) {
+		radix_ret = radix_tree_preload(gfp);
+
+		/*
+		 * Well this is horrible, but radix_tree_preload() doesn't
+		 * disable preemption if it fails, and idr_preload() users don't
+		 * check for errors
+		 */
+		if (radix_ret)
+			preempt_disable();
+
+		/* if ida_preload with GFP_WAIT failed, don't retry */
+		if (ida_ret)
+			break;
+
+		if (!ida_preload(&idr->ida, start, GFP_NOWAIT) ||
+		    !(gfp & __GFP_WAIT))
+			break;
+
+		radix_tree_preload_end();
+		ida_ret = ida_preload(&idr->ida, start, gfp);
+	}
+
+	return radix_ret ?: ida_ret;
+}
+EXPORT_SYMBOL(idr_preload);
 
 static int idr_insert(struct idr *idr, void *ptr, unsigned id,
 		      gfp_t gfp, unsigned long *flags)

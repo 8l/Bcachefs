@@ -491,7 +491,7 @@ static int add_client_resource(struct client *client,
 	int ret;
 
 	if (preload)
-		idr_preload(gfp_mask);
+		idr_preload(&client->resource_idr, 0, gfp_mask);
 	spin_lock_irqsave(&client->lock, flags);
 
 	if (client->in_shutdown)

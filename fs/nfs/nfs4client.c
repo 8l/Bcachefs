@@ -30,7 +30,7 @@ static int nfs_get_cb_ident_idr(struct nfs_client *clp, int minorversion)
 
 	if (clp->rpc_ops->version != 4 || minorversion != 0)
 		return ret;
-	idr_preload(GFP_KERNEL);
+	idr_preload(&nn->cb_ident_idr, 0, GFP_KERNEL);
 	spin_lock(&nn->nfs_client_lock);
 	ret = idr_alloc(&nn->cb_ident_idr, clp, GFP_NOWAIT);
 	if (ret >= 0)

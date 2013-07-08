@@ -262,7 +262,7 @@ static inline int _insert_handle(struct c4iw_dev *rhp, struct idr *idr,
 	int ret;
 
 	if (lock) {
-		idr_preload(GFP_KERNEL);
+		idr_preload(idr, id, GFP_KERNEL);
 		spin_lock_irq(&rhp->lock);
 	}
 

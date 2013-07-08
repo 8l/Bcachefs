@@ -261,7 +261,9 @@ int ipc_addid(struct ipc_ids* ids, struct kern_ipc_perm* new, int size)
 	if (ids->in_use >= size)
 		return -ENOSPC;
 
-	idr_preload(GFP_KERNEL);
+	idr_preload(&ids->ipcs_idr,
+		    (next_id < 0) ? 0 : ipcid_to_idx(next_id),
+		    GFP_KERNEL);
 
 	spin_lock_init(&new->lock);
 	new->deleted = 0;

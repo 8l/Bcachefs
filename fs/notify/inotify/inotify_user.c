@@ -360,7 +360,7 @@ static int inotify_add_to_idr(struct idr *idr, spinlock_t *idr_lock,
 {
 	int ret;
 
-	idr_preload(GFP_KERNEL);
+	idr_preload(idr, 1, GFP_KERNEL);
 	spin_lock(idr_lock);
 
 	ret = idr_alloc_cyclic(idr, i_mark, 1, 0, GFP_NOWAIT);

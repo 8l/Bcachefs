@@ -1,6 +1,6 @@
 /*
  * include/linux/idr.h
- * 
+ *
  * 2002-10-18  written by Jim Houston jim.houston@ccur.com
  *	Copyright (C) 2002 by Concurrent Computer Corporation
  *	Distributed under the GNU GPL license version 2.
@@ -12,10 +12,8 @@
 #ifndef __IDR_H__
 #define __IDR_H__
 
-#include <linux/types.h>
-#include <linux/bitops.h>
-#include <linux/init.h>
-#include <linux/rcupdate.h>
+#include <linux/gfp.h>
+#include <linux/radix-tree.h>
 #include <linux/spinlock_types.h>
 #include <linux/wait.h>
 
@@ -149,76 +147,42 @@ int percpu_ida_init(struct percpu_ida *pool, unsigned long nr_tags);
 
 /* IDR */
 
-/*
- * We want shallower trees and thus more bits covered at each layer.  8
- * bits gives us large enough first layer for most use cases and maximum
- * tree depth of 4.  Each idr_layer is slightly larger than 2k on 64bit and
- * 1k on 32bit.
- */
-#define IDR_BITS 8
-#define IDR_SIZE (1 << IDR_BITS)
-#define IDR_MASK ((1 << IDR_BITS)-1)
-
-struct idr_layer {
-	int			prefix;	/* the ID prefix of this idr_layer */
-	DECLARE_BITMAP(bitmap, IDR_SIZE); /* A zero bit means "space here" */
-	struct idr_layer __rcu	*ary[1<<IDR_BITS];
-	int			count;	/* When zero, we can release it */
-	int			layer;	/* distance from leaf */
-	struct rcu_head		rcu_head;
-};
-
-struct idr {
-	struct idr_layer __rcu	*hint;	/* the last layer allocated from */
-	struct idr_layer __rcu	*top;
-	struct idr_layer	*id_free;
-	int			layers;	/* only valid w/o concurrent changes */
-	int			id_free_cnt;
-	int			cur;	/* current pos for cyclic allocation */
-	spinlock_t		lock;
-};
-
-#define IDR_INIT(name)							\
-{									\
-	.lock			= __SPIN_LOCK_UNLOCKED(name.lock),	\
-}
-#define DEFINE_IDR(name)	struct idr name = IDR_INIT(name)
-
 /**
  * DOC: idr sync
  * idr synchronization (stolen from radix-tree.h)
  *
- * idr_find() is able to be called locklessly, using RCU. The caller must
- * ensure calls to this function are made within rcu_read_lock() regions.
- * Other readers (lock-free or otherwise) and modifications may be running
- * concurrently.
+ * idr_alloc() and idr_remove() do their own locking internally - the user need
+ * not be concerned with synchronization unless there's other operations that
+ * need to be done atomically.
  *
- * It is still required that the caller manage the synchronization and
- * lifetimes of the items. So if RCU lock-free lookups are used, typically
- * this would mean that the items have their own locks, or are amenable to
- * lock-free access; and that the items are freed by RCU (or only freed after
- * having been deleted from the idr tree *and* a synchronize_rcu() grace
- * period).
+ * idr_find() does no locking - it can be called locklessly using RCU, if the
+ * caller ensures calls to this function are made within rcu_read_lock()
+ * regions and does all the other appropriate RCU stuff.
  */
 
-/*
- * This is what we export.
- */
+struct idr {
+	struct ida		ida;
+	struct radix_tree_root	ptrs;
+};
 
-void *idr_find_slowpath(struct idr *idp, int id);
-void idr_preload(gfp_t gfp_mask);
-int idr_alloc_range(struct idr *idp, void *ptr, int start,
-		    int end, gfp_t gfp_mask);
-int idr_alloc_cyclic(struct idr *idr, void *ptr, int start,
-		     int end, gfp_t gfp_mask);
-int idr_for_each(struct idr *idp,
+#define IDR_INIT(name)							\
+{									\
+	.ida			= IDA_INIT(name.ida),			\
+	.ptrs			= RADIX_TREE_INIT(GFP_NOWAIT),		\
+}
+#define DEFINE_IDR(name)	struct idr name = IDR_INIT(name)
+
+void *idr_find_next(struct idr *idr, int *nextid);
+int idr_for_each(struct idr *idr,
 		 int (*fn)(int id, void *p, void *data), void *data);
-void *idr_find_next(struct idr *idp, int *nextid);
-void *idr_replace(struct idr *idp, void *ptr, int id);
-void idr_remove(struct idr *idp, int id);
-void idr_free(struct idr *idp, int id);
-void idr_destroy(struct idr *idp);
-void idr_init(struct idr *idp);
+void *idr_replace(struct idr *idr, void *ptr, unsigned id);
+void idr_remove(struct idr *idr, unsigned id);
+int idr_alloc_range(struct idr *idr, void *ptr, unsigned start,
+		    unsigned end, gfp_t gfp);
+int idr_alloc_cyclic(struct idr *idr, void *ptr, unsigned start,
+		     unsigned end, gfp_t gfp_mask);
+void idr_destroy(struct idr *idr);
+void idr_init(struct idr *idr);
 
 static inline int idr_alloc(struct idr *idr, void *ptr, gfp_t gfp)
 {
@@ -233,7 +197,53 @@ static inline int idr_alloc(struct idr *idr, void *ptr, gfp_t gfp)
  */
 static inline void idr_preload_end(void)
 {
-	preempt_enable();
+	radix_tree_preload_end();
+}
+
+/**
+ * idr_preload - preload for idr_alloc_range()
+ * @gfp: allocation mask to use for preloading
+ *
+ * Preload per-cpu layer buffer for idr_alloc_range().  Can only be used from
+ * process context and each idr_preload() invocation should be matched with
+ * idr_preload_end().  Note that preemption is disabled while preloaded.
+ *
+ * The first idr_alloc_range() in the preloaded section can be treated as if it
+ * were invoked with @gfp_mask used for preloading.  This allows using more
+ * permissive allocation masks for idrs protected by spinlocks.
+ *
+ * For example, if idr_alloc_range() below fails, the failure can be treated as
+ * if idr_alloc_range() were called with GFP_KERNEL rather than GFP_NOWAIT.
+ *
+ *	idr_preload(GFP_KERNEL);
+ *	spin_lock(lock);
+ *
+ *	id = idr_alloc_range(idr, ptr, start, end, GFP_NOWAIT);
+ *
+ *	spin_unlock(lock);
+ *	idr_preload_end();
+ *	if (id < 0)
+ *		error;
+ */
+static inline void idr_preload(gfp_t gfp)
+{
+	might_sleep_if(gfp & __GFP_WAIT);
+
+	/* Well this is horrible, but idr_preload doesn't return errors */
+	if (radix_tree_preload(gfp))
+		preempt_disable();
+}
+
+/* radix tree can't store NULL pointers, so we have to translate...  */
+static inline void *__radix_idr_ptr(void *ptr)
+{
+	return ptr != (void *) (~0UL & ~RADIX_TREE_INDIRECT_PTR)
+		? ptr : NULL;
+}
+
+static inline void *__idr_radix_ptr(void *ptr)
+{
+	return ptr ?: (void *) (~0UL & ~RADIX_TREE_INDIRECT_PTR);
 }
 
 /**
@@ -243,24 +253,19 @@ static inline void idr_preload_end(void)
  *
  * Return the pointer given the id it has been registered with.  A %NULL
  * return indicates that @id is not valid or you passed %NULL in
- * idr_get_new().
+ * idr_alloc().
  *
  * This function can be called under rcu_read_lock(), given that the leaf
  * pointers lifetimes are correctly managed.
  */
-static inline void *idr_find(struct idr *idr, int id)
+static inline void *idr_find(struct idr *idr, unsigned id)
 {
-	struct idr_layer *hint = rcu_dereference_raw(idr->hint);
-
-	if (hint && (id & ~IDR_MASK) == hint->prefix)
-		return rcu_dereference_raw(hint->ary[id & IDR_MASK]);
-
-	return idr_find_slowpath(idr, id);
+	return __radix_idr_ptr(radix_tree_lookup(&idr->ptrs, id));
 }
 
 /**
  * idr_for_each_entry - iterate over an idr's elements of a given type
- * @idp:     idr handle
+ * @idr:     idr handle
  * @entry:   the type * to use as cursor
  * @id:      id entry's key
  *
@@ -268,9 +273,7 @@ static inline void *idr_find(struct idr *idr, int id)
  * after normal terminatinon @entry is left with the value NULL.  This
  * is convenient for a "not found" value.
  */
-#define idr_for_each_entry(idp, entry, id)			\
-	for (id = 0; ((entry) = idr_find_next(idp, &(id))) != NULL; ++id)
-
-void __init idr_init_cache(void);
+#define idr_for_each_entry(idr, entry, id)			\
+	for (id = 0; ((entry) = idr_find_next(idr, &(id))) != NULL; ++id)
 
 #endif /* __IDR_H__ */

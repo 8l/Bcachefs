@@ -449,11 +449,9 @@ int qxl_surface_id_alloc(struct qxl_device *qdev,
 	int idr_ret;
 	int count = 0;
 again:
-	idr_preload(GFP_ATOMIC);
 	spin_lock(&qdev->surf_id_idr_lock);
-	idr_ret = idr_alloc_range(&qdev->surf_id_idr, NULL, 1, 0, GFP_NOWAIT);
+	idr_ret = idr_alloc_range(&qdev->surf_id_idr, NULL, 1, 0, GFP_ATOMIC);
 	spin_unlock(&qdev->surf_id_idr_lock);
-	idr_preload_end();
 	if (idr_ret < 0)
 		return idr_ret;
 	handle = idr_ret;

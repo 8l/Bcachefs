@@ -5393,9 +5393,7 @@ void free_css_id(struct cgroup_subsys *ss, struct cgroup_subsys_state *css)
 
 	rcu_assign_pointer(id->css, NULL);
 	rcu_assign_pointer(css->id, NULL);
-	spin_lock(&ss->id_lock);
 	idr_remove(&ss->idr, id->id);
-	spin_unlock(&ss->id_lock);
 	kfree_rcu(id, rcu_head);
 }
 EXPORT_SYMBOL_GPL(free_css_id);
@@ -5417,12 +5415,8 @@ static struct css_id *get_new_cssid(struct cgroup_subsys *ss, int depth)
 	if (!newid)
 		return ERR_PTR(-ENOMEM);
 
-	idr_preload(GFP_KERNEL);
-	spin_lock(&ss->id_lock);
 	/* Don't use 0. allocates an ID of 1-65535 */
-	ret = idr_alloc_range(&ss->idr, newid, 1, CSS_ID_MAX + 1, GFP_NOWAIT);
-	spin_unlock(&ss->id_lock);
-	idr_preload_end();
+	ret = idr_alloc_range(&ss->idr, newid, 1, CSS_ID_MAX + 1, GFP_KERNEL);
 
 	/* Returns error when there are no free spaces for new ID.*/
 	if (ret < 0)
@@ -5442,7 +5436,6 @@ static int __init_or_module cgroup_init_idr(struct cgroup_subsys *ss,
 {
 	struct css_id *newid;
 
-	spin_lock_init(&ss->id_lock);
 	idr_init(&ss->idr);
 
 	newid = get_new_cssid(ss, 0);

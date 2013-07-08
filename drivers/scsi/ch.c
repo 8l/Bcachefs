@@ -115,7 +115,6 @@ typedef struct {
 } scsi_changer;
 
 static DEFINE_IDR(ch_index_idr);
-static DEFINE_SPINLOCK(ch_index_lock);
 
 static const struct {
 	unsigned char  sense;
@@ -582,15 +581,12 @@ ch_open(struct inode *inode, struct file *file)
 	int minor = iminor(inode);
 
 	mutex_lock(&ch_mutex);
-	spin_lock(&ch_index_lock);
 	ch = idr_find(&ch_index_idr, minor);
 
 	if (NULL == ch || scsi_device_get(ch->device)) {
-		spin_unlock(&ch_index_lock);
 		mutex_unlock(&ch_mutex);
 		return -ENXIO;
 	}
-	spin_unlock(&ch_index_lock);
 
 	file->private_data = ch;
 	mutex_unlock(&ch_mutex);
@@ -905,13 +901,8 @@ static int ch_probe(struct device *dev)
 	if (NULL == ch)
 		return -ENOMEM;
 
-	idr_preload(GFP_KERNEL);
-	spin_lock(&ch_index_lock);
 	ret = idr_alloc_range(&ch_index_idr, ch, 0,
-			      CH_MAX_DEVS + 1, GFP_NOWAIT);
-	spin_unlock(&ch_index_lock);
-	idr_preload_end();
-
+			      CH_MAX_DEVS + 1, GFP_KERNEL);
 	if (ret < 0) {
 		if (ret == -ENOSPC)
 			ret = -ENODEV;
@@ -952,9 +943,7 @@ static int ch_remove(struct device *dev)
 {
 	scsi_changer *ch = dev_get_drvdata(dev);
 
-	spin_lock(&ch_index_lock);
 	idr_remove(&ch_index_idr, ch->minor);
-	spin_unlock(&ch_index_lock);
 
 	device_destroy(ch_sysfs_class, MKDEV(SCSI_CHANGER_MAJOR,ch->minor));
 	kfree(ch->dt);

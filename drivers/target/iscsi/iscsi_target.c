@@ -59,7 +59,6 @@ static DEFINE_SPINLOCK(np_lock);
 static struct idr tiqn_idr;
 struct idr sess_idr;
 struct mutex auth_id_lock;
-spinlock_t sess_idr_lock;
 
 struct iscsit_global *iscsit_global;
 
@@ -147,22 +146,17 @@ struct iscsi_tiqn *iscsit_add_tiqn(unsigned char *buf)
 
 	tiqn->tiqn_state = TIQN_STATE_ACTIVE;
 
-	idr_preload(GFP_KERNEL);
-	spin_lock(&tiqn_lock);
-
-	ret = idr_alloc(&tiqn_idr, NULL, GFP_NOWAIT);
+	ret = idr_alloc(&tiqn_idr, NULL, GFP_KERNEL);
 	if (ret < 0) {
 		pr_err("idr_alloc() failed for tiqn->tiqn_index\n");
-		spin_unlock(&tiqn_lock);
-		idr_preload_end();
 		kfree(tiqn);
 		return ERR_PTR(ret);
 	}
 	tiqn->tiqn_index = ret;
-	list_add_tail(&tiqn->tiqn_list, &g_tiqn_list);
 
+	spin_lock(&tiqn_lock);
+	list_add_tail(&tiqn->tiqn_list, &g_tiqn_list);
 	spin_unlock(&tiqn_lock);
-	idr_preload_end();
 
 	pr_debug("CORE[0] - Added iSCSI Target IQN: %s\n", tiqn->tiqn);
 
@@ -201,8 +195,8 @@ void iscsit_del_tiqn(struct iscsi_tiqn *tiqn)
 
 	spin_lock(&tiqn_lock);
 	list_del(&tiqn->tiqn_list);
-	idr_remove(&tiqn_idr, tiqn->tiqn_index);
 	spin_unlock(&tiqn_lock);
+	idr_remove(&tiqn_idr, tiqn->tiqn_index);
 
 	pr_debug("CORE[0] - Deleted iSCSI Target IQN: %s\n",
 			tiqn->tiqn);
@@ -519,7 +513,6 @@ static int __init iscsi_target_init_module(void)
 		return -1;
 	}
 	mutex_init(&auth_id_lock);
-	spin_lock_init(&sess_idr_lock);
 	idr_init(&tiqn_idr);
 	idr_init(&sess_idr);
 
@@ -4449,9 +4442,7 @@ int iscsit_close_session(struct iscsi_session *sess)
 	pr_debug("Decremented number of active iSCSI Sessions on"
 		" iSCSI TPG: %hu to %u\n", tpg->tpgt, tpg->nsessions);
 
-	spin_lock(&sess_idr_lock);
 	idr_remove(&sess_idr, sess->session_index);
-	spin_unlock(&sess_idr_lock);
 
 	kfree(sess->sess_ops);
 	sess->sess_ops = NULL;

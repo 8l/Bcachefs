@@ -40,7 +40,6 @@ module_param(msi_en, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(msi_en, "Enable MSI");
 
 static DEFINE_IDR(rtsx_pci_idr);
-static DEFINE_SPINLOCK(rtsx_pci_lock);
 
 static struct mfd_cell rtsx_pcr_cells[] = {
 	[RTSX_SD_CARD] = {
@@ -1101,15 +1100,11 @@ static int rtsx_pci_probe(struct pci_dev *pcidev,
 	}
 	handle->pcr = pcr;
 
-	idr_preload(GFP_KERNEL);
-	spin_lock(&rtsx_pci_lock);
-	ret = idr_alloc(&rtsx_pci_idr, pcr, GFP_NOWAIT);
-	if (ret >= 0)
-		pcr->id = ret;
-	spin_unlock(&rtsx_pci_lock);
-	idr_preload_end();
+	ret = idr_alloc(&rtsx_pci_idr, pcr, GFP_KERNEL);
 	if (ret < 0)
 		goto free_handle;
+
+	pcr->id = ret;
 
 	pcr->pci = pcidev;
 	dev_set_drvdata(&pcidev->dev, handle);
@@ -1216,9 +1211,7 @@ static void rtsx_pci_remove(struct pci_dev *pcidev)
 	pci_release_regions(pcidev);
 	pci_disable_device(pcidev);
 
-	spin_lock(&rtsx_pci_lock);
 	idr_remove(&rtsx_pci_idr, pcr->id);
-	spin_unlock(&rtsx_pci_lock);
 
 	kfree(pcr->slots);
 	kfree(pcr);

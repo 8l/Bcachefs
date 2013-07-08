@@ -622,7 +622,6 @@ struct cgroup_subsys {
 	struct list_head sibling;
 	/* used when use_id == true */
 	struct idr idr;
-	spinlock_t id_lock;
 
 	/* list of cftype_sets */
 	struct list_head cftsets;

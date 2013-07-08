@@ -27,7 +27,6 @@
 #define DRIVER_NAME             "c2port"
 #define DRIVER_VERSION          "0.51.0"
 
-static DEFINE_SPINLOCK(c2port_idr_lock);
 static DEFINE_IDR(c2port_idr);
 
 /*
@@ -897,11 +896,7 @@ struct c2port_device *c2port_device_register(char *name,
 	if (unlikely(!c2dev))
 		return ERR_PTR(-ENOMEM);
 
-	idr_preload(GFP_KERNEL);
-	spin_lock_irq(&c2port_idr_lock);
-	ret = idr_alloc(&c2port_idr, c2dev, GFP_NOWAIT);
-	spin_unlock_irq(&c2port_idr_lock);
-	idr_preload_end();
+	ret = idr_alloc(&c2port_idr, c2dev, GFP_KERNEL);
 
 	if (ret < 0)
 		goto error_idr_alloc;
@@ -941,9 +936,7 @@ error_device_create_bin_file:
 	device_destroy(c2port_class, 0);
 
 error_device_create:
-	spin_lock_irq(&c2port_idr_lock);
 	idr_remove(&c2port_idr, c2dev->id);
-	spin_unlock_irq(&c2port_idr_lock);
 
 error_idr_alloc:
 	kfree(c2dev);
@@ -960,9 +953,7 @@ void c2port_device_unregister(struct c2port_device *c2dev)
 	dev_info(c2dev->dev, "C2 port %s removed\n", c2dev->name);
 
 	device_remove_bin_file(c2dev->dev, &c2port_bin_attrs);
-	spin_lock_irq(&c2port_idr_lock);
 	idr_remove(&c2port_idr, c2dev->id);
-	spin_unlock_irq(&c2port_idr_lock);
 
 	device_destroy(c2port_class, c2dev->id);
 

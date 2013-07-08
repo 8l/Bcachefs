@@ -214,7 +214,6 @@ static void scsi_tape_release(struct kref *);
 #define to_scsi_tape(obj) container_of(obj, struct scsi_tape, kref)
 
 static DEFINE_MUTEX(st_ref_mutex);
-static DEFINE_SPINLOCK(st_index_lock);
 static DEFINE_SPINLOCK(st_use_lock);
 static DEFINE_IDR(st_index_idr);
 
@@ -235,7 +234,6 @@ static struct scsi_tape *scsi_tape_get(int dev)
 	struct scsi_tape *STp = NULL;
 
 	mutex_lock(&st_ref_mutex);
-	spin_lock(&st_index_lock);
 
 	STp = idr_find(&st_index_idr, dev);
 	if (!STp) goto out;
@@ -254,7 +252,6 @@ out_put:
 	kref_put(&STp->kref, scsi_tape_release);
 	STp = NULL;
 out:
-	spin_unlock(&st_index_lock);
 	mutex_unlock(&st_ref_mutex);
 	return STp;
 }
@@ -4182,12 +4179,8 @@ static int st_probe(struct device *dev)
 	    tpnt->blksize_changed = 0;
 	mutex_init(&tpnt->lock);
 
-	idr_preload(GFP_KERNEL);
-	spin_lock(&st_index_lock);
 	error = idr_alloc_range(&st_index_idr, tpnt, 0,
-				ST_MAX_TAPES + 1, GFP_NOWAIT);
-	spin_unlock(&st_index_lock);
-	idr_preload_end();
+				ST_MAX_TAPES + 1, GFP_KERNEL);
 	if (error < 0) {
 		pr_warn("st: idr allocation failed: %d\n", error);
 		goto out_put_queue;
@@ -4213,9 +4206,7 @@ static int st_probe(struct device *dev)
 
 out_remove_devs:
 	remove_cdevs(tpnt);
-	spin_lock(&st_index_lock);
 	idr_remove(&st_index_idr, tpnt->index);
-	spin_unlock(&st_index_lock);
 out_put_queue:
 	blk_put_queue(disk->queue);
 out_put_disk:
@@ -4239,9 +4230,7 @@ static int st_remove(struct device *dev)
 	mutex_lock(&st_ref_mutex);
 	kref_put(&tpnt->kref, scsi_tape_release);
 	mutex_unlock(&st_ref_mutex);
-	spin_lock(&st_index_lock);
 	idr_remove(&st_index_idr, index);
-	spin_unlock(&st_index_lock);
 	return 0;
 }
 

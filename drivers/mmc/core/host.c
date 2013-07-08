@@ -55,7 +55,6 @@ void mmc_unregister_host_class(void)
 }
 
 static DEFINE_IDR(mmc_host_idr);
-static DEFINE_SPINLOCK(mmc_host_lock);
 
 #ifdef CONFIG_MMC_CLKGATE
 static ssize_t clkgate_delay_show(struct device *dev,
@@ -457,16 +456,11 @@ struct mmc_host *mmc_alloc_host(int extra, struct device *dev)
 
 	/* scanning will be enabled when we're ready */
 	host->rescan_disable = 1;
-	idr_preload(GFP_KERNEL);
-	spin_lock(&mmc_host_lock);
-	err = idr_alloc(&mmc_host_idr, host, GFP_NOWAIT);
-	if (err >= 0)
-		host->index = err;
-	spin_unlock(&mmc_host_lock);
-	idr_preload_end();
+	err = idr_alloc(&mmc_host_idr, host, GFP_KERNEL);
 	if (err < 0)
 		goto free;
 
+	host->index = err;
 	dev_set_name(&host->class_dev, "mmc%d", host->index);
 
 	host->parent = dev;
@@ -574,10 +568,7 @@ EXPORT_SYMBOL(mmc_remove_host);
  */
 void mmc_free_host(struct mmc_host *host)
 {
-	spin_lock(&mmc_host_lock);
 	idr_remove(&mmc_host_idr, host->index);
-	spin_unlock(&mmc_host_lock);
-
 	put_device(&host->class_dev);
 }
 

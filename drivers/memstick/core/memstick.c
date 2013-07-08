@@ -26,7 +26,6 @@ module_param(cmd_retries, uint, 0644);
 
 static struct workqueue_struct *workqueue;
 static DEFINE_IDR(memstick_host_idr);
-static DEFINE_SPINLOCK(memstick_host_lock);
 
 static int memstick_dev_match(struct memstick_dev *card,
 			      struct memstick_device_id *id)
@@ -512,25 +511,17 @@ int memstick_add_host(struct memstick_host *host)
 {
 	int rc;
 
-	idr_preload(GFP_KERNEL);
-	spin_lock(&memstick_host_lock);
-
-	rc = idr_alloc(&memstick_host_idr, host, GFP_NOWAIT);
-	if (rc >= 0)
-		host->id = rc;
-
-	spin_unlock(&memstick_host_lock);
-	idr_preload_end();
+	rc = idr_alloc(&memstick_host_idr, host, GFP_KERNEL);
 	if (rc < 0)
 		return rc;
+
+	host->id = rc;
 
 	dev_set_name(&host->dev, "memstick%u", host->id);
 
 	rc = device_add(&host->dev);
 	if (rc) {
-		spin_lock(&memstick_host_lock);
 		idr_remove(&memstick_host_idr, host->id);
-		spin_unlock(&memstick_host_lock);
 		return rc;
 	}
 
@@ -554,9 +545,7 @@ void memstick_remove_host(struct memstick_host *host)
 	host->set_param(host, MEMSTICK_POWER, MEMSTICK_POWER_OFF);
 	mutex_unlock(&host->lock);
 
-	spin_lock(&memstick_host_lock);
 	idr_remove(&memstick_host_idr, host->id);
-	spin_unlock(&memstick_host_lock);
 	device_del(&host->dev);
 }
 EXPORT_SYMBOL(memstick_remove_host);

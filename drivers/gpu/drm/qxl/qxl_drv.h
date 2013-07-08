@@ -285,7 +285,6 @@ struct qxl_device {
 	uint64_t	va_slot_mask;
 
 	struct idr	release_idr;
-	spinlock_t release_idr_lock;
 	struct mutex	async_io_mutex;
 	unsigned int last_sent_io_cmd;
 

@@ -289,14 +289,7 @@ static int iscsi_login_zero_tsih_s1(
 	spin_lock_init(&sess->session_usage_lock);
 	spin_lock_init(&sess->ttt_lock);
 
-	idr_preload(GFP_KERNEL);
-	spin_lock_bh(&sess_idr_lock);
-	ret = idr_alloc(&sess_idr, NULL, GFP_NOWAIT);
-	if (ret >= 0)
-		sess->session_index = ret;
-	spin_unlock_bh(&sess_idr_lock);
-	idr_preload_end();
-
+	ret = idr_alloc(&sess_idr, NULL, GFP_KERNEL);
 	if (ret < 0) {
 		pr_err("idr_alloc() for sess_idr failed\n");
 		iscsit_tx_login_rsp(conn, ISCSI_STATUS_CLS_TARGET_ERR,
@@ -305,6 +298,7 @@ static int iscsi_login_zero_tsih_s1(
 		return -ENOMEM;
 	}
 
+	sess->session_index = ret;
 	sess->creation_time = get_jiffies_64();
 	spin_lock_init(&sess->session_stats_lock);
 	/*
@@ -1312,9 +1306,7 @@ new_sess_out:
 	if (conn->sess->se_sess)
 		transport_free_session(conn->sess->se_sess);
 	if (conn->sess->session_index != 0) {
-		spin_lock_bh(&sess_idr_lock);
 		idr_remove(&sess_idr, conn->sess->session_index);
-		spin_unlock_bh(&sess_idr_lock);
 	}
 	kfree(conn->sess->sess_ops);
 	kfree(conn->sess);

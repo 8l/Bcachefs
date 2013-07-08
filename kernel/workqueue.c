@@ -1703,13 +1703,7 @@ static struct worker *create_worker(struct worker_pool *pool)
 	 * ID is needed to determine kthread name.  Allocate ID first
 	 * without installing the pointer.
 	 */
-	idr_preload(GFP_KERNEL);
-	spin_lock_irq(&pool->lock);
-
-	id = idr_alloc(&pool->worker_idr, NULL, GFP_NOWAIT);
-
-	spin_unlock_irq(&pool->lock);
-	idr_preload_end();
+	id = idr_alloc(&pool->worker_idr, NULL, GFP_KERNEL);
 	if (id < 0)
 		goto fail;
 
@@ -1750,18 +1744,13 @@ static struct worker *create_worker(struct worker_pool *pool)
 		worker->flags |= WORKER_UNBOUND;
 
 	/* successful, commit the pointer to idr */
-	spin_lock_irq(&pool->lock);
 	idr_replace(&pool->worker_idr, worker, worker->id);
-	spin_unlock_irq(&pool->lock);
 
 	return worker;
 
 fail:
-	if (id >= 0) {
-		spin_lock_irq(&pool->lock);
+	if (id >= 0)
 		idr_remove(&pool->worker_idr, id);
-		spin_unlock_irq(&pool->lock);
-	}
 	kfree(worker);
 	return NULL;
 }

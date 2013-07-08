@@ -464,11 +464,8 @@ static void sctp_association_destroy(struct sctp_association *asoc)
 	sctp_endpoint_put(asoc->ep);
 	sock_put(asoc->base.sk);
 
-	if (asoc->assoc_id != 0) {
-		spin_lock_bh(&sctp_assocs_id_lock);
+	if (asoc->assoc_id != 0)
 		idr_remove(&sctp_assocs_id, asoc->assoc_id);
-		spin_unlock_bh(&sctp_assocs_id_lock);
-	}
 
 	WARN_ON(atomic_read(&asoc->rmem_alloc));
 
@@ -1572,21 +1569,14 @@ int sctp_assoc_lookup_laddr(struct sctp_association *asoc,
 /* Set an association id for a given association */
 int sctp_assoc_set_id(struct sctp_association *asoc, gfp_t gfp)
 {
-	bool preload = gfp & __GFP_WAIT;
 	int ret;
 
 	/* If the id is already assigned, keep it. */
 	if (asoc->assoc_id)
 		return 0;
 
-	if (preload)
-		idr_preload(gfp);
-	spin_lock_bh(&sctp_assocs_id_lock);
 	/* 0 is not a valid assoc_id, must be >= 1 */
-	ret = idr_alloc_cyclic(&sctp_assocs_id, asoc, 1, 0, GFP_NOWAIT);
-	spin_unlock_bh(&sctp_assocs_id_lock);
-	if (preload)
-		idr_preload_end();
+	ret = idr_alloc_cyclic(&sctp_assocs_id, asoc, 1, 0, gfp);
 	if (ret < 0)
 		return ret;
 

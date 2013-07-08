@@ -1812,9 +1812,7 @@ static int dm_any_congested(void *congested_data, int bdi_bits)
  *---------------------------------------------------------------*/
 static void free_minor(int minor)
 {
-	spin_lock(&_minor_lock);
 	idr_remove(&_minor_idr, minor);
-	spin_unlock(&_minor_lock);
 }
 
 /*
@@ -1827,14 +1825,8 @@ static int specific_minor(int minor)
 	if (minor >= (1 << MINORBITS))
 		return -EINVAL;
 
-	idr_preload(GFP_KERNEL);
-	spin_lock(&_minor_lock);
-
-	r = idr_alloc_range(&minor_idr, MINOR_ALLOCED,
-			    minor, minor + 1, GFP_NOWAIT);
-
-	spin_unlock(&_minor_lock);
-	idr_preload_end();
+	r = idr_alloc_range(&_minor_idr, MINOR_ALLOCED, minor,
+			    minor + 1, GFP_KERNEL);
 	if (r < 0)
 		return r == -ENOSPC ? -EBUSY : r;
 	return 0;
@@ -1844,14 +1836,8 @@ static int next_free_minor(int *minor)
 {
 	int r;
 
-	idr_preload(GFP_KERNEL);
-	spin_lock(&_minor_lock);
-
-	r = idr_alloc_range(&minor_idr, MINOR_ALLOCED, 0,
-			    1 << MINORBITS, GFP_NOWAIT);
-
-	spin_unlock(&_minor_lock);
-	idr_preload_end();
+	r = idr_alloc_range(&_minor_idr, MINOR_ALLOCED,
+			    0, 1 << MINORBITS, GFP_KERNEL);
 	if (r < 0)
 		return r;
 	*minor = r;
@@ -1962,9 +1948,7 @@ static struct mapped_device *alloc_dev(int minor)
 	md->flush_bio.bi_rw = WRITE_FLUSH;
 
 	/* Populate the mapping, nobody knows we exist yet */
-	spin_lock(&_minor_lock);
 	old_md = idr_replace(&_minor_idr, md, minor);
-	spin_unlock(&_minor_lock);
 
 	BUG_ON(old_md != MINOR_ALLOCED);
 

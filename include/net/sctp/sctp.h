@@ -502,7 +502,6 @@ extern struct proto sctpv6_prot;
 void sctp_put_port(struct sock *sk);
 
 extern struct idr sctp_assocs_id;
-extern spinlock_t sctp_assocs_id_lock;
 
 /* Static inline functions. */
 

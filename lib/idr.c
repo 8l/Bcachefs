@@ -910,7 +910,7 @@ static void free_bitmap(struct ida *ida, struct ida_bitmap *bitmap)
  * If the system is REALLY out of memory this function returns %0,
  * otherwise %1.
  */
-int ida_pre_get(struct ida *ida, gfp_t gfp_mask)
+static int ida_pre_get(struct ida *ida, gfp_t gfp_mask)
 {
 	/* allocate idr_layers */
 	if (!__idr_pre_get(&ida->idr, gfp_mask))
@@ -929,7 +929,6 @@ int ida_pre_get(struct ida *ida, gfp_t gfp_mask)
 
 	return 1;
 }
-EXPORT_SYMBOL(ida_pre_get);
 
 /**
  * ida_get_new_above - allocate new ID above or equal to a start id
@@ -946,7 +945,7 @@ EXPORT_SYMBOL(ida_pre_get);
  *
  * @p_id returns a value in the range @starting_id ... %0x7fffffff.
  */
-int ida_get_new_above(struct ida *ida, int starting_id, int *p_id)
+static int ida_get_new_above(struct ida *ida, int starting_id, int *p_id)
 {
 	struct idr_layer *pa[MAX_IDR_LEVEL + 1];
 	struct ida_bitmap *bitmap;
@@ -1017,14 +1016,8 @@ int ida_get_new_above(struct ida *ida, int starting_id, int *p_id)
 
 	return 0;
 }
-EXPORT_SYMBOL(ida_get_new_above);
 
-/**
- * ida_remove - remove the given ID
- * @ida:	ida handle
- * @id:		ID to free
- */
-void ida_remove(struct ida *ida, int id)
+static void ida_remove(struct ida *ida, int id)
 {
 	struct idr_layer *p = ida->idr.top;
 	int shift = (ida->idr.layers - 1) * IDR_BITS;
@@ -1064,7 +1057,6 @@ void ida_remove(struct ida *ida, int id)
  err:
 	WARN(1, "ida_remove called for id=%d which is not allocated.\n", id);
 }
-EXPORT_SYMBOL(ida_remove);
 
 /**
  * ida_destroy - release all cached layers within an ida tree

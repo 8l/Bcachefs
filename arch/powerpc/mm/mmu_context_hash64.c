@@ -27,35 +27,12 @@
 
 #include "icswx.h"
 
-static DEFINE_SPINLOCK(mmu_context_lock);
 static DEFINE_IDA(mmu_context_ida);
 
 int __init_new_context(void)
 {
-	int index;
-	int err;
-
-again:
-	if (!ida_pre_get(&mmu_context_ida, GFP_KERNEL))
-		return -ENOMEM;
-
-	spin_lock(&mmu_context_lock);
-	err = ida_get_new_above(&mmu_context_ida, 1, &index);
-	spin_unlock(&mmu_context_lock);
-
-	if (err == -EAGAIN)
-		goto again;
-	else if (err)
-		return err;
-
-	if (index > MAX_USER_CONTEXT) {
-		spin_lock(&mmu_context_lock);
-		ida_remove(&mmu_context_ida, index);
-		spin_unlock(&mmu_context_lock);
-		return -ENOMEM;
-	}
-
-	return index;
+	return ida_simple_get(&mmu_context_ida, 1,
+			      MAX_USER_CONTEXT, GFP_KERNEL);
 }
 EXPORT_SYMBOL_GPL(__init_new_context);
 
@@ -94,9 +71,7 @@ int init_new_context(struct task_struct *tsk, struct mm_struct *mm)
 
 void __destroy_context(int context_id)
 {
-	spin_lock(&mmu_context_lock);
-	ida_remove(&mmu_context_ida, context_id);
-	spin_unlock(&mmu_context_lock);
+	ida_simple_remove(&mmu_context_ida, context_id);
 }
 EXPORT_SYMBOL_GPL(__destroy_context);
 

@@ -500,22 +500,18 @@ static int register_pernet_operations(struct list_head *list,
 	int error;
 
 	if (ops->id) {
-again:
-		error = ida_get_new_above(&net_generic_ids, 1, ops->id);
-		if (error < 0) {
-			if (error == -EAGAIN) {
-				ida_pre_get(&net_generic_ids, GFP_KERNEL);
-				goto again;
-			}
-			return error;
-		}
+		int id = ida_simple_get(&net_generic_ids, 1, 0, GFP_KERNEL);
+		if (id < 0)
+			return id;
+
+		*ops->id = id;
 		max_gen_ptrs = max_t(unsigned int, max_gen_ptrs, *ops->id);
 	}
 	error = __register_pernet_operations(list, ops);
 	if (error) {
 		rcu_barrier();
 		if (ops->id)
-			ida_remove(&net_generic_ids, *ops->id);
+			ida_simple_remove(&net_generic_ids, *ops->id);
 	}
 
 	return error;
@@ -523,11 +519,10 @@ again:
 
 static void unregister_pernet_operations(struct pernet_operations *ops)
 {
-	
 	__unregister_pernet_operations(ops);
 	rcu_barrier();
 	if (ops->id)
-		ida_remove(&net_generic_ids, *ops->id);
+		ida_simple_remove(&net_generic_ids, *ops->id);
 }
 
 /**

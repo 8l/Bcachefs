@@ -430,7 +430,6 @@ nfs4_insert_state_owner_locked(struct nfs4_state_owner *new)
 	struct rb_node **p = &server->state_owners.rb_node,
 		       *parent = NULL;
 	struct nfs4_state_owner *sp;
-	int err;
 
 	while (*p != NULL) {
 		parent = *p;
@@ -447,9 +446,6 @@ nfs4_insert_state_owner_locked(struct nfs4_state_owner *new)
 			return sp;
 		}
 	}
-	err = ida_get_new(&server->openowner_id, &new->so_seqid.owner_id);
-	if (err)
-		return ERR_PTR(err);
 	rb_link_node(&new->so_server_node, parent, p);
 	rb_insert_color(&new->so_server_node, &server->state_owners);
 	return new;
@@ -462,7 +458,7 @@ nfs4_remove_state_owner_locked(struct nfs4_state_owner *sp)
 
 	if (!RB_EMPTY_NODE(&sp->so_server_node))
 		rb_erase(&sp->so_server_node, &server->state_owners);
-	ida_remove(&server->openowner_id, sp->so_seqid.owner_id);
+	ida_simple_remove(&server->openowner_id, sp->so_seqid.owner_id);
 }
 
 static void
@@ -572,6 +568,7 @@ struct nfs4_state_owner *nfs4_get_state_owner(struct nfs_server *server,
 {
 	struct nfs_client *clp = server->nfs_client;
 	struct nfs4_state_owner *sp, *new;
+	int id;
 
 	spin_lock(&clp->cl_lock);
 	sp = nfs4_find_state_owner_locked(server, cred);
@@ -581,15 +578,24 @@ struct nfs4_state_owner *nfs4_get_state_owner(struct nfs_server *server,
 	new = nfs4_alloc_state_owner(server, cred, gfp_flags);
 	if (new == NULL)
 		goto out;
-	do {
-		if (ida_pre_get(&server->openowner_id, gfp_flags) == 0)
-			break;
-		spin_lock(&clp->cl_lock);
-		sp = nfs4_insert_state_owner_locked(new);
-		spin_unlock(&clp->cl_lock);
-	} while (sp == ERR_PTR(-EAGAIN));
-	if (sp != new)
+
+	id = ida_simple_get(&server->openowner_id, 0, 0, gfp_flags);
+	if (id < 0) {
 		nfs4_free_state_owner(new);
+		sp = ERR_PTR(id);
+		goto out;
+	}
+	new->so_seqid.owner_id = id;
+
+	spin_lock(&clp->cl_lock);
+	sp = nfs4_insert_state_owner_locked(new);
+	spin_unlock(&clp->cl_lock);
+
+	if (sp != new) {
+		ida_simple_remove(&server->openowner_id,
+				  new->so_seqid.owner_id);
+		nfs4_free_state_owner(new);
+	}
 out:
 	nfs4_gc_state_owners(server);
 	return sp;

@@ -23,45 +23,15 @@
 #define COP_PID_MIN (COP_PID_NONE + 1)
 #define COP_PID_MAX (0xFFFF)
 
-static DEFINE_SPINLOCK(mmu_context_acop_lock);
 static DEFINE_IDA(cop_ida);
-
-static int new_cop_pid(struct ida *ida, int min_id, int max_id,
-		       spinlock_t *lock)
-{
-	int index;
-	int err;
-
-again:
-	if (!ida_pre_get(ida, GFP_KERNEL))
-		return -ENOMEM;
-
-	spin_lock(lock);
-	err = ida_get_new_above(ida, min_id, &index);
-	spin_unlock(lock);
-
-	if (err == -EAGAIN)
-		goto again;
-	else if (err)
-		return err;
-
-	if (index > max_id) {
-		spin_lock(lock);
-		ida_remove(ida, index);
-		spin_unlock(lock);
-		return -ENOMEM;
-	}
-
-	return index;
-}
 
 int get_cop_pid(struct mm_struct *mm)
 {
 	int pid;
 
 	if (mm->context.cop_pid == COP_PID_NONE) {
-		pid = new_cop_pid(&cop_ida, COP_PID_MIN, COP_PID_MAX,
-				  &mmu_context_acop_lock);
+		pid = ida_simple_get(&cop_ida, COP_PID_MIN,
+				     COP_PID_MAX, GFP_KERNEL);
 		if (pid >= 0)
 			mm->context.cop_pid = pid;
 	}
@@ -81,7 +51,5 @@ int disable_cop_pid(struct mm_struct *mm)
 
 void free_cop_pid(int free_pid)
 {
-	spin_lock(&mmu_context_acop_lock);
-	ida_remove(&cop_ida, free_pid);
-	spin_unlock(&mmu_context_acop_lock);
+	ida_simple_remove(&cop_ida, free_pid);
 }

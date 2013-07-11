@@ -1549,6 +1549,11 @@ config BUILD_DOCSRC
 
 	  Say N if you are unsure.
 
+config DYNAMIC_FAULT
+	bool "Enable dynamic fault support"
+	default n
+	depends on DEBUG_FS
+
 config DMA_API_DEBUG
 	bool "Enable debugging of DMA-API usage"
 	depends on HAVE_DMA_API_DEBUG

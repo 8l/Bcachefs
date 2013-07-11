@@ -2024,6 +2024,15 @@ static struct notifier_block reboot = {
 	.priority	= INT_MAX, /* before any real devices */
 };
 
+static ssize_t reboot_test(struct kobject *k, struct kobj_attribute *attr,
+			   const char *buffer, size_t size)
+{
+	bcache_reboot(NULL, SYS_DOWN, NULL);
+	return size;
+}
+
+kobj_attribute_write(reboot,		reboot_test);
+
 static void bcache_exit(void)
 {
 	bch_debug_exit();
@@ -2043,6 +2052,7 @@ static int __init bcache_init(void)
 	static const struct attribute *files[] = {
 		&ksysfs_register.attr,
 		&ksysfs_register_quiet.attr,
+		&ksysfs_reboot.attr,
 		NULL
 	};
 

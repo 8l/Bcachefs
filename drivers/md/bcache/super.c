@@ -15,6 +15,7 @@
 #include <linux/buffer_head.h>
 #include <linux/debugfs.h>
 #include <linux/genhd.h>
+#include <linux/kthread.h>
 #include <linux/module.h>
 #include <linux/random.h>
 #include <linux/reboot.h>
@@ -1015,6 +1016,7 @@ static void cached_dev_free(struct closure *cl)
 	struct cached_dev *dc = container_of(cl, struct cached_dev, disk.cl);
 
 	cancel_delayed_work_sync(&dc->writeback_rate_update);
+	kthread_stop(dc->writeback_thread);
 
 	mutex_lock(&bch_register_lock);
 
@@ -1959,7 +1961,6 @@ static struct notifier_block reboot = {
 static void bcache_exit(void)
 {
 	bch_debug_exit();
-	bch_writeback_exit();
 	bch_request_exit();
 	bch_btree_exit();
 	if (bcache_kobj)
@@ -1992,7 +1993,6 @@ static int __init bcache_init(void)
 	    sysfs_create_files(bcache_kobj, files) ||
 	    bch_btree_init() ||
 	    bch_request_init() ||
-	    bch_writeback_init() ||
 	    bch_debug_init(bcache_kobj))
 		goto err;
 

@@ -382,11 +382,8 @@ static inline bool bch_cut_back(const struct bkey *where, struct bkey *k)
 ({								\
 	struct bkey *_ret = NULL;				\
 								\
-	if (KEY_INODE(_k) || KEY_OFFSET(_k)) {			\
+	if ((_k)->low) {					\
 		_ret = &KEY(KEY_INODE(_k), KEY_OFFSET(_k), 0);	\
-								\
-		if (!_ret->low)					\
-			_ret->high--;				\
 		_ret->low--;					\
 	}							\
 								\

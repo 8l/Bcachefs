@@ -100,8 +100,6 @@ enum {
 #define MAX_NEED_GC		64
 #define MAX_SAVE_PRIO		72
 
-#define PTR_DIRTY_BIT		(((uint64_t) 1 << 36))
-
 #define PTR_HASH(c, k)							\
 	(((k)->ptr[0] >> c->bucket_bits) | PTR_GEN(k, 0))
 
@@ -197,13 +195,38 @@ void bkey_put(struct cache_set *c, struct bkey *k)
 
 /* Btree IO */
 
+static void convert_v0_keys(struct btree *b, struct bset *i)
+{
+	struct bkey *k;
+
+	for (k = i->start;
+	     k < bset_bkey_last(i);
+	     k = bkey_next(k)) {
+		struct bkey t;
+		bkey_init(&t);
+
+		SET_KEY_PTRS(&t,	KEY0_PTRS(k));
+		SET_KEY_CSUM(&t,	KEY0_CSUM(k));
+		SET_KEY_DIRTY(&t,	KEY0_DIRTY(k));
+		SET_KEY_SIZE(&t,	KEY0_SIZE(k));
+		SET_KEY_INODE(&t,	KEY0_INODE(k));
+		SET_KEY_OFFSET(&t,	k->low);
+
+		*k = t;
+	}
+}
+
 static uint64_t btree_csum_set(struct btree *b, struct bset *i)
 {
-	uint64_t crc = b->key.ptr[0];
-	void *data = (void *) i + 8, *end = bset_bkey_last(i);
+	if (i->version < BCACHE_BSET_CSUM) {
+		return csum_set(i);
+	} else {
+		uint64_t crc = b->key.ptr[0];
+		void *data = (void *) i + 8, *end = bset_bkey_last(i);
 
-	crc = bch_crc64_update(crc, data, end - data);
-	return crc ^ 0xffffffffffffffffULL;
+		crc = bch_crc64_update(crc, data, end - data);
+		return crc ^ 0xffffffffffffffffULL;
+	}
 }
 
 static void bch_btree_node_read_done(struct btree *b)
@@ -240,20 +263,15 @@ static void bch_btree_node_read_done(struct btree *b)
 			goto err;
 
 		err = "bad checksum";
-		switch (i->version) {
-		case 0:
-			if (i->csum != csum_set(i))
-				goto err;
-			break;
-		case BCACHE_BSET_VERSION:
-			if (i->csum != btree_csum_set(b, i))
-				goto err;
-			break;
-		}
+		if (i->csum != btree_csum_set(b, i))
+			goto err;
 
 		err = "empty set";
 		if (i != b->keys.set[0].data && !i->keys)
 			goto err;
+
+		if (i->version < BCACHE_BSET_KEY_v1)
+			convert_v0_keys(b, i);
 
 		if (b->level) {
 			struct bkey *k;

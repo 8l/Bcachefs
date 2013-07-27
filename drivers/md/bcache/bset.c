@@ -438,11 +438,7 @@ static void make_bfloat(struct bset_tree *t, unsigned j)
 	BUG_ON(m < l || m > r);
 	BUG_ON(bkey_next(p) != m);
 
-	if (KEY_INODE(l) != KEY_INODE(r))
-		f->exponent = fls64(KEY_INODE(r) ^ KEY_INODE(l)) + 64;
-	else
-		f->exponent = fls64(r->low ^ l->low);
-
+	f->exponent = fls64(r->low ^ l->low);
 	f->exponent = max_t(int, f->exponent - BKEY_MANTISSA_BITS, 0);
 
 	/*

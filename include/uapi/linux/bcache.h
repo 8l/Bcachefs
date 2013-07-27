@@ -38,44 +38,33 @@ static inline void SET_##name(struct bkey *k, unsigned i, __u64 v)	\
 	k->ptr[i] |= (v & ~(~0ULL << size)) << offset;			\
 }
 
+#define KEY_INODE_BITS		16
+#define KEY_OFFSET_BITS		(64 - KEY_INODE_BITS)
 #define KEY_SIZE_BITS		16
 
-KEY_FIELD(KEY_PTRS,	high, 60, 3)
-KEY_FIELD(HEADER_SIZE,	high, 58, 2)
-KEY_FIELD(KEY_CSUM,	high, 56, 2)
-KEY_FIELD(KEY_PINNED,	high, 55, 1)
-KEY_FIELD(KEY_DIRTY,	high, 36, 1)
+//KEY_FIELD(KEY_FORMAT,	high, 60, 4)
+KEY_FIELD(KEY_PTRS,	high, 54, 6)	/* Max value 8 * ((1 << 6) - 1) bytes */
+KEY_FIELD(KEY_DELETED,	high, 53, 1)
+KEY_FIELD(KEY_DIRTY,	high, 52, 1)
+KEY_FIELD(KEY_CSUM,	high, 50, 2)
+/* KEY_FIELD(UNUSED,	high, 48, 2) */
 
-KEY_FIELD(KEY_SIZE,	high, 20, KEY_SIZE_BITS)
-KEY_FIELD(KEY_INODE,	high, 0,  20)
+KEY_FIELD(KEY_SIZE,	high, 32, KEY_SIZE_BITS)
+KEY_FIELD(KEY_VERSION,	high, 0,  32)
 
-/* Next time I change the on disk format, KEY_OFFSET() won't be 64 bits */
+KEY_FIELD(KEY_INODE,	low,  KEY_OFFSET_BITS, KEY_INODE_BITS)
+KEY_FIELD(KEY_OFFSET,	low,  0, KEY_OFFSET_BITS)
 
-static inline __u64 KEY_OFFSET(const struct bkey *k)
-{
-	return k->low;
-}
-
-static inline void SET_KEY_OFFSET(struct bkey *k, __u64 v)
-{
-	k->low = v;
-}
-
-/*
- * The high bit being set is a relic from when we used it to do binary
- * searches - it told you where a key started. It's not used anymore,
- * and can probably be safely dropped.
- */
 #define KEY(inode, offset, size)					\
 ((struct bkey) {							\
-	.high = (1ULL << 63) | ((__u64) (size) << 20) | (inode),	\
-	.low = (offset)							\
+	.high = ((__u64) (size) << 32),					\
+	.low = (((__u64) inode) << KEY_OFFSET_BITS) | (offset),		\
 })
 
 #define ZERO_KEY			KEY(0, 0, 0)
 
-#define MAX_KEY_INODE			(~(~0 << 20))
-#define MAX_KEY_OFFSET			(~0ULL >> 1)
+#define MAX_KEY_INODE			(~(~0ULL << KEY_INODE_BITS))
+#define MAX_KEY_OFFSET			(~(~0ULL << KEY_OFFSET_BITS))
 #define MAX_KEY				KEY(MAX_KEY_INODE, MAX_KEY_OFFSET, 0)
 
 #define KEY_START(k)			(KEY_OFFSET(k) - KEY_SIZE(k))
@@ -338,7 +327,8 @@ BITMASK(UUID_FLASH_ONLY,	struct uuid_entry, flags, 0, 1);
 /* Version 1: Seed pointer into btree node checksum
  */
 #define BCACHE_BSET_CSUM		1
-#define BCACHE_BSET_VERSION		1
+#define BCACHE_BSET_KEY_v1		2
+#define BCACHE_BSET_VERSION		2
 
 /*
  * Btree nodes
@@ -360,6 +350,13 @@ struct bset {
 };
 
 /* OBSOLETE */
+
+KEY_FIELD(KEY0_PTRS,		high, 60, 3)
+KEY_FIELD(KEY0_CSUM,		high, 56, 2)
+KEY_FIELD(KEY0_DIRTY,		high, 36, 1)
+
+KEY_FIELD(KEY0_SIZE,		high, 20, 16)
+KEY_FIELD(KEY0_INODE,		high, 0,  20)
 
 /* UUIDS - per backing device/flash only volume metadata */
 

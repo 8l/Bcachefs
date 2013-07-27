@@ -298,6 +298,7 @@ bool bch_extent_merge(struct btree_keys *bk, struct bkey *l, struct bkey *r)
 		return false;
 
 	if (KEY_PTRS(l) != KEY_PTRS(r) ||
+	    KEY_DELETED(l) != KEY_DELETED(r) ||
 	    KEY_DIRTY(l) != KEY_DIRTY(r) ||
 	    bkey_cmp(l, &START_KEY(r)))
 		return false;

@@ -64,6 +64,44 @@ static bool __ptr_invalid(struct cache_set *c, const struct bkey *k)
 
 /* Btree ptrs */
 
+void bch_btree_ptr_sort_fixup(struct btree_iter *iter)
+{
+	while (iter->used > 1) {
+		struct btree_iter_set *top = iter->data, *i = top + 1;
+
+		if (iter->used > 2 &&
+		    bch_key_sort_cmp(i[0], i[1]))
+			i++;
+
+		/* Old style freeing keys - don't check for duplicates */
+		if (!bkey_cmp(top->k, &ZERO_KEY))
+			break;
+
+		/*
+		 * If this key and the next key don't compare equal, we're done.
+		 */
+
+		if (bkey_cmp(top->k, i->k))
+			break;
+
+		/*
+		 * If they do compare equal, the newer key overwrote the older
+		 * key and we need to drop the older key.
+		 *
+		 * bch_key_sort_cmp() ensures that when keys compare equal the
+		 * newer key comes first; so i->k is older than top->k and we
+		 * drop i->k.
+		 */
+
+		i->k = bkey_next(i->k);
+
+		if (i->k == i->end)
+			*i = iter->data[--iter->used];
+
+		heap_sift(iter, i - top, bch_key_sort_cmp);
+	}
+}
+
 bool __bch_btree_ptr_invalid(struct cache_set *c, const struct bkey *k)
 {
 	char buf[80];
@@ -127,7 +165,8 @@ bool bch_btree_ptr_bad(struct btree_keys *bk, const struct bkey *k)
 	struct btree *b = container_of(bk, struct btree, keys);
 	unsigned i;
 
-	if (!bkey_cmp(k, &ZERO_KEY) ||
+	if (KEY_DELETED(k) ||
+	    !bkey_cmp(k, &ZERO_KEY) ||
 	    !KEY_PTRS(k) ||
 	    bch_ptr_invalid(bk, k))
 		return true;
@@ -143,6 +182,7 @@ bool bch_btree_ptr_bad(struct btree_keys *bk, const struct bkey *k)
 
 	return false;
 }
+
 /* Extents */
 
 /*
@@ -250,7 +290,8 @@ bool bch_extent_bad(struct btree_keys *bk, const struct bkey *k)
 	struct bucket *g;
 	unsigned i, stale;
 
-	if (!KEY_PTRS(k) ||
+	if (KEY_DELETED(k) ||
+	    !KEY_PTRS(k) ||
 	    bch_extent_invalid(bk, k))
 		return true;
 

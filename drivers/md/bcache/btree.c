@@ -937,7 +937,7 @@ out:
 	} else {
 		/* Pointers to btree nodes */
 		b->keys.sort_cmp	= bch_key_sort_cmp;
-		b->keys.sort_fixup	= NULL;
+		b->keys.sort_fixup	= bch_btree_ptr_sort_fixup;
 		b->keys.key_invalid	= bch_btree_ptr_invalid;
 		b->keys.key_bad		= bch_btree_ptr_bad;
 		b->keys.key_merge	= NULL;
@@ -1141,6 +1141,9 @@ uint8_t __bch_btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 	uint8_t stale = 0;
 	unsigned i;
 	struct bucket *g;
+
+	if (KEY_DELETED(k))
+		return stale;
 
 	/*
 	 * ptr_invalid() can't return true for the keys that mark btree nodes as
@@ -1921,26 +1924,42 @@ check_failed:
 	return false;
 }
 
+static bool fix_overlapping_keys(struct btree *b, struct bkey *insert,
+				 struct btree_iter *iter)
+{
+	/* Btree freeing keys - don't check for duplicates */
+	if (!bkey_cmp(insert, &ZERO_KEY))
+		return false;
+
+	while (1) {
+		struct bkey *k = bch_btree_iter_next(iter);
+		if (!k || bkey_cmp(k, insert) > 0)
+			break;
+
+		if (bkey_cmp(k, insert) < 0)
+			continue;
+
+		SET_KEY_DELETED(k, 1);
+	}
+
+	return false;
+}
+
 static bool btree_insert_key(struct btree *b, struct btree_op *op,
 			     struct bkey *k, struct bkey *replace_key)
 {
-	struct bset *i = btree_bset_last(b);
-	struct bkey *m, *prev;
 	unsigned status = BTREE_INSERT_STATUS_INSERT;
+	struct bset *i = btree_bset_last(b);
+	struct bkey *m, *prev = NULL;
+	struct btree_iter iter;
 
 	BUG_ON(bkey_cmp(k, &b->key) > 0);
 	BUG_ON(b->level && !KEY_PTRS(k));
 	BUG_ON(!b->level && !KEY_OFFSET(k));
 
 	if (!b->level) {
-		struct btree_iter iter;
+		BUG_ON(!KEY_OFFSET(k));
 
-		/*
-		 * bset_search() returns the first key that is strictly greater
-		 * than the search key - but for back merging, we want to find
-		 * the previous key.
-		 */
-		prev = NULL;
 		m = bch_btree_iter_init(&b->keys, &iter,
 					PRECEDING_KEY(&START_KEY(k)));
 
@@ -1973,7 +1992,13 @@ static bool btree_insert_key(struct btree *b, struct btree_op *op,
 			goto copy;
 	} else {
 		BUG_ON(replace_key);
-		m = bch_bset_search(&b->keys, bset_tree_last(&b->keys), k);
+
+		m = bch_btree_iter_init(&b->keys, &iter, PRECEDING_KEY(k));
+		fix_overlapping_keys(b, k, &iter);
+
+		while (m != bset_bkey_last(i) &&
+		       bkey_cmp(k, m) > 0)
+			prev = m, m = bkey_next(m);
 	}
 
 insert:	bch_bset_insert(&b->keys, m, k);

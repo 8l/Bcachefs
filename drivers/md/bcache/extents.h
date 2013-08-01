@@ -8,6 +8,7 @@ struct btree_iter_set;
 struct cache_set;
 
 bool bch_key_sort_cmp(struct btree_iter_set, struct btree_iter_set);
+void bch_btree_ptr_sort_fixup(struct btree_iter *);
 
 bool __bch_btree_ptr_invalid(struct cache_set *, const struct bkey *);
 bool bch_btree_ptr_invalid(struct btree_keys *, const struct bkey *);

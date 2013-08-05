@@ -2314,7 +2314,9 @@ int bch_btree_insert(struct cache_set *c, enum btree_id id,
 	while (!ret && !bch_keylist_empty(keys)) {
 		op.op.lock = 0;
 		ret = bch_btree_map_leaf_nodes(&op.op, c, id,
-					       &START_KEY(keys->keys),
+					       id == BTREE_ID_EXTENTS
+					       ? &START_KEY(keys->keys)
+					       : PRECEDING_KEY(keys->keys),
 					       btree_insert_fn);
 	}
 

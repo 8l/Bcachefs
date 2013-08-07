@@ -83,7 +83,7 @@ int drv_insert_node_res_element(void *hnode, void *node_resource,
 		return -ENOMEM;
 
 	(*node_res_obj)->node = hnode;
-	retval = idr_alloc(ctxt->node_id, *node_res_obj, 0, 0, GFP_KERNEL);
+	retval = idr_alloc(ctxt->node_id, *node_res_obj, GFP_KERNEL);
 	if (retval >= 0) {
 		(*node_res_obj)->id = retval;
 		return 0;
@@ -199,7 +199,7 @@ int drv_proc_insert_strm_res_element(void *stream_obj,
 		return -EFAULT;
 
 	(*pstrm_res)->stream = stream_obj;
-	retval = idr_alloc(ctxt->stream_id, *pstrm_res, 0, 0, GFP_KERNEL);
+	retval = idr_alloc(ctxt->stream_id, *pstrm_res, GFP_KERNEL);
 	if (retval >= 0) {
 		(*pstrm_res)->id = retval;
 		return 0;

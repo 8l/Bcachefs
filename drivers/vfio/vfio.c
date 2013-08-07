@@ -143,7 +143,8 @@ EXPORT_SYMBOL_GPL(vfio_unregister_iommu_driver);
 static int vfio_alloc_group_minor(struct vfio_group *group)
 {
 	/* index 0 is used by /dev/vfio/vfio */
-	return idr_alloc(&vfio.group_idr, group, 1, MINORMASK + 1, GFP_KERNEL);
+	return idr_alloc_range(&vfio.group_idr, group, 1,
+			       MINORMASK + 1, GFP_KERNEL);
 }
 
 static void vfio_free_group_minor(int minor)

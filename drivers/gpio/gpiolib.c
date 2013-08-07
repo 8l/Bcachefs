@@ -414,7 +414,7 @@ static int gpio_setup_irq(struct gpio_desc *desc, struct device *dev,
 			goto err_out;
 		}
 
-		ret = idr_alloc(&dirent_idr, value_sd, 1, 0, GFP_KERNEL);
+		ret = idr_alloc_range(&dirent_idr, value_sd, 1, 0, GFP_KERNEL);
 		if (ret < 0)
 			goto free_sd;
 		id = ret;

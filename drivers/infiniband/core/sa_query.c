@@ -619,7 +619,7 @@ static int send_mad(struct ib_sa_query *query, int timeout_ms, gfp_t gfp_mask)
 		idr_preload(gfp_mask);
 	spin_lock_irqsave(&idr_lock, flags);
 
-	id = idr_alloc(&query_idr, query, 0, 0, GFP_NOWAIT);
+	id = idr_alloc(&query_idr, query, GFP_NOWAIT);
 
 	spin_unlock_irqrestore(&idr_lock, flags);
 	if (preload)

@@ -1982,8 +1982,8 @@ netdev_tx_t ieee80211_subif_start_xmit(struct sk_buff *skb,
 			int id;
 
 			spin_lock_irqsave(&local->ack_status_lock, flags);
-			id = idr_alloc(&local->ack_status_frames, orig_skb,
-				       1, 0x10000, GFP_ATOMIC);
+			id = idr_alloc_range(&local->ack_status_frames,
+					     orig_skb, 1, 0x10000, GFP_ATOMIC);
 			spin_unlock_irqrestore(&local->ack_status_lock, flags);
 
 			if (id >= 0) {

@@ -60,7 +60,8 @@ qxl_release_alloc(struct qxl_device *qdev, int type,
 
 	idr_preload(GFP_KERNEL);
 	spin_lock(&qdev->release_idr_lock);
-	idr_ret = idr_alloc(&qdev->release_idr, release, 1, 0, GFP_NOWAIT);
+	idr_ret = idr_alloc_range(&qdev->release_idr,
+				  release, 1, 0, GFP_NOWAIT);
 	spin_unlock(&qdev->release_idr_lock);
 	idr_preload_end();
 	handle = idr_ret;

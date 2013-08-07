@@ -6299,7 +6299,8 @@ int perf_pmu_register(struct pmu *pmu, const char *name, int type)
 	pmu->name = name;
 
 	if (type < 0) {
-		type = idr_alloc(&pmu_idr, pmu, PERF_TYPE_MAX, 0, GFP_KERNEL);
+		type = idr_alloc_range(&pmu_idr, pmu, PERF_TYPE_MAX,
+				       0, GFP_KERNEL);
 		if (type < 0) {
 			ret = type;
 			goto free_pdc;

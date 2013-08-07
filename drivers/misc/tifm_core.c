@@ -198,7 +198,7 @@ int tifm_add_adapter(struct tifm_adapter *fm)
 
 	idr_preload(GFP_KERNEL);
 	spin_lock(&tifm_adapter_lock);
-	rc = idr_alloc(&tifm_adapter_idr, fm, 0, 0, GFP_NOWAIT);
+	rc = idr_alloc(&tifm_adapter_idr, fm, GFP_NOWAIT);
 	if (rc >= 0)
 		fm->id = rc;
 	spin_unlock(&tifm_adapter_lock);

@@ -207,8 +207,10 @@ struct idr {
 
 void *idr_find_slowpath(struct idr *idp, int id);
 void idr_preload(gfp_t gfp_mask);
-int idr_alloc(struct idr *idp, void *ptr, int start, int end, gfp_t gfp_mask);
-int idr_alloc_cyclic(struct idr *idr, void *ptr, int start, int end, gfp_t gfp_mask);
+int idr_alloc_range(struct idr *idp, void *ptr, int start,
+		    int end, gfp_t gfp_mask);
+int idr_alloc_cyclic(struct idr *idr, void *ptr, int start,
+		     int end, gfp_t gfp_mask);
 int idr_for_each(struct idr *idp,
 		 int (*fn)(int id, void *p, void *data), void *data);
 void *idr_find_next(struct idr *idp, int *nextid);
@@ -217,6 +219,11 @@ void idr_remove(struct idr *idp, int id);
 void idr_free(struct idr *idp, int id);
 void idr_destroy(struct idr *idp);
 void idr_init(struct idr *idp);
+
+static inline int idr_alloc(struct idr *idr, void *ptr, gfp_t gfp)
+{
+	return idr_alloc_range(idr, ptr, 0, 0, gfp);
+}
 
 /**
  * idr_preload_end - end preload section started with idr_preload()

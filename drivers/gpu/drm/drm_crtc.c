@@ -294,7 +294,8 @@ static int drm_mode_object_get(struct drm_device *dev,
 	int ret;
 
 	mutex_lock(&dev->mode_config.idr_mutex);
-	ret = idr_alloc(&dev->mode_config.crtc_idr, obj, 1, 0, GFP_KERNEL);
+	ret = idr_alloc_range(&dev->mode_config.crtc_idr,
+			      obj, 1, 0, GFP_KERNEL);
 	if (ret >= 0) {
 		/*
 		 * Set up the object linking under the protection of the idr

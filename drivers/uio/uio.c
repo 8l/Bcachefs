@@ -371,7 +371,8 @@ static int uio_get_minor(struct uio_device *idev)
 	int retval = -ENOMEM;
 
 	mutex_lock(&minor_lock);
-	retval = idr_alloc(&uio_idr, idev, 0, UIO_MAX_DEVICES, GFP_KERNEL);
+	retval = idr_alloc_range(&uio_idr, idev, 0,
+				 UIO_MAX_DEVICES, GFP_KERNEL);
 	if (retval >= 0) {
 		idev->minor = retval;
 		retval = 0;

@@ -159,7 +159,7 @@ static int ipp_create_id(struct idr *id_idr, struct mutex *lock, void *obj,
 
 	/* do the allocation under our mutexlock */
 	mutex_lock(lock);
-	ret = idr_alloc(id_idr, obj, 1, 0, GFP_KERNEL);
+	ret = idr_alloc_range(id_idr, obj, 1, 0, GFP_KERNEL);
 	mutex_unlock(lock);
 	if (ret < 0)
 		return ret;

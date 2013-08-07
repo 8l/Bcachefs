@@ -986,7 +986,7 @@ static struct idr_layer *idr_layer_alloc(gfp_t gfp_mask, struct idr *layer_idr)
 
 	/*
 	 * Try to allocate directly from kmem_cache.  We want to try this
-	 * before preload buffer; otherwise, non-preloading idr_alloc()
+	 * before preload buffer; otherwise, non-preloading idr_alloc_range()
 	 * users will end up taking advantage of preloading ones.  As the
 	 * following is allowed to fail for preloaded cases, suppress
 	 * warning this time.
@@ -1240,24 +1240,24 @@ static void idr_fill_slot(struct idr *idr, void *ptr, int id,
 }
 
 /**
- * idr_preload - preload for idr_alloc()
+ * idr_preload - preload for idr_alloc_range()
  * @gfp_mask: allocation mask to use for preloading
  *
- * Preload per-cpu layer buffer for idr_alloc().  Can only be used from
+ * Preload per-cpu layer buffer for idr_alloc_range().  Can only be used from
  * process context and each idr_preload() invocation should be matched with
  * idr_preload_end().  Note that preemption is disabled while preloaded.
  *
- * The first idr_alloc() in the preloaded section can be treated as if it
+ * The first idr_alloc_range() in the preloaded section can be treated as if it
  * were invoked with @gfp_mask used for preloading.  This allows using more
  * permissive allocation masks for idrs protected by spinlocks.
  *
- * For example, if idr_alloc() below fails, the failure can be treated as
- * if idr_alloc() were called with GFP_KERNEL rather than GFP_NOWAIT.
+ * For example, if idr_alloc_range() below fails, the failure can be treated as
+ * if idr_alloc_range() were called with GFP_KERNEL rather than GFP_NOWAIT.
  *
  *	idr_preload(GFP_KERNEL);
  *	spin_lock(lock);
  *
- *	id = idr_alloc(idr, ptr, start, end, GFP_NOWAIT);
+ *	id = idr_alloc_range(idr, ptr, start, end, GFP_NOWAIT);
  *
  *	spin_unlock(lock);
  *	idr_preload_end();
@@ -1276,10 +1276,10 @@ void idr_preload(gfp_t gfp_mask)
 	preempt_disable();
 
 	/*
-	 * idr_alloc() is likely to succeed w/o full idr_layer buffer and
-	 * return value from idr_alloc() needs to be checked for failure
+	 * idr_alloc_range() is likely to succeed w/o full idr_layer buffer and
+	 * return value from idr_alloc_range() needs to be checked for failure
 	 * anyway.  Silently give up if allocation fails.  The caller can
-	 * treat failures from idr_alloc() as if idr_alloc() were called
+	 * treat failures from idr_alloc_range() as if idr_alloc() were called
 	 * with @gfp_mask which should be enough.
 	 */
 	while (__this_cpu_read(idr_preload_cnt) < MAX_IDR_FREE) {
@@ -1300,7 +1300,7 @@ void idr_preload(gfp_t gfp_mask)
 EXPORT_SYMBOL(idr_preload);
 
 /**
- * idr_alloc - allocate new idr entry
+ * idr_alloc_range - allocate new idr entry
  * @idr: the (initialized) idr
  * @ptr: pointer to be associated with the new id
  * @start: the minimum id (inclusive)
@@ -1319,7 +1319,8 @@ EXPORT_SYMBOL(idr_preload);
  * or iteration can be performed under RCU read lock provided the user
  * destroys @ptr in RCU-safe way after removal from idr.
  */
-int idr_alloc(struct idr *idr, void *ptr, int start, int end, gfp_t gfp_mask)
+int idr_alloc_range(struct idr *idr, void *ptr, int start,
+		    int end, gfp_t gfp_mask)
 {
 	int max = end > 0 ? end - 1 : INT_MAX;	/* inclusive upper limit */
 	struct idr_layer *pa[MAX_IDR_LEVEL + 1];
@@ -1343,7 +1344,7 @@ int idr_alloc(struct idr *idr, void *ptr, int start, int end, gfp_t gfp_mask)
 	idr_fill_slot(idr, ptr, id, pa);
 	return id;
 }
-EXPORT_SYMBOL_GPL(idr_alloc);
+EXPORT_SYMBOL_GPL(idr_alloc_range);
 
 /**
  * idr_alloc_cyclic - allocate new idr entry in a cyclical fashion
@@ -1353,18 +1354,19 @@ EXPORT_SYMBOL_GPL(idr_alloc);
  * @end: the maximum id (exclusive, <= 0 for max)
  * @gfp_mask: memory allocation flags
  *
- * Essentially the same as idr_alloc, but prefers to allocate progressively
- * higher ids if it can. If the "cur" counter wraps, then it will start again
- * at the "start" end of the range and allocate one that has already been used.
+ * Essentially the same as idr_alloc_range, but prefers to allocate
+ * progressively higher ids if it can. If the "cur" counter wraps, then it will
+ * start again at the "start" end of the range and allocate one that has already
+ * been used.
  */
 int idr_alloc_cyclic(struct idr *idr, void *ptr, int start, int end,
 			gfp_t gfp_mask)
 {
 	int id;
 
-	id = idr_alloc(idr, ptr, max(start, idr->cur), end, gfp_mask);
+	id = idr_alloc_range(idr, ptr, max(start, idr->cur), end, gfp_mask);
 	if (id == -ENOSPC)
-		id = idr_alloc(idr, ptr, start, end, gfp_mask);
+		id = idr_alloc_range(idr, ptr, start, end, gfp_mask);
 
 	if (likely(id >= 0))
 		idr->cur = id + 1;

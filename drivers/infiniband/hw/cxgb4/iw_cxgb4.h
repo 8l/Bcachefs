@@ -266,7 +266,7 @@ static inline int _insert_handle(struct c4iw_dev *rhp, struct idr *idr,
 		spin_lock_irq(&rhp->lock);
 	}
 
-	ret = idr_alloc(idr, handle, id, id + 1, GFP_ATOMIC);
+	ret = idr_alloc_range(idr, handle, id, id + 1, GFP_ATOMIC);
 
 	if (lock) {
 		spin_unlock_irq(&rhp->lock);

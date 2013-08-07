@@ -1103,7 +1103,7 @@ static int rtsx_pci_probe(struct pci_dev *pcidev,
 
 	idr_preload(GFP_KERNEL);
 	spin_lock(&rtsx_pci_lock);
-	ret = idr_alloc(&rtsx_pci_idr, pcr, 0, 0, GFP_NOWAIT);
+	ret = idr_alloc(&rtsx_pci_idr, pcr, GFP_NOWAIT);
 	if (ret >= 0)
 		pcr->id = ret;
 	spin_unlock(&rtsx_pci_lock);

@@ -639,7 +639,7 @@ static struct ehca_qp *internal_create_qp(
 	idr_preload(GFP_KERNEL);
 	write_lock_irqsave(&ehca_qp_idr_lock, flags);
 
-	ret = idr_alloc(&ehca_qp_idr, my_qp, 0, 0x2000000, GFP_NOWAIT);
+	ret = idr_alloc_range(&ehca_qp_idr, my_qp, 0, 0x2000000, GFP_NOWAIT);
 	if (ret >= 0)
 		my_qp->token = ret;
 

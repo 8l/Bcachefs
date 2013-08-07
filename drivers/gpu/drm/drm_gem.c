@@ -272,7 +272,7 @@ drm_gem_handle_create(struct drm_file *file_priv,
 	idr_preload(GFP_KERNEL);
 	spin_lock(&file_priv->table_lock);
 
-	ret = idr_alloc(&file_priv->object_idr, obj, 1, 0, GFP_NOWAIT);
+	ret = idr_alloc_range(&file_priv->object_idr, obj, 1, 0, GFP_NOWAIT);
 
 	spin_unlock(&file_priv->table_lock);
 	idr_preload_end();
@@ -448,7 +448,8 @@ drm_gem_flink_ioctl(struct drm_device *dev, void *data,
 	idr_preload(GFP_KERNEL);
 	spin_lock(&dev->object_name_lock);
 	if (!obj->name) {
-		ret = idr_alloc(&dev->object_name_idr, obj, 1, 0, GFP_NOWAIT);
+		ret = idr_alloc_range(&dev->object_name_idr,
+				      obj, 1, 0, GFP_NOWAIT);
 		if (ret < 0)
 			goto err;
 

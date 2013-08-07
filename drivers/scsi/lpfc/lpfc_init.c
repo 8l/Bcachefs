@@ -3212,7 +3212,7 @@ lpfc_get_instance(void)
 {
 	int ret;
 
-	ret = idr_alloc(&lpfc_hba_index, NULL, 0, 0, GFP_KERNEL);
+	ret = idr_alloc(&lpfc_hba_index, NULL, GFP_KERNEL);
 	return ret < 0 ? -1 : ret;
 }
 

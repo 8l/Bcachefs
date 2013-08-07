@@ -396,7 +396,7 @@ static int ds278x_battery_probe(struct i2c_client *client,
 
 	/* Get an ID for this battery */
 	mutex_lock(&battery_lock);
-	ret = idr_alloc(&battery_id, client, 0, 0, GFP_KERNEL);
+	ret = idr_alloc(&battery_id, client, GFP_KERNEL);
 	mutex_unlock(&battery_lock);
 	if (ret < 0)
 		goto fail_id;

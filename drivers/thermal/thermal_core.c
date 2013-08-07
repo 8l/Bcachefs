@@ -134,7 +134,7 @@ static int get_idr(struct idr *idr, struct mutex *lock, int *id)
 
 	if (lock)
 		mutex_lock(lock);
-	ret = idr_alloc(idr, NULL, 0, 0, GFP_KERNEL);
+	ret = idr_alloc(idr, NULL, GFP_KERNEL);
 	if (lock)
 		mutex_unlock(lock);
 	if (unlikely(ret < 0))

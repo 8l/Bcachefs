@@ -1109,7 +1109,7 @@ struct qib_devdata *qib_alloc_devdata(struct pci_dev *pdev, size_t extra)
 	idr_preload(GFP_KERNEL);
 	spin_lock_irqsave(&qib_devs_lock, flags);
 
-	ret = idr_alloc(&qib_unit_table, dd, 0, 0, GFP_NOWAIT);
+	ret = idr_alloc(&qib_unit_table, dd, GFP_NOWAIT);
 	if (ret >= 0) {
 		dd->unit = ret;
 		list_add(&dd->list, &qib_dev_list);

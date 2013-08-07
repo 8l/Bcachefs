@@ -524,7 +524,7 @@ static int worker_pool_assign_id(struct worker_pool *pool)
 
 	lockdep_assert_held(&wq_pool_mutex);
 
-	ret = idr_alloc(&worker_pool_idr, pool, 0, 0, GFP_KERNEL);
+	ret = idr_alloc(&worker_pool_idr, pool, GFP_KERNEL);
 	if (ret >= 0) {
 		pool->id = ret;
 		return 0;
@@ -1706,7 +1706,7 @@ static struct worker *create_worker(struct worker_pool *pool)
 	idr_preload(GFP_KERNEL);
 	spin_lock_irq(&pool->lock);
 
-	id = idr_alloc(&pool->worker_idr, NULL, 0, 0, GFP_NOWAIT);
+	id = idr_alloc(&pool->worker_idr, NULL, GFP_NOWAIT);
 
 	spin_unlock_irq(&pool->lock);
 	idr_preload_end();

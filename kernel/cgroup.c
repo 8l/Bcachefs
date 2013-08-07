@@ -5420,7 +5420,7 @@ static struct css_id *get_new_cssid(struct cgroup_subsys *ss, int depth)
 	idr_preload(GFP_KERNEL);
 	spin_lock(&ss->id_lock);
 	/* Don't use 0. allocates an ID of 1-65535 */
-	ret = idr_alloc(&ss->idr, newid, 1, CSS_ID_MAX + 1, GFP_NOWAIT);
+	ret = idr_alloc_range(&ss->idr, newid, 1, CSS_ID_MAX + 1, GFP_NOWAIT);
 	spin_unlock(&ss->id_lock);
 	idr_preload_end();
 

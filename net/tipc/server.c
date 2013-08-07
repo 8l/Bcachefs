@@ -216,7 +216,7 @@ static struct tipc_conn *tipc_alloc_conn(struct tipc_server *s)
 	INIT_WORK(&con->rwork, tipc_recv_work);
 
 	spin_lock_bh(&s->idr_lock);
-	ret = idr_alloc(&s->conn_idr, con, 0, 0, GFP_ATOMIC);
+	ret = idr_alloc(&s->conn_idr, con, GFP_ATOMIC);
 	if (ret < 0) {
 		kfree(con);
 		spin_unlock_bh(&s->idr_lock);

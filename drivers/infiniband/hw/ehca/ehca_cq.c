@@ -165,7 +165,8 @@ struct ib_cq *ehca_create_cq(struct ib_device *device, int cqe, int comp_vector,
 
 	idr_preload(GFP_KERNEL);
 	write_lock_irqsave(&ehca_cq_idr_lock, flags);
-	my_cq->token = idr_alloc(&ehca_cq_idr, my_cq, 0, 0x2000000, GFP_NOWAIT);
+	my_cq->token = idr_alloc_range(&ehca_cq_idr, my_cq, 0,
+				       0x2000000, GFP_NOWAIT);
 	write_unlock_irqrestore(&ehca_cq_idr_lock, flags);
 	idr_preload_end();
 

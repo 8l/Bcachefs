@@ -899,7 +899,7 @@ struct c2port_device *c2port_device_register(char *name,
 
 	idr_preload(GFP_KERNEL);
 	spin_lock_irq(&c2port_idr_lock);
-	ret = idr_alloc(&c2port_idr, c2dev, 0, 0, GFP_NOWAIT);
+	ret = idr_alloc(&c2port_idr, c2dev, GFP_NOWAIT);
 	spin_unlock_irq(&c2port_idr_lock);
 	idr_preload_end();
 

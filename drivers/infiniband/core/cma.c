@@ -2283,7 +2283,7 @@ static int cma_alloc_port(struct idr *ps, struct rdma_id_private *id_priv,
 	if (!bind_list)
 		return -ENOMEM;
 
-	ret = idr_alloc(ps, bind_list, snum, snum + 1, GFP_KERNEL);
+	ret = idr_alloc_range(ps, bind_list, snum, snum + 1, GFP_KERNEL);
 	if (ret < 0)
 		goto err;
 

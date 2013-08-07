@@ -1036,7 +1036,7 @@ static void fw_device_init(struct work_struct *work)
 
 	fw_device_get(device);
 	down_write(&fw_device_rwsem);
-	minor = idr_alloc(&fw_device_idr, device, 0, 1 << MINORBITS,
+	minor = idr_alloc_range(&fw_device_idr, device, 0, 1 << MINORBITS,
 			GFP_KERNEL);
 	up_write(&fw_device_rwsem);
 

@@ -338,7 +338,8 @@ static int macvtap_get_minor(struct macvlan_dev *vlan)
 	int retval = -ENOMEM;
 
 	mutex_lock(&minor_lock);
-	retval = idr_alloc(&minor_idr, vlan, 1, MACVTAP_NUM_DEVS, GFP_KERNEL);
+	retval = idr_alloc_range(&minor_idr, vlan, 1,
+				 MACVTAP_NUM_DEVS, GFP_KERNEL);
 	if (retval >= 0) {
 		vlan->minor = retval;
 	} else if (retval == -ENOSPC) {

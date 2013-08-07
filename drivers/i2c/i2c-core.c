@@ -1087,7 +1087,7 @@ static int __i2c_add_numbered_adapter(struct i2c_adapter *adap)
 	int	id;
 
 	mutex_lock(&core_lock);
-	id = idr_alloc(&i2c_adapter_idr, adap, adap->nr, adap->nr + 1,
+	id = idr_alloc_range(&i2c_adapter_idr, adap, adap->nr, adap->nr + 1,
 		       GFP_KERNEL);
 	mutex_unlock(&core_lock);
 	if (id < 0)
@@ -1124,7 +1124,7 @@ int i2c_add_adapter(struct i2c_adapter *adapter)
 	}
 
 	mutex_lock(&core_lock);
-	id = idr_alloc(&i2c_adapter_idr, adapter,
+	id = idr_alloc_range(&i2c_adapter_idr, adapter,
 		       __i2c_first_dynamic_bus_num, 0, GFP_KERNEL);
 	mutex_unlock(&core_lock);
 	if (id < 0)

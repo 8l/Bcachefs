@@ -1211,7 +1211,8 @@ static int mspro_block_init_disk(struct memstick_dev *card)
 	msb->page_size = be16_to_cpu(sys_info->unit_size);
 
 	mutex_lock(&mspro_block_disk_lock);
-	disk_id = idr_alloc(&mspro_block_disk_idr, card, 0, 256, GFP_KERNEL);
+	disk_id = idr_alloc_range(&mspro_block_disk_idr,
+				  card, 0, 256, GFP_KERNEL);
 	mutex_unlock(&mspro_block_disk_lock);
 	if (disk_id < 0)
 		return disk_id;

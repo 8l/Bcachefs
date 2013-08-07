@@ -692,7 +692,7 @@ static int get_dma_id(struct dma_device *device)
 
 	mutex_lock(&dma_list_mutex);
 
-	rc = idr_alloc(&dma_idr, NULL, 0, 0, GFP_KERNEL);
+	rc = idr_alloc(&dma_idr, NULL, GFP_KERNEL);
 	if (rc >= 0)
 		device->dev_id = rc;
 

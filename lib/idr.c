@@ -72,18 +72,37 @@ static void *kgalloc(size_t size, gfp_t gfp)
  * the bit for id i is bit id % BITS_PER_LONG in ida->tree[ida->first_leaf + i /
  * BITS_PER_LONG].
  *
- * Note that the number of ids we can allocate is limited by the amount of
- * memory we can contiguously allocate. The amount of memory used for the bitmap
- * tree is only slightly more than a flat bitmap would use - about 1 / TREE_ARY
- * * (sizeof flat bitmap).
+ * That last line of code is a lie - logically, the data structure is one flat
+ * array - but to avoid giant contiguous allocations we use an array of arrays -
+ * ida_index_to_node() replaces the array lookup in the above example.
  *
- * So for 1 mb of memory (and allocating more than that should be fine with
- * CONFIG_COMPACTION) you get slightly under 8 million IDs.
+ * So ida->tree is an array of pointers to sections, where the sections are
+ * different segments of the array the bitmap tree lives in.
+ *
+ * If there's a single section, it's only as big as we need it to be, and we
+ * grow the bitmap tree by doubling the size of the allocation.
+ *
+ * Once the tree is big enough that we start using multiple sections, the
+ * sections are always the same size - the max section size - and we grow the
+ * tree by appending new sections.
+ *
+ * The maximum size of the bitmap tree is when we've allocated all the way up to
+ * INT_MAX ids; we need (INT_MAX / 8) bytes of memory for the leaves, plus a
+ * couple percent for the parent nodes (since TREE_ARY == BITS_PER_LONG the
+ * parent nodes only add around 2%).
+ *
+ * So that's ~256 mb of memory max; we pick the max section size such that the
+ * max size of the array of pointers to sections isn't any bigger than the max
+ * section size.
+ *
+ * So if the max section size is 64k, that's ~4096 sections, with 8 byte
+ * pointers that's a little over 32k for the pointers to sections.
+ *
+ * That means max size sections are order 4 page allocations.
  */
 
 #define IDA_TREE_ARY		BITS_PER_LONG
-#define IDA_ALLOC_ORDER_MAX	4
-#define IDA_SECTION_SIZE	(PAGE_SIZE << IDA_ALLOC_ORDER_MAX)
+#define IDA_SECTION_SIZE	(64UL << 10)
 #define IDA_NODES_PER_SECTION	(IDA_SECTION_SIZE / sizeof(unsigned long))
 
 static inline unsigned long *ida_index_to_node(struct ida *ida, unsigned node)

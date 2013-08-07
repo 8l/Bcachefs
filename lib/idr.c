@@ -748,12 +748,10 @@ int percpu_ida_alloc(struct percpu_ida *pool, gfp_t gfp)
 	DEFINE_WAIT(wait);
 	struct percpu_ida_cpu *tags;
 	unsigned long flags;
-	unsigned this_cpu;
 	int tag;
 
 	local_irq_save(flags);
-	this_cpu = smp_processor_id();
-	tags = per_cpu_ptr(pool->tag_cpu, this_cpu);
+	tags = this_cpu_ptr(pool->tag_cpu);
 
 	/* Fastpath */
 	tag = alloc_local_tag(pool, tags);
@@ -782,7 +780,8 @@ int percpu_ida_alloc(struct percpu_ida *pool, gfp_t gfp)
 		if (tags->nr_free) {
 			tag = tags->freelist[--tags->nr_free];
 			if (tags->nr_free)
-				set_bit(this_cpu, pool->cpus_have_tags);
+				set_bit(smp_processor_id(),
+					pool->cpus_have_tags);
 		}
 
 		spin_unlock(&pool->ida.lock);
@@ -794,8 +793,7 @@ int percpu_ida_alloc(struct percpu_ida *pool, gfp_t gfp)
 		schedule();
 
 		local_irq_save(flags);
-		this_cpu = smp_processor_id();
-		tags = per_cpu_ptr(pool->tag_cpu, this_cpu);
+		tags = this_cpu_ptr(pool->tag_cpu);
 	}
 
 	finish_wait(&pool->wait, &wait);
@@ -814,13 +812,12 @@ void percpu_ida_free(struct percpu_ida *pool, unsigned tag)
 {
 	struct percpu_ida_cpu *tags;
 	unsigned long flags;
-	unsigned nr_free, this_cpu;
+	unsigned nr_free;
 
 	BUG_ON(tag >= pool->nr_tags);
 
 	local_irq_save(flags);
-	this_cpu = smp_processor_id();
-	tags = per_cpu_ptr(pool->tag_cpu, this_cpu);
+	tags = this_cpu_ptr(pool->tag_cpu);
 
 	spin_lock(&tags->lock);
 	tags->freelist[tags->nr_free++] = tag;
@@ -829,7 +826,8 @@ void percpu_ida_free(struct percpu_ida *pool, unsigned tag)
 	spin_unlock(&tags->lock);
 
 	if (nr_free == 1) {
-		set_bit(this_cpu, pool->cpus_have_tags);
+		set_bit(smp_processor_id(),
+			pool->cpus_have_tags);
 		wake_up(&pool->wait);
 	}
 

@@ -211,7 +211,7 @@ int idr_alloc(struct idr *idp, void *ptr, int start, int end, gfp_t gfp_mask);
 int idr_alloc_cyclic(struct idr *idr, void *ptr, int start, int end, gfp_t gfp_mask);
 int idr_for_each(struct idr *idp,
 		 int (*fn)(int id, void *p, void *data), void *data);
-void *idr_get_next(struct idr *idp, int *nextid);
+void *idr_find_next(struct idr *idp, int *nextid);
 void *idr_replace(struct idr *idp, void *ptr, int id);
 void idr_remove(struct idr *idp, int id);
 void idr_free(struct idr *idp, int id);
@@ -262,7 +262,7 @@ static inline void *idr_find(struct idr *idr, int id)
  * is convenient for a "not found" value.
  */
 #define idr_for_each_entry(idp, entry, id)			\
-	for (id = 0; ((entry) = idr_get_next(idp, &(id))) != NULL; ++id)
+	for (id = 0; ((entry) = idr_find_next(idp, &(id))) != NULL; ++id)
 
 void __init idr_init_cache(void);
 

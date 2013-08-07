@@ -500,7 +500,7 @@ int conn_lowest_minor(struct drbd_tconn *tconn)
 	int vnr = 0, m;
 
 	rcu_read_lock();
-	mdev = idr_get_next(&tconn->volumes, &vnr);
+	mdev = idr_find_next(&tconn->volumes, &vnr);
 	m = mdev ? mdev_to_minor(mdev) : -1;
 	rcu_read_unlock();
 

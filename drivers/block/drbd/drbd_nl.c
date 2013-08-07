@@ -2938,7 +2938,7 @@ int get_one_status(struct sk_buff *skb, struct netlink_callback *cb)
 	}
 	if (tconn) {
 next_tconn:
-		mdev = idr_get_next(&tconn->volumes, &volume);
+		mdev = idr_find_next(&tconn->volumes, &volume);
 		if (!mdev) {
 			/* No more volumes to dump on this tconn.
 			 * Advance tconn iterator. */

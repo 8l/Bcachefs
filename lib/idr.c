@@ -1596,7 +1596,7 @@ int idr_for_each(struct idr *idp,
 EXPORT_SYMBOL(idr_for_each);
 
 /**
- * idr_get_next - lookup next object of id to given id.
+ * idr_find_next - lookup next object of id to given id.
  * @idp: idr handle
  * @nextidp:  pointer to lookup key
  *
@@ -1607,7 +1607,7 @@ EXPORT_SYMBOL(idr_for_each);
  * This function can be called under rcu_read_lock(), given that the leaf
  * pointers lifetimes are correctly managed.
  */
-void *idr_get_next(struct idr *idp, int *nextidp)
+void *idr_find_next(struct idr *idp, int *nextidp)
 {
 	struct idr_layer *p, *pa[MAX_IDR_LEVEL + 1];
 	struct idr_layer **paa = &pa[0];
@@ -1648,7 +1648,7 @@ void *idr_get_next(struct idr *idp, int *nextidp)
 	}
 	return NULL;
 }
-EXPORT_SYMBOL(idr_get_next);
+EXPORT_SYMBOL(idr_find_next);
 
 
 /**

@@ -1868,7 +1868,7 @@ int task_cgroup_path(struct task_struct *task, char *buf, size_t buflen)
 
 	mutex_lock(&cgroup_mutex);
 
-	root = idr_get_next(&cgroup_hierarchy_idr, &hierarchy_id);
+	root = idr_find_next(&cgroup_hierarchy_idr, &hierarchy_id);
 
 	if (root) {
 		cgrp = task_cgroup_from_root(task, root);

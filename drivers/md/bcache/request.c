@@ -590,17 +590,14 @@ struct search {
 	/* Stack frame for bio_complete */
 	struct closure		cl;
 
-	struct bcache_device	*d;
-
 	struct bbio		bio;
 	struct bio		*orig_bio;
 	struct bio		*cache_miss;
+	struct bcache_device	*d;
 
 	unsigned		insert_bio_sectors;
-
 	unsigned		recoverable:1;
 	unsigned		unaligned_bvec:1;
-
 	unsigned		write:1;
 
 	unsigned long		start_time;
@@ -703,10 +700,13 @@ static void cache_lookup(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, iop.cl);
 	struct bio *bio = &s->bio.bio;
+	int ret;
 
-	int ret = bch_btree_map_keys(&s->op, s->iop.c,
-				     &KEY(s->iop.inode, bio->bi_sector, 0),
-				     cache_lookup_fn, MAP_END_KEY);
+	bch_btree_op_init(&s->op, -1);
+
+	ret = bch_btree_map_keys(&s->op, s->iop.c,
+				 &KEY(s->iop.inode, bio->bi_sector, 0),
+				 cache_lookup_fn, MAP_END_KEY);
 	if (ret == -EAGAIN)
 		continue_at(cl, cache_lookup, bcache_wq);
 
@@ -747,10 +747,10 @@ static void bio_complete(struct search *s)
 	}
 }
 
-static void do_bio_hook(struct search *s)
+static void do_bio_hook(struct search *s, struct bio *orig_bio)
 {
 	struct bio *bio = &s->bio.bio;
-	memcpy(bio, s->orig_bio, sizeof(struct bio));
+	memcpy(bio, orig_bio, sizeof(struct bio));
 
 	bio->bi_end_io		= request_endio;
 	bio->bi_private		= &s->cl;
@@ -772,27 +772,32 @@ static void search_free(struct closure *cl)
 	mempool_free(s, s->d->c->search);
 }
 
-static struct search *search_alloc(struct bio *bio, struct bcache_device *d)
+static inline struct search *search_alloc(struct bio *bio, struct bcache_device *d)
 {
 	struct bio_vec *bv;
 	struct search *s;
 
 	s = mempool_alloc(d->c->search, GFP_NOIO);
-	memset(s, 0, offsetof(struct search, iop.insert_keys));
 
-	__closure_init(&s->cl, NULL);
+	closure_init(&s->cl, NULL);
+	do_bio_hook(s, bio);
 
-	s->iop.inode		= d->id;
-	s->iop.c		= d->c;
-	s->d			= d;
-	s->op.lock		= -1;
-	s->iop.write_point	= hash_long((unsigned long) current, 16);
 	s->orig_bio		= bio;
-	s->write		= (bio->bi_rw & REQ_WRITE) != 0;
-	s->iop.flush_journal	= (bio->bi_rw & (REQ_FLUSH|REQ_FUA)) != 0;
+	s->cache_miss		= NULL;
+	s->d			= d;
 	s->recoverable		= 1;
+	s->unaligned_bvec	= 0;
+	s->write		= (bio->bi_rw & REQ_WRITE) != 0;
 	s->start_time		= jiffies;
-	do_bio_hook(s);
+
+	s->iop.c		= d->c;
+	s->iop.bio		= NULL;
+	s->iop.inode		= d->id;
+	s->iop.write_point	= hash_long((unsigned long) current, 16);
+	s->iop.write_prio	= 0;
+	s->iop.error		= 0;
+	s->iop.flags		= 0;
+	s->iop.flush_journal	= (bio->bi_rw & (REQ_FLUSH|REQ_FUA)) != 0;
 
 	if (bio->bi_size != bio_segments(bio) * PAGE_SIZE) {
 		bv = mempool_alloc(d->unaligned_bvec, GFP_NOIO);
@@ -852,7 +857,7 @@ static void cached_dev_read_error(struct closure *cl)
 
 		s->iop.error = 0;
 		bv = bio->bi_io_vec;
-		do_bio_hook(s);
+		do_bio_hook(s, s->orig_bio);
 		bio->bi_io_vec = bv;
 
 		if (!s->unaligned_bvec)

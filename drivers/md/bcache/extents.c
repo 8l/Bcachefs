@@ -106,10 +106,13 @@ bool __bch_btree_ptr_invalid(struct cache_set *c, const struct bkey *k)
 {
 	char buf[80];
 
-	if (!KEY_PTRS(k) || KEY_CACHED(k))
+	if (KEY_CACHED(k))
 		goto bad;
 
-	if (bkey_cmp(k, &ZERO_KEY) && !KEY_SIZE(k))
+	if (!KEY_DELETED(k) && !KEY_PTRS(k))
+		goto bad;
+
+	if (bkey_cmp(k, &ZERO_KEY) && !KEY_SIZE(k)) /* old style freeing keys */
 		goto bad;
 
 	if (__ptr_invalid(c, k))
@@ -140,7 +143,6 @@ static bool btree_ptr_bad_expensive(struct btree *b, const struct bkey *k)
 				g = PTR_BUCKET(b->c, k, i);
 
 				if (KEY_CACHED(k) ||
-				    g->prio != BTREE_PRIO ||
 				    (b->c->gc_mark_valid &&
 				     GC_MARK(g) != GC_MARK_METADATA))
 					goto err;
@@ -166,14 +168,12 @@ bool bch_btree_ptr_bad(struct btree_keys *bk, const struct bkey *k)
 	unsigned i;
 
 	if (KEY_DELETED(k) ||
-	    !bkey_cmp(k, &ZERO_KEY) ||
-	    !KEY_PTRS(k) ||
-	    bch_ptr_invalid(bk, k))
+	    !bkey_cmp(k, &ZERO_KEY) || /* old style freeing keys */
+	    __bch_btree_ptr_invalid(b->c, k))
 		return true;
 
 	for (i = 0; i < KEY_PTRS(k); i++)
-		if (!ptr_available(b->c, k, i) ||
-		    ptr_stale(b->c, k, i))
+		if (!ptr_available(b->c, k, i))
 			return true;
 
 	if (expensive_debug_checks(b->c) &&
@@ -265,9 +265,6 @@ static bool bch_extent_bad_expensive(struct btree *b, const struct bkey *k,
 		    ((GC_MARK(g) != GC_MARK_DIRTY &&
 		      !KEY_CACHED(k)) ||
 		     GC_MARK(g) == GC_MARK_METADATA))
-			goto err;
-
-		if (g->prio == BTREE_PRIO)
 			goto err;
 
 		mutex_unlock(&b->c->bucket_lock);

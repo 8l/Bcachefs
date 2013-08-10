@@ -71,7 +71,7 @@
 
 /* Bucket heap / gen */
 
-uint8_t bch_inc_gen(struct cache *ca, struct bucket *b)
+static uint8_t bch_inc_gen(struct cache *ca, struct bucket *b)
 {
 	uint8_t ret = ++b->gen;
 

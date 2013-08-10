@@ -1227,6 +1227,19 @@ static void flash_dev_nodata(struct closure *cl)
 	continue_at(cl, search_free, NULL);
 }
 
+static void flash_dev_cache_lookup(struct closure *cl)
+{
+	struct search *s = container_of(cl, struct search, cl);
+	struct bio *bio = &s->bio.bio;
+	int ret = bch_btree_map_keys(&s->op, s->iop.c,
+				     &KEY(s->iop.inode, bio->bi_sector, 0),
+				     cache_lookup_fn, MAP_END_KEY);
+	if (ret == -EAGAIN)
+		continue_at(cl, flash_dev_cache_lookup, bcache_wq);
+
+	continue_at(cl, search_free, NULL);
+}
+
 static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct search *s;
@@ -1250,9 +1263,7 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 		 * can't call bch_journal_meta from under
 		 * generic_make_request
 		 */
-		continue_at_nobarrier(&s->cl,
-				      flash_dev_nodata,
-				      bcache_wq);
+		continue_at_nobarrier(cl, flash_dev_nodata, bcache_wq);
 	} else if (rw) {
 		bch_keybuf_check_overlapping(&s->iop.c->moving_gc_keys,
 					     &KEY(d->id, bio->bi_sector, 0),
@@ -1264,7 +1275,8 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 
 		closure_call(&s->iop.cl, bch_data_insert, NULL, cl);
 	} else {
-		closure_call(&s->iop.cl, cache_lookup, NULL, cl);
+		bch_btree_op_init(&s->op, -1);
+		continue_at_nobarrier(cl, flash_dev_cache_lookup, NULL);
 	}
 
 	continue_at(cl, search_free, NULL);

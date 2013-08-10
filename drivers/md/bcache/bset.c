@@ -1199,7 +1199,7 @@ int bch_bset_print_stats(struct cache_set *c, char *buf)
 	bch_btree_op_init(&t.op, -1);
 
 	ret = bch_btree_map_nodes(&t.op, c, &ZERO_KEY, btree_bset_stats);
-	if (ret)
+	if (ret < 0)
 		return ret;
 
 	return snprintf(buf, PAGE_SIZE,

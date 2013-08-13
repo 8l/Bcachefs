@@ -21,16 +21,20 @@
 #include <linux/export.h>
 #include <linux/idr.h>
 #include <linux/kernel.h>
+#include <linux/mm.h>
 #include <linux/percpu.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/spinlock.h>
+#include <linux/vmalloc.h>
 
 static void kgfree(void *ptr, size_t size)
 {
-	if (size < PAGE_SIZE)
+	if (is_vmalloc_addr(ptr))
+		vfree(ptr);
+	else if (size < PAGE_SIZE)
 		kfree(ptr);
 	else
 		free_pages((unsigned long) ptr, get_order(size));
@@ -102,7 +106,14 @@ static void *kgalloc(size_t size, gfp_t gfp)
  */
 
 #define IDA_TREE_ARY		BITS_PER_LONG
-#define IDA_SECTION_SIZE	(64UL << 10)
+
+/* Max section size, in bytes */
+#ifdef CONFIG_COMPACTION
+#define IDA_SECTION_SIZE	(64UL << 10) /* order 4 page allocation */
+#else
+#define IDA_SECTION_SIZE	(16UL << 10) /* order 2 */
+#endif
+
 #define IDA_NODES_PER_SECTION	(IDA_SECTION_SIZE / sizeof(unsigned long))
 
 static inline unsigned long *ida_index_to_node(struct ida *ida, unsigned node)
@@ -251,8 +262,15 @@ again:
 
 	if (ida->nodes >= IDA_NODES_PER_SECTION &&
 	    is_power_of_2(cur_sections)) {
-		sections = kgalloc(cur_sections * 2 * sizeof(unsigned long *),
-				   __GFP_ZERO|gfp);
+		size_t bytes = cur_sections * 2 * sizeof(unsigned long *);
+
+		if (bytes <= IDA_SECTION_SIZE)
+			sections = kgalloc(bytes, __GFP_ZERO|gfp);
+		else if (gfp & GFP_KERNEL)
+			sections = vzalloc(bytes);
+		else
+			sections = NULL;
+
 		if (!sections)
 			goto err;
 	}

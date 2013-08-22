@@ -207,7 +207,8 @@ static void convert_v0_keys(struct btree *b, struct bset *i)
 
 		SET_KEY_PTRS(&t,	KEY0_PTRS(k));
 		SET_KEY_CSUM(&t,	KEY0_CSUM(k));
-		SET_KEY_DIRTY(&t,	KEY0_DIRTY(k));
+		if (!b->level)
+			SET_KEY_CACHED(&t,	!KEY0_DIRTY(k));
 		SET_KEY_SIZE(&t,	KEY0_SIZE(k));
 		SET_KEY_INODE(&t,	KEY0_INODE(k));
 		SET_KEY_OFFSET(&t,	k->low);
@@ -1170,7 +1171,7 @@ uint8_t __bch_btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 
 		if (level)
 			SET_GC_MARK(g, GC_MARK_METADATA);
-		else if (KEY_DIRTY(k))
+		else if (!KEY_CACHED(k))
 			SET_GC_MARK(g, GC_MARK_DIRTY);
 
 		/* guard against overflow */
@@ -1777,7 +1778,7 @@ static bool fix_overlapping_extents(struct btree *b, struct bkey *insert,
 {
 	void subtract_dirty(struct bkey *k, uint64_t offset, int sectors)
 	{
-		if (KEY_DIRTY(k))
+		if (!KEY_CACHED(k))
 			bcache_dev_sectors_dirty_add(b->c, KEY_INODE(k),
 						     offset, -sectors);
 	}
@@ -1978,7 +1979,7 @@ static bool btree_insert_key(struct btree *b, struct btree_op *op,
 insert:	bch_bset_insert(&b->keys, m, k);
 copy:	bkey_copy(m, k);
 merged:
-	if (KEY_DIRTY(k))
+	if (!b->level && !KEY_CACHED(k))
 		bcache_dev_sectors_dirty_add(b->c, KEY_INODE(k),
 					     KEY_START(k), KEY_SIZE(k));
 

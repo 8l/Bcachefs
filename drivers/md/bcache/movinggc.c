@@ -102,7 +102,7 @@ static void write_moving(struct closure *cl)
 		op->write_prio		= 1;
 		op->bio			= &io->bio.bio;
 
-		op->writeback		= KEY_DIRTY(&io->w->key);
+		op->cached		= KEY_CACHED(&io->w->key);
 		op->csum		= KEY_CSUM(&io->w->key);
 
 		bkey_copy(&op->replace_key, &io->w->key);

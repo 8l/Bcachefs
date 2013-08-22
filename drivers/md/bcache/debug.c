@@ -68,8 +68,8 @@ int bch_bkey_to_text(char *buf, size_t size, const struct bkey *k)
 
 	p("]");
 
-	if (KEY_DIRTY(k))
-		p(" dirty");
+	if (KEY_CACHED(k))
+		p(" cached");
 	if (KEY_CSUM(k))
 		p(" cs%llu %llx", KEY_CSUM(k), k->ptr[1]);
 #undef p

@@ -68,7 +68,7 @@ bool __bch_btree_ptr_invalid(struct cache_set *c, const struct bkey *k)
 {
 	char buf[80];
 
-	if (!KEY_PTRS(k) || KEY_DIRTY(k))
+	if (!KEY_PTRS(k) || KEY_CACHED(k))
 		goto bad;
 
 	if (bkey_cmp(k, &ZERO_KEY) && !KEY_SIZE(k))
@@ -101,7 +101,7 @@ static bool btree_ptr_bad_expensive(struct btree *b, const struct bkey *k)
 			if (ptr_available(b->c, k, i)) {
 				g = PTR_BUCKET(b->c, k, i);
 
-				if (KEY_DIRTY(k) ||
+				if (KEY_CACHED(k) ||
 				    g->prio != BTREE_PRIO ||
 				    (b->c->gc_mark_valid &&
 				     GC_MARK(g) != GC_MARK_METADATA))
@@ -223,7 +223,7 @@ static bool bch_extent_bad_expensive(struct btree *b, const struct bkey *k,
 	if (mutex_trylock(&b->c->bucket_lock)) {
 		if (b->c->gc_mark_valid &&
 		    ((GC_MARK(g) != GC_MARK_DIRTY &&
-		      KEY_DIRTY(k)) ||
+		      !KEY_CACHED(k)) ||
 		     GC_MARK(g) == GC_MARK_METADATA))
 			goto err;
 
@@ -258,7 +258,7 @@ bool bch_extent_bad(struct btree_keys *bk, const struct bkey *k)
 		if (!ptr_available(b->c, k, i))
 			return true;
 
-	if (!expensive_debug_checks(b->c) && KEY_DIRTY(k))
+	if (!expensive_debug_checks(b->c) && !KEY_CACHED(k))
 		return false;
 
 	for (i = 0; i < KEY_PTRS(k); i++) {
@@ -269,7 +269,7 @@ bool bch_extent_bad(struct btree_keys *bk, const struct bkey *k)
 			     "key too stale: %i, need_gc %u",
 			     stale, b->c->need_gc);
 
-		btree_bug_on(stale && KEY_DIRTY(k) && KEY_SIZE(k),
+		btree_bug_on(stale && !KEY_CACHED(k) && KEY_SIZE(k),
 			     b, "stale dirty pointer");
 
 		if (stale)
@@ -299,7 +299,7 @@ bool bch_extent_merge(struct btree_keys *bk, struct bkey *l, struct bkey *r)
 
 	if (KEY_PTRS(l) != KEY_PTRS(r) ||
 	    KEY_DELETED(l) != KEY_DELETED(r) ||
-	    KEY_DIRTY(l) != KEY_DIRTY(r) ||
+	    KEY_CACHED(l) != KEY_CACHED(r) ||
 	    bkey_cmp(l, &START_KEY(r)))
 		return false;
 

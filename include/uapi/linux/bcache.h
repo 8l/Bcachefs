@@ -45,7 +45,7 @@ static inline void SET_##name(struct bkey *k, unsigned i, __u64 v)	\
 //KEY_FIELD(KEY_FORMAT,	high, 60, 4)
 KEY_FIELD(KEY_PTRS,	high, 54, 6)	/* Max value 8 * ((1 << 6) - 1) bytes */
 KEY_FIELD(KEY_DELETED,	high, 53, 1)
-KEY_FIELD(KEY_DIRTY,	high, 52, 1)
+KEY_FIELD(KEY_CACHED,	high, 52, 1)
 KEY_FIELD(KEY_CSUM,	high, 50, 2)
 /* KEY_FIELD(UNUSED,	high, 48, 2) */
 

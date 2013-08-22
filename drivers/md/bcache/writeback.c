@@ -102,6 +102,7 @@ struct dirty_io {
 	struct closure		cl;
 	struct cached_dev	*dc;
 	struct bio		bio;
+	int			error;
 };
 
 static void dirty_init(struct keybuf_key *w)
@@ -137,8 +138,7 @@ static void write_dirty_finish(struct closure *cl)
 	bio_for_each_segment_all(bv, &io->bio, i)
 		__free_page(bv->bv_page);
 
-	/* This is kind of a dumb way of signalling errors. */
-	if (KEY_DIRTY(&w->key)) {
+	if (!io->error) {
 		int ret;
 		unsigned i;
 		struct keylist keys;
@@ -146,7 +146,7 @@ static void write_dirty_finish(struct closure *cl)
 		bch_keylist_init(&keys);
 
 		bkey_copy(keys.top, &w->key);
-		SET_KEY_DIRTY(keys.top, false);
+		SET_KEY_CACHED(keys.top, true);
 		bch_keylist_push(&keys);
 
 		for (i = 0; i < KEY_PTRS(&w->key); i++)
@@ -174,7 +174,7 @@ static void dirty_endio(struct bio *bio, int error)
 	struct dirty_io *io = w->private;
 
 	if (error)
-		SET_KEY_DIRTY(&w->key, false);
+		io->error = error;
 
 	closure_put(&io->cl);
 }
@@ -184,13 +184,15 @@ static void write_dirty(struct closure *cl)
 	struct dirty_io *io = container_of(cl, struct dirty_io, cl);
 	struct keybuf_key *w = io->bio.bi_private;
 
-	dirty_init(w);
-	io->bio.bi_rw		= WRITE;
-	io->bio.bi_iter.bi_sector = KEY_START(&w->key);
-	io->bio.bi_bdev		= io->dc->bdev;
-	io->bio.bi_end_io	= dirty_endio;
+	if (!io->error) {
+		dirty_init(w);
+		io->bio.bi_rw		= WRITE;
+		io->bio.bi_iter.bi_sector = KEY_START(&w->key);
+		io->bio.bi_bdev		= io->dc->bdev;
+		io->bio.bi_end_io	= dirty_endio;
 
-	closure_bio_submit(&io->bio, cl, &io->dc->disk);
+		closure_bio_submit(&io->bio, cl, &io->dc->disk);
+	}
 
 	continue_at(cl, write_dirty_finish, system_wq);
 }
@@ -325,7 +327,7 @@ void bcache_dev_sectors_dirty_add(struct cache_set *c, unsigned inode,
 
 static bool dirty_pred(struct keybuf *buf, struct bkey *k)
 {
-	return KEY_DIRTY(k);
+	return !KEY_CACHED(k);
 }
 
 static void refill_full_stripes(struct cached_dev *dc)
@@ -460,7 +462,7 @@ static int sectors_dirty_init_fn(struct btree_op *_op, struct btree *b,
 	if (KEY_INODE(k) > op->inode)
 		return MAP_DONE;
 
-	if (KEY_DIRTY(k))
+	if (!KEY_CACHED(k))
 		bcache_dev_sectors_dirty_add(b->c, KEY_INODE(k),
 					     KEY_START(k), KEY_SIZE(k));
 

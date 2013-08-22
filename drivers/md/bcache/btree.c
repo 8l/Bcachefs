@@ -1242,9 +1242,6 @@ struct gc_merge_info {
 	unsigned	keys;
 };
 
-static int bch_btree_insert_node(struct btree *, struct btree_op *,
-				 struct keylist *, atomic_t *, struct bkey *);
-
 static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 			     struct keylist *keylist, struct gc_stat *gc,
 			     struct gc_merge_info *r)
@@ -1587,10 +1584,6 @@ size_t bch_btree_gc_finish(struct cache_set *c)
 				SET_GC_MARK(PTR_BUCKET(c, k, i),
 					    GC_MARK_METADATA);
 		}
-
-	for (i = 0; i < KEY_PTRS(&c->uuid_bucket); i++)
-		SET_GC_MARK(PTR_BUCKET(c, &c->uuid_bucket, i),
-			    GC_MARK_METADATA);
 
 	for_each_cache(ca, c, i) {
 		uint64_t *i;
@@ -1981,8 +1974,7 @@ static bool btree_insert_key(struct btree *b, struct btree_op *op,
 	struct btree_iter iter;
 
 	BUG_ON(bkey_cmp(k, &b->key) > 0);
-	BUG_ON(!bkey_cmp(k, &ZERO_KEY));
-	BUG_ON(!b->level && !KEY_OFFSET(k));
+	BUG_ON(b->level && !bkey_cmp(k, &ZERO_KEY));
 
 	if (!b->level && b->btree_id == BTREE_ID_EXTENTS) {
 		BUG_ON(!KEY_OFFSET(k));
@@ -2207,10 +2199,9 @@ err:
 	return -ENOMEM;
 }
 
-static int bch_btree_insert_node(struct btree *b, struct btree_op *op,
-				 struct keylist *insert_keys,
-				 atomic_t *journal_ref,
-				 struct bkey *replace_key)
+int bch_btree_insert_node(struct btree *b, struct btree_op *op,
+			  struct keylist *insert_keys, atomic_t *journal_ref,
+			  struct bkey *replace_key)
 {
 	BUG_ON(b->level && replace_key);
 

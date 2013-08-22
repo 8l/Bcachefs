@@ -814,7 +814,7 @@ static inline struct search *search_alloc(struct bio *bio,
 
 	s->iop.c		= d->c;
 	s->iop.bio		= NULL;
-	s->iop.inode		= d->id;
+	s->iop.inode		= bcache_dev_inum(d);
 	s->iop.write_point	= hash_long((unsigned long) current, 16);
 	s->iop.write_prio	= 0;
 	s->iop.error		= 0;
@@ -1028,8 +1028,9 @@ static void cached_dev_write(struct cached_dev *dc, struct search *s)
 {
 	struct closure *cl = &s->cl;
 	struct bio *bio = &s->bio.bio;
-	struct bkey start = KEY(dc->disk.id, bio->bi_iter.bi_sector, 0);
-	struct bkey end = KEY(dc->disk.id, bio_end_sector(bio), 0);
+	unsigned inode = bcache_dev_inum(&dc->disk);
+	struct bkey start = KEY(inode, bio->bi_iter.bi_sector, 0);
+	struct bkey end = KEY(inode, bio_end_sector(bio), 0);
 	bool writeback = false;
 
 	bch_keybuf_check_overlapping(&s->iop.c->moving_gc_keys, &start, &end);
@@ -1241,6 +1242,7 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 	struct search *s;
 	struct closure *cl;
 	struct bcache_device *d = bio->bi_bdev->bd_disk->private_data;
+	unsigned inode = bcache_dev_inum(d);
 	int cpu, rw = bio_data_dir(bio);
 
 	cpu = part_stat_lock();
@@ -1264,8 +1266,8 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 				      bcache_wq);
 	} else if (rw) {
 		bch_keybuf_check_overlapping(&s->iop.c->moving_gc_keys,
-					&KEY(d->id, bio->bi_iter.bi_sector, 0),
-					&KEY(d->id, bio_end_sector(bio), 0));
+					&KEY(inode, bio->bi_iter.bi_sector, 0),
+					&KEY(inode, bio_end_sector(bio), 0));
 
 		s->iop.bypass		= (bio->bi_rw & REQ_DISCARD) != 0;
 		s->iop.bio		= bio;

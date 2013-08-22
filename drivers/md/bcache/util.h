@@ -577,4 +577,12 @@ do {									\
 uint64_t bch_crc64_update(uint64_t, const void *, size_t);
 uint64_t bch_crc64(const void *, size_t);
 
+static inline s64 timekeeping_clocktai_ns(void)
+{
+	struct timespec ts;
+
+	timekeeping_clocktai(&ts);
+	return (s64) ts.tv_sec * NSEC_PER_SEC + (s64) ts.tv_nsec;
+}
+
 #endif /* _BCACHE_UTIL_H */

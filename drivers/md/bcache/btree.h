@@ -248,6 +248,8 @@ int bch_btree_insert(struct cache_set *, enum btree_id,
 		     struct keylist *, atomic_t *, struct bkey *);
 int bch_btree_insert_journalled(struct cache_set *, enum btree_id,
 				struct keylist *, struct closure *);
+int bch_btree_insert_node(struct btree *, struct btree_op *,
+			  struct keylist *, atomic_t *, struct bkey *);
 
 int bch_gc_thread_start(struct cache_set *);
 size_t bch_btree_gc_finish(struct cache_set *);

@@ -182,6 +182,7 @@
 #include <linux/kobject.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
+#include <linux/radix-tree.h>
 #include <linux/rbtree.h>
 #include <linux/rwsem.h>
 #include <linux/types.h>
@@ -216,6 +217,7 @@ BITMASK(GC_SECTORS_USED, struct bucket, gc_mark, 2, 14);
 
 #include "journal.h"
 #include "stats.h"
+#include "inode.h"
 struct search;
 struct btree;
 struct keybuf;
@@ -263,7 +265,11 @@ struct bcache_device {
 	struct kobject		kobj;
 
 	struct cache_set	*c;
-	unsigned		id;
+
+	struct rb_node		node;
+	struct bch_inode_blockdev inode;
+	struct mutex		inode_lock;
+
 #define BCACHEDEVNAME_SIZE	12
 	char			name[BCACHEDEVNAME_SIZE];
 
@@ -512,7 +518,8 @@ struct cache_set {
 	struct cache		*cache_by_alloc[MAX_CACHES_PER_SET];
 	int			caches_loaded;
 
-	struct bcache_device	**devices;
+	struct radix_tree_root	devices;
+
 	struct list_head	cached_devs;
 	uint64_t		cached_dev_sectors;
 	struct closure		caching;
@@ -634,10 +641,7 @@ struct cache_set {
 
 	struct btree		*btree_roots[BTREE_ID_NR];
 
-	unsigned		nr_uuids;
-	struct uuid_entry	*uuids;
-	BKEY_PADDED(uuid_bucket);
-	struct closure_with_waitlist uuid_write;
+	uint64_t		unused_inode_hint;
 
 	/*
 	 * A btree node on disk could have too many bsets for an iterator to fit
@@ -849,6 +853,11 @@ static inline bool cached_dev_get(struct cached_dev *dc)
 	return true;
 }
 
+static inline u64 bcache_dev_inum(struct bcache_device *d)
+{
+	return KEY_INODE(&d->inode.i_inode.i_key);
+}
+
 /*
  * bucket_gc_gen() returns the difference between the bucket's current gen and
  * the oldest gen of any pointer into that bucket in the btree (last_gc).
@@ -886,6 +895,12 @@ static inline void wake_up_allocators(struct cache_set *c)
 		wake_up_process(ca->alloc_thread);
 }
 
+static inline struct bcache_device *bch_dev_find(struct cache_set *c,
+						 uint64_t inode)
+{
+	return radix_tree_lookup(&c->devices, inode);
+}
+
 /* Forward declarations */
 
 void bch_count_io_errors(struct cache *, int, const char *);
@@ -918,6 +933,8 @@ bool bch_cache_set_error(struct cache_set *, const char *, ...);
 void bch_prio_write(struct cache *);
 void bch_write_bdev_super(struct cached_dev *, struct closure *);
 
+struct bcache_device *bch_dev_get_by_inode(struct cache_set *c, uint64_t inode);
+
 extern struct workqueue_struct *bcache_wq;
 extern const char * const bch_cache_modes[];
 extern struct mutex bch_register_lock;
@@ -934,7 +951,6 @@ void bch_flash_dev_release(struct kobject *);
 void bch_cache_set_release(struct kobject *);
 void bch_cache_release(struct kobject *);
 
-int bch_uuid_write(struct cache_set *);
 void bcache_write_super(struct cache_set *);
 
 int bch_flash_dev_create(struct cache_set *c, uint64_t size);

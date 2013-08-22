@@ -41,6 +41,11 @@ static inline void SET_##name(struct bkey *k, unsigned i, __u64 v)	\
 #define KEY_INODE_BITS		16
 #define KEY_OFFSET_BITS		(64 - KEY_INODE_BITS)
 #define KEY_SIZE_BITS		16
+#define KEY_SIZE_MAX		((1U << KEY_SIZE_BITS) - 1)
+
+#define KEY_PTR_BITS		6
+
+#define KEY_MAX_U64S		(2 + (1 << KEY_PTR_BITS))
 
 //KEY_FIELD(KEY_FORMAT,	high, 60, 4)
 KEY_FIELD(KEY_PTRS,	high, 54, 6)	/* Max value 8 * ((1 << 6) - 1) bytes */
@@ -112,6 +117,72 @@ static inline struct bkey *bkey_idx(const struct bkey *k, unsigned nr_keys)
 	__u64 *d = (void *) k;
 	return (struct bkey *) (d + nr_keys);
 }
+
+/* Inodes */
+
+#define BLOCKDEV_INODE_MAX	4096
+
+enum bch_inode_types {
+	BCH_INODE_BLOCKDEV	= 0,
+	BCH_INODE_FS		= 1,
+};
+
+struct bch_inode {
+	struct bkey		i_key;
+	__u16			i_inode_format;
+	__u16			i_inode_type;
+	__u32			i_flags;
+
+	__u64			i_sectors; /* Allocated space */
+
+	/* Nanoseconds */
+	__s64			i_atime;
+	__s64			i_ctime;
+	__s64			i_mtime;
+};
+
+struct bch_inode_blockdev {
+	struct bch_inode	i_inode;
+
+	__u8			i_uuid[16];
+	__u8			i_label[32];
+};
+
+struct bch_inode_fs {
+	struct bch_inode	i_inode;
+
+	__u64			i_size;
+
+	__u32			i_uid;
+	__u32			i_gid;
+	__u32			i_nlink;
+
+	__u16			i_mode;
+	__u16			pad;
+
+	__u32			i_generation; /* for nfs */
+	__u32			pad2;
+};
+
+BITMASK(INODE_FLASH_ONLY,	struct bch_inode_blockdev,
+				i_inode.i_flags, 0, 1);
+BITMASK(INODE_NET,		struct bch_inode_blockdev,
+				i_inode.i_flags, 1, 1);
+
+#define BCH_INODE_INIT(inode)					\
+do {								\
+	memset(inode, 0, sizeof(*(inode)));			\
+	SET_KEY_PTRS(&(inode)->i_inode.i_key,			\
+		     (sizeof(*inode) / 8) - 2);			\
+								\
+	if (__builtin_types_compatible_p(typeof(inode),		\
+			struct bch_inode_fs *))			\
+		(inode)->i_inode.i_inode_format = BCH_INODE_FS;		\
+	else if (__builtin_types_compatible_p(typeof(inode),	\
+			struct bch_inode_blockdev *))		\
+		(inode)->i_inode.i_inode_format = BCH_INODE_BLOCKDEV;	\
+} while (0)
+
 /* Enough for a key with 6 pointers */
 #define BKEY_PAD		8
 
@@ -319,28 +390,6 @@ struct prio_set {
 	} __attribute((packed)) data[];
 };
 
-/* UUIDS - per backing device/flash only volume metadata */
-
-struct uuid_entry {
-	union {
-		struct {
-			__u8	uuid[16];
-			__u8	label[32];
-			__u32	first_reg;
-			__u32	last_reg;
-			__u32	invalidated;
-
-			__u32	flags;
-			/* Size of flash only volumes */
-			__u64	sectors;
-		};
-
-		__u8		pad[128];
-	};
-};
-
-BITMASK(UUID_FLASH_ONLY,	struct uuid_entry, flags, 0, 1);
-
 /* Btree nodes */
 
 /* Version 1: Seed pointer into btree node checksum
@@ -409,5 +458,25 @@ struct uuid_entry_v0 {
 	__u32		invalidated;
 	__u32		pad;
 };
+
+struct uuid_entry {
+	union {
+		struct {
+			__u8	uuid[16];
+			__u8	label[32];
+			__u32	first_reg;
+			__u32	last_reg;
+			__u32	invalidated;
+
+			__u32	flags;
+			/* Size of flash only volumes */
+			__u64	sectors;
+		};
+
+		__u8		pad[128];
+	};
+};
+
+BITMASK(UUID_FLASH_ONLY,	struct uuid_entry, flags, 0, 1);
 
 #endif /* _LINUX_BCACHE_H */

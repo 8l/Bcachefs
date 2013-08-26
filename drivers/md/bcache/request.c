@@ -401,6 +401,8 @@ static void bch_data_insert_start(struct closure *cl)
 		if (KEY_CSUM(k))
 			bio_csum(n, k);
 
+		SET_KEY_VERSION(k, op->version);
+
 		trace_bcache_cache_insert(k);
 		bch_keylist_push(&op->insert_keys);
 

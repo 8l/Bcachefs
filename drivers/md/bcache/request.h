@@ -9,6 +9,7 @@ struct data_insert_op {
 	struct bio		*bio;
 
 	unsigned		inode;
+	unsigned		version;
 	uint16_t		write_point;
 	uint16_t		write_prio;
 	short			error;

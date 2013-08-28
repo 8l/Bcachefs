@@ -267,7 +267,7 @@ struct percpu_ida {
 	 * will just keep looking - but the bitmap _must_ be set whenever a
 	 * percpu freelist does have tags.
 	 */
-	unsigned long			*cpus_have_tags;
+	cpumask_t			cpus_have_tags;
 
 	struct {
 		spinlock_t		lock;

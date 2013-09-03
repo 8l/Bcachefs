@@ -255,6 +255,22 @@ static void bch_data_insert_keys(struct closure *cl)
 	closure_return(cl);
 }
 
+static int bch_keylist_realloc(struct keylist *l, int nptrs, struct cache_set *c)
+{
+	size_t oldsize = bch_keylist_nkeys(l);
+	size_t newsize = oldsize + 2 + nptrs;
+
+	/* The journalling code doesn't handle the case where the keys to insert
+	 * is bigger than an empty write: If we just return -ENOMEM here,
+	 * bio_insert() and bio_invalidate() will insert the keys created so far
+	 * and finish the rest when the keylist is empty.
+	 */
+	if ((newsize + JSET_RESERVE) * sizeof(uint64_t) > block_bytes(c) - sizeof(struct jset))
+		return -ENOMEM;
+
+	return __bch_keylist_realloc(l, nptrs);
+}
+
 static void bch_data_invalidate(struct closure *cl)
 {
 	struct data_insert_op *op = container_of(cl, struct data_insert_op, cl);

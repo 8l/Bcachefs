@@ -1306,7 +1306,7 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 	}
 
 	for (i = 0; i < nodes; i++) {
-		if (bch_keylist_realloc(keylist, 0, b->c))
+		if (__bch_keylist_realloc(keylist, 0))
 			goto out_nocoalesce;
 
 		*keylist->top = r[i].b->key;
@@ -1317,7 +1317,7 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 	}
 
 	for (i = 1; i < nodes; i++) {
-		if (bch_keylist_realloc(keylist, KEY_PTRS(&new_nodes[i]->key), b->c))
+		if (__bch_keylist_realloc(keylist, KEY_PTRS(&new_nodes[i]->key)))
 			goto out_nocoalesce;
 
 		bch_keylist_add(keylist, &new_nodes[i]->key);

@@ -461,9 +461,7 @@ static inline size_t bch_keylist_bytes(struct keylist *l)
 
 struct bkey *bch_keylist_pop(struct keylist *);
 void bch_keylist_pop_front(struct keylist *);
-
-struct cache_set;
-int bch_keylist_realloc(struct keylist *, int, struct cache_set *);
+int __bch_keylist_realloc(struct keylist *, int);
 
 struct cache_set;
 const char *bch_ptr_status(struct cache_set *, const struct bkey *);

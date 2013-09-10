@@ -11,21 +11,20 @@
 
 #include <trace/events/bcache.h>
 
-#define for_each_jset_keys(jkeys, jset)				\
+#define for_each_jset_jkeys(jkeys, jset)			\
 	for (jkeys = (jset)->start;				\
 	     jkeys < (struct jset_keys *) bset_bkey_last(jset);	\
 	     jkeys = jset_keys_next(jkeys))
 
-#define for_each_extent_jset_keys(k, jkeys, jset)		\
-	for_each_jset_keys(jkeys, jset)				\
-		if ((jkeys)->btree_id == BTREE_ID_EXTENTS &&	\
-		    !JKEYS_BTREE_ROOT(jkeys))			\
+#define for_each_jset_key(k, jkeys, jset)			\
+	for_each_jset_jkeys(jkeys, jset)			\
+		if (!JKEYS_BTREE_ROOT(jkeys))			\
 			for (k = (jkeys)->start;		\
 			     k < bset_bkey_last(jkeys);		\
 			     k = bkey_next(k))
 
 struct bkey *bch_journal_find_btree_root(struct cache_set *c, struct jset *j,
-					 enum btree_id id, int *level)
+					 enum btree_id id, unsigned *level)
 {
 	struct bkey *k;
 	struct jset_keys *jkeys;
@@ -48,7 +47,7 @@ struct bkey *bch_journal_find_btree_root(struct cache_set *c, struct jset *j,
 		}
 	}
 
-	for_each_jset_keys(jkeys, j)
+	for_each_jset_jkeys(jkeys, j)
 		if (jkeys->btree_id == id &&
 		    JKEYS_BTREE_ROOT(jkeys)) {
 			k = jkeys->start;
@@ -392,13 +391,14 @@ void bch_journal_mark(struct cache_set *c, struct list_head *list)
 			     k = bkey_next(k))
 				bch_journal_mark_key(c, k);
 		} else
-			for_each_extent_jset_keys(k, jkeys, &i->j)
-				bch_journal_mark_key(c, k);
+			for_each_jset_key(k, jkeys, &i->j)
+				if (jkeys->btree_id == BTREE_ID_EXTENTS)
+					bch_journal_mark_key(c, k);
 	}
 }
 
-static int bch_journal_replay_key(struct cache_set *c, struct bkey *k,
-				  atomic_t *journal_ref)
+static int bch_journal_replay_key(struct cache_set *c, enum btree_id id,
+				  struct bkey *k, atomic_t *journal_ref)
 {
 	int ret;
 	struct keylist keys;
@@ -410,7 +410,7 @@ static int bch_journal_replay_key(struct cache_set *c, struct bkey *k,
 	bkey_copy(keys.top, k);
 	bch_keylist_push(&keys);
 
-	ret = bch_btree_insert(c, &keys, journal_ref, NULL);
+	ret = bch_btree_insert(c, id, &keys, journal_ref, NULL);
 	BUG_ON(!bch_keylist_empty(&keys));
 
 	cond_resched();
@@ -441,20 +441,23 @@ int bch_journal_replay(struct cache_set *s, struct list_head *list)
 			for (k = j0->start;
 			     k < bset_bkey_last(j0);
 			     k = bkey_next(k)) {
-				bch_journal_replay_key(s, k, i->pin);
+				ret = bch_journal_replay_key(s, BTREE_ID_EXTENTS,
+						       k, i->pin);
 				if (ret)
 					goto err;
 
 				keys++;
 			}
-		} else
-			for_each_extent_jset_keys(k, jkeys, &i->j) {
-				bch_journal_replay_key(s, k, i->pin);
+		} else {
+			for_each_jset_key(k, jkeys, &i->j) {
+				bch_journal_replay_key(s, jkeys->btree_id,
+						       k, i->pin);
 				if (ret)
 					goto err;
 
 				keys++;
 			}
+		}
 
 		if (i->pin)
 			atomic_dec(i->pin);
@@ -712,9 +715,17 @@ static void journal_write_unlocked(struct closure *cl)
 		continue_at(cl, journal_write, system_wq);
 	}
 
-	/* XXX: need locking */
-	bch_journal_add_btree_root(w->data, BTREE_ID_EXTENTS,
-				   &c->root->key, c->root->level);
+	spin_lock(&c->btree_root_lock);
+
+	for (i = 0; i < BTREE_ID_NR; i++) {
+		struct btree *b = c->btree_roots[i];
+
+		if (b)
+			bch_journal_add_btree_root(w->data, i,
+						   &b->key, b->level);
+	}
+
+	spin_unlock(&c->btree_root_lock);
 
 	bch_journal_add_btree_root(w->data, BTREE_ID_UUIDS,
 				   &c->uuid_bucket, 0);
@@ -855,9 +866,8 @@ static void journal_write_work(struct work_struct *work)
  * bch_journal() hands those same keys off to btree_insert_async()
  */
 
-atomic_t *bch_journal(struct cache_set *c,
-		      struct keylist *keys,
-		      struct closure *parent)
+atomic_t *bch_journal(struct cache_set *c, enum btree_id id,
+		      struct keylist *keys, struct closure *parent)
 {
 	struct journal_write *w;
 	atomic_t *ret;
@@ -865,11 +875,13 @@ atomic_t *bch_journal(struct cache_set *c,
 	if (!CACHE_SYNC(&c->sb))
 		return NULL;
 
-	w = journal_wait_for_write(c, bch_keylist_nkeys(keys));
-
-	bch_journal_add_keys(w->data, BTREE_ID_EXTENTS,
-			     keys->keys, bch_keylist_nkeys(keys),
-			     0, false);
+	if (keys) {
+		w = journal_wait_for_write(c, bch_keylist_nkeys(keys));
+		bch_journal_add_keys(w->data, id, keys->keys,
+				     bch_keylist_nkeys(keys), 0, false);
+	} else {
+		w = journal_wait_for_write(c, 0);
+	}
 
 	ret = &fifo_back(&c->journal.pin);
 	atomic_inc(ret);
@@ -891,12 +903,9 @@ atomic_t *bch_journal(struct cache_set *c,
 
 void bch_journal_meta(struct cache_set *c, struct closure *cl)
 {
-	struct keylist keys;
 	atomic_t *ref;
 
-	bch_keylist_init(&keys);
-
-	ref = bch_journal(c, &keys, cl);
+	ref = bch_journal(c, BTREE_ID_EXTENTS, NULL, cl);
 	if (ref)
 		atomic_dec_bug(ref);
 }

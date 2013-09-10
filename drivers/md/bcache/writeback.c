@@ -152,7 +152,8 @@ static void write_dirty_finish(struct closure *cl)
 		for (i = 0; i < KEY_PTRS(&w->key); i++)
 			atomic_inc(&PTR_BUCKET(dc->disk.c, &w->key, i)->pin);
 
-		ret = bch_btree_insert(dc->disk.c, &keys, NULL, &w->key);
+		ret = bch_btree_insert(dc->disk.c, BTREE_ID_EXTENTS,
+				       &keys, NULL, &w->key);
 
 		if (ret)
 			trace_bcache_writeback_collision(&w->key);
@@ -476,8 +477,8 @@ void bch_sectors_dirty_init(struct cached_dev *dc)
 	bch_btree_op_init(&op.op, -1);
 	op.inode = dc->disk.id;
 
-	bch_btree_map_keys(&op.op, dc->disk.c, &KEY(op.inode, 0, 0),
-			   sectors_dirty_init_fn, 0);
+	bch_btree_map_keys(&op.op, dc->disk.c, BTREE_ID_EXTENTS,
+			   &KEY(op.inode, 0, 0), sectors_dirty_init_fn, 0);
 }
 
 int bch_cached_dev_writeback_init(struct cached_dev *dc)

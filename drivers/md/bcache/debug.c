@@ -176,7 +176,7 @@ int __bch_count_data(struct btree *b)
 	struct btree_iter iter;
 	struct bkey *k;
 
-	if (!b->level)
+	if (!b->level && b->btree_id == BTREE_ID_EXTENTS)
 		for_each_key(&b->keys, k, &iter)
 			ret += KEY_SIZE(k);
 	return ret;
@@ -190,7 +190,7 @@ void __bch_check_keys(struct btree *b, const char *fmt, ...)
 	const char *err;
 
 	for_each_key(&b->keys, k, &iter) {
-		if (!b->level) {
+		if (!b->level && b->btree_id == BTREE_ID_EXTENTS) {
 			err = "Keys out of order";
 			if (p && bkey_cmp(&START_KEY(p), &START_KEY(k)) > 0)
 				goto bug;
@@ -224,7 +224,8 @@ bug:
 	vprintk(fmt, args);
 	va_end(args);
 
-	panic("bcache error: %s:\n", err);
+	panic("bcache error (btree %u level %u): %s:\n",
+	      b->btree_id, b->level, err);
 }
 
 void bch_btree_iter_next_check(struct btree_iter *iter)

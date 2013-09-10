@@ -407,9 +407,9 @@ SHOW(__bch_cache_set)
 		do {
 			rw_unlock(false, b);
 lock_root:
-			b = c->root;
+			b = c->btree_roots[BTREE_ID_EXTENTS];
 			rw_lock(false, b, b->level);
-		} while (b != c->root);
+		} while (b != c->btree_roots[BTREE_ID_EXTENTS]);
 
 		for_each_key_filter(b, k, &iter, bch_ptr_bad)
 			bytes += bkey_bytes(k);
@@ -474,7 +474,7 @@ lock_root:
 	sysfs_print(journal_delay_ms,		c->journal_delay_ms);
 	sysfs_hprint(bucket_size,		bucket_bytes(c));
 	sysfs_hprint(block_size,		block_bytes(c));
-	sysfs_print(tree_depth,			c->root->level);
+	sysfs_print(tree_depth,			c->btree_roots[BTREE_ID_EXTENTS]->level);
 	sysfs_print(root_usage_percent,		root_usage(c));
 
 	sysfs_hprint(btree_cache_size,		cache_size(c));

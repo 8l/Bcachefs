@@ -173,9 +173,10 @@ struct btree_op;
 struct keylist;
 
 struct bkey *bch_journal_find_btree_root(struct cache_set *, struct jset *,
-					 enum btree_id, int *);
+					 enum btree_id, unsigned *);
 
-atomic_t *bch_journal(struct cache_set *, struct keylist *, struct closure *);
+atomic_t *bch_journal(struct cache_set *, enum btree_id,
+		      struct keylist *, struct closure *);
 void bch_journal_next(struct journal *);
 void bch_journal_mark(struct cache_set *, struct list_head *);
 void bch_journal_meta(struct cache_set *, struct closure *);

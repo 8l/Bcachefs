@@ -120,7 +120,7 @@ bool __bch_cut_back(const struct bkey *where, struct bkey *k)
 /* Auxiliary search trees */
 
 /* 32 bits total: */
-#define BKEY_MID_BITS		3
+#define BKEY_MID_BITS		5
 #define BKEY_EXPONENT_BITS	7
 #define BKEY_MANTISSA_BITS	(32 - BKEY_MID_BITS - BKEY_EXPONENT_BITS)
 #define BKEY_MANTISSA_MASK	((1 << BKEY_MANTISSA_BITS) - 1)
@@ -146,7 +146,7 @@ struct bkey_float {
  * gets to the second cacheline.
  */
 
-#define BSET_CACHELINE		128
+#define BSET_CACHELINE		256
 
 /* Space required for the btree node keys */
 static inline size_t btree_keys_bytes(struct btree_keys *b)
@@ -1119,14 +1119,19 @@ static int btree_bset_stats(struct btree_op *op, struct btree *b)
 int bch_bset_print_stats(struct cache_set *c, char *buf)
 {
 	struct bset_stats t;
+	unsigned id;
 	int ret;
 
 	memset(&t, 0, sizeof(struct bset_stats));
 	bch_btree_op_init(&t.op, -1);
 
-	ret = bch_btree_map_nodes(&t.op, c, &ZERO_KEY, btree_bset_stats);
-	if (ret < 0)
-		return ret;
+	for (id = 0; id < BTREE_ID_NR; id++)
+		if (c->btree_roots[id]) {
+			ret = bch_btree_map_nodes(&t.op, c, id, NULL,
+						  btree_bset_stats);
+			if (ret < 0)
+				return ret;
+		}
 
 	return snprintf(buf, PAGE_SIZE,
 			"btree nodes:		%zu\n"

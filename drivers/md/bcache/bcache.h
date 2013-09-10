@@ -612,7 +612,8 @@ struct cache_set {
 
 	struct task_struct	*gc_thread;
 	/* Where in the btree gc currently is */
-	struct bkey		gc_done;
+	enum btree_id		gc_cur_btree;
+	struct bkey		gc_cur_key;
 
 	/*
 	 * The allocation code needs gc_mark in struct bucket to be correct, but
@@ -628,7 +629,10 @@ struct cache_set {
 	/* Number of moving GC bios in flight */
 	struct semaphore	moving_in_flight;
 
-	struct btree		*root;
+	spinlock_t		btree_root_lock;
+	unsigned		btree_root_reserve;
+
+	struct btree		*btree_roots[BTREE_ID_NR];
 
 	unsigned		nr_uuids;
 	struct uuid_entry	*uuids;

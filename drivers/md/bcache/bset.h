@@ -392,12 +392,12 @@ static inline bool bch_cut_back(const struct bkey *where, struct bkey *k)
 
 static inline bool bch_ptr_invalid(struct btree_keys *b, const struct bkey *k)
 {
-	return b->key_invalid(b, k);
+	return b->key_invalid ? b->key_invalid(b, k) : false;
 }
 
 static inline bool bch_ptr_bad(struct btree_keys *b, const struct bkey *k)
 {
-	return b->key_bad(b, k);
+	return b->key_bad ? b->key_bad(b, k) : KEY_DELETED(k);
 }
 
 /* Keylists */

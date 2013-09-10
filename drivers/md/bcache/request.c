@@ -216,8 +216,6 @@ static void bio_csum(struct bio *bio, struct bkey *k)
 static void bch_data_insert_keys(struct closure *cl)
 {
 	struct data_insert_op *op = container_of(cl, struct data_insert_op, cl);
-	atomic_t *journal_ref = NULL;
-	struct bkey *replace_key = op->replace ? &op->replace_key : NULL;
 	int ret;
 
 	/*
@@ -232,21 +230,20 @@ static void bch_data_insert_keys(struct closure *cl)
 		closure_sync(&s->cl);
 #endif
 
-	if (!op->replace)
-		journal_ref = bch_journal(op->c, &op->insert_keys,
-					  op->flush_journal ? cl : NULL);
+	ret = !op->replace
+		? bch_btree_insert_journalled(op->c, BTREE_ID_EXTENTS,
+					      &op->insert_keys,
+					      op->flush_journal ? cl : NULL)
+		: bch_btree_insert(op->c, BTREE_ID_EXTENTS,
+				   &op->insert_keys, NULL,
+				   &op->replace_key);
 
-	ret = bch_btree_insert(op->c, &op->insert_keys,
-			       journal_ref, replace_key);
 	if (ret == -ESRCH) {
 		op->replace_collision = true;
 	} else if (ret) {
 		op->error		= -ENOMEM;
 		op->insert_data_done	= true;
 	}
-
-	if (journal_ref)
-		atomic_dec_bug(journal_ref);
 
 	if (!op->insert_data_done)
 		continue_at(cl, bch_data_insert_start, bcache_wq);
@@ -730,7 +727,7 @@ static void cache_lookup(struct closure *cl)
 
 	bch_btree_op_init(&s->op, -1);
 
-	ret = bch_btree_map_keys(&s->op, s->iop.c,
+	ret = bch_btree_map_keys(&s->op, s->iop.c, BTREE_ID_EXTENTS,
 				 &KEY(s->iop.inode, bio->bi_iter.bi_sector, 0),
 				 cache_lookup_fn, MAP_END_KEY);
 	if (ret == -EAGAIN)

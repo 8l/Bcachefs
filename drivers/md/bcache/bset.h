@@ -278,7 +278,7 @@ static inline bool bch_bkey_try_merge(struct btree_keys *b,
 struct btree_iter {
 	size_t size, used;
 #ifdef CONFIG_BCACHE_DEBUG
-	struct btree *b;
+	struct btree_keys *b;
 #endif
 	struct btree_iter_set {
 		struct bkey *k, *end;
@@ -292,16 +292,17 @@ struct bkey *bch_btree_iter_next_filter(struct btree_iter *,
 					struct btree_keys *, ptr_filter_fn);
 
 void bch_btree_iter_push(struct btree_iter *, struct bkey *, struct bkey *);
-struct bkey *bch_btree_iter_init(struct btree *, struct btree_iter *,
+struct bkey *bch_btree_iter_init(struct btree_keys *, struct btree_iter *,
 				 struct bkey *);
 
-struct bkey *__bch_bset_search(struct btree *, struct bset_tree *,
-			   const struct bkey *);
+struct bkey *__bch_bset_search(struct btree_keys *, struct bset_tree *,
+			       const struct bkey *);
 
 /*
  * Returns the first key that is strictly greater than search
  */
-static inline struct bkey *bch_bset_search(struct btree *b, struct bset_tree *t,
+static inline struct bkey *bch_bset_search(struct btree_keys *b,
+					   struct bset_tree *t,
 					   const struct bkey *search)
 {
 	return search ? __bch_bset_search(b, t, search) : t->data->start;

@@ -95,7 +95,7 @@ reread:		left = ca->sb.bucket_size - offset;
 				return ret;
 			}
 
-			blocks = set_blocks(j, ca->set);
+			blocks = set_blocks(j, block_bytes(ca->set));
 
 			while (!list_empty(list)) {
 				i = list_first_entry(list,
@@ -577,7 +577,8 @@ static void journal_write_unlocked(struct closure *cl)
 	struct cache *ca;
 	struct journal_write *w = c->journal.cur;
 	struct bkey *k = &c->journal.key;
-	unsigned i, sectors = set_blocks(w->data, c) * c->sb.block_size;
+	unsigned i, sectors = set_blocks(w->data, block_bytes(c)) *
+		c->sb.block_size;
 
 	struct bio *bio;
 	struct bio_list list;
@@ -585,7 +586,7 @@ static void journal_write_unlocked(struct closure *cl)
 
 	BUG_ON(journal_full(&c->journal));
 
-	c->journal.blocks_free -= set_blocks(w->data, c);
+	c->journal.blocks_free -= set_blocks(w->data, block_bytes(c));
 
 	w->data->btree_level = c->root->level;
 
@@ -680,7 +681,7 @@ static struct journal_write *journal_wait_for_write(struct cache_set *c,
 		struct journal_write *w = c->journal.cur;
 
 		sectors = __set_blocks(w->data, w->data->keys + nkeys,
-				       c) * c->sb.block_size;
+				       block_bytes(c)) * c->sb.block_size;
 
 		if (sectors <= min_t(size_t,
 				     c->journal.blocks_free * c->sb.block_size,

@@ -23,6 +23,7 @@
 #include "bcache.h"
 #include "btree.h"
 #include "debug.h"
+#include "extents.h"
 #include "writeback.h"
 
 #include <linux/slab.h>
@@ -887,6 +888,24 @@ out:
 	lock_set_subclass(&b->lock.dep_map, level + 1, _THIS_IP_);
 	b->level	= level;
 	b->parent	= (void *) ~0UL;
+
+	if (!b->level) {
+		/* Extents */
+		b->sort_cmp		= bch_extent_sort_cmp;
+		b->sort_fixup		= bch_extent_sort_fixup;
+		b->key_invalid		= bch_extent_invalid;
+		b->key_bad		= bch_extent_bad;
+		b->key_merge		= bch_extent_merge;
+		b->is_extents		= true;
+	} else {
+		/* Pointers to btree nodes */
+		b->sort_cmp		= bch_key_sort_cmp;
+		b->sort_fixup		= NULL;
+		b->key_invalid		= bch_btree_ptr_invalid;
+		b->key_bad		= bch_btree_ptr_bad;
+		b->key_merge		= NULL;
+		b->is_extents		= false;
+	}
 
 	mca_reinit(b);
 

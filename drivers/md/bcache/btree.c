@@ -260,7 +260,7 @@ static void bch_btree_node_read_done(struct btree *b)
 		if (i->seq == b->sets[0].data->seq)
 			goto err;
 
-	bch_btree_sort_and_fix_extents(b, iter);
+	bch_btree_sort_and_fix_extents(b, iter, &b->c->sort);
 
 	i = b->sets[0].data;
 	err = "short btree key";
@@ -465,7 +465,11 @@ void bch_btree_node_write(struct btree *b, struct closure *parent)
 	atomic_long_add(set_blocks(i, b->c) * b->c->sb.block_size,
 			&PTR_CACHE(b->c, &b->key, 0)->btree_sectors_written);
 
-	bch_btree_sort_lazy(b);
+	/* If not a leaf node, always sort */
+	if (b->level && b->nsets)
+		bch_btree_sort(b, &b->c->sort);
+	else
+		bch_btree_sort_lazy(b, &b->c->sort);
 
 	if (b->written < btree_blocks(b))
 		bch_bset_init_next(b);
@@ -1081,8 +1085,10 @@ err:
 static struct btree *btree_node_alloc_replacement(struct btree *b, bool wait)
 {
 	struct btree *n = bch_btree_node_alloc(b->c, b->level, wait);
-	if (!IS_ERR_OR_NULL(n))
-		bch_btree_sort_into(b, n);
+	if (!IS_ERR_OR_NULL(n)) {
+		bch_btree_sort_into(b, n, &b->c->sort);
+		bkey_copy_key(&n->key, &b->key);
+	}
 
 	return n;
 }

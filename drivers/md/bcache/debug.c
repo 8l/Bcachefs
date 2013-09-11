@@ -118,57 +118,6 @@ static void bch_dump_bucket(struct btree *b)
 	console_unlock();
 }
 
-void bch_btree_verify(struct btree *b, struct bset *new)
-{
-	struct btree *v = b->c->verify_data;
-	struct closure cl;
-	closure_init_stack(&cl);
-
-	if (!b->c->verify)
-		return;
-
-	closure_wait_event(&b->io.wait, &cl,
-			   atomic_read(&b->io.cl.remaining) == -1);
-
-	mutex_lock(&b->c->verify_lock);
-
-	bkey_copy(&v->key, &b->key);
-	v->written = 0;
-	v->level = b->level;
-
-	bch_btree_node_read(v);
-	closure_wait_event(&v->io.wait, &cl,
-			   atomic_read(&b->io.cl.remaining) == -1);
-
-	if (new->keys != v->sets[0].data->keys ||
-	    memcmp(new->start,
-		   v->sets[0].data->start,
-		   (void *) end(new) - (void *) new->start)) {
-		unsigned i, j;
-
-		console_lock();
-
-		printk(KERN_ERR "*** original memory node:\n");
-		for (i = 0; i <= b->nsets; i++)
-			dump_bset(b, b->sets[i].data);
-
-		printk(KERN_ERR "*** sorted memory node:\n");
-		dump_bset(b, new);
-
-		printk(KERN_ERR "*** on disk node:\n");
-		dump_bset(v, v->sets[0].data);
-
-		for (j = 0; j < new->keys; j++)
-			if (new->d[j] != v->sets[0].data->d[j])
-				break;
-
-		console_unlock();
-		panic("verify failed at %u\n", j);
-	}
-
-	mutex_unlock(&b->c->verify_lock);
-}
-
 void bch_data_verify(struct cached_dev *dc, struct bio *bio)
 {
 	char name[BDEVNAME_SIZE];

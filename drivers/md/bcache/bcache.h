@@ -627,11 +627,6 @@ struct cache_set {
 
 	struct btree		*root;
 
-#ifdef CONFIG_BCACHE_DEBUG
-	struct btree		*verify_data;
-	struct mutex		verify_lock;
-#endif
-
 	unsigned		nr_uuids;
 	struct uuid_entry	*uuids;
 	BKEY_PADDED(uuid_bucket);

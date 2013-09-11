@@ -764,11 +764,6 @@ void bch_btree_cache_free(struct cache_set *c)
 
 	mutex_lock(&c->bucket_lock);
 
-#ifdef CONFIG_BCACHE_DEBUG
-	if (c->verify_data)
-		list_move(&c->verify_data->list, &c->btree_cache);
-#endif
-
 	list_splice(&c->btree_cache_freeable,
 		    &c->btree_cache);
 
@@ -803,18 +798,6 @@ int bch_btree_cache_alloc(struct cache_set *c)
 
 	list_splice_init(&c->btree_cache,
 			 &c->btree_cache_freeable);
-
-#ifdef CONFIG_BCACHE_DEBUG
-	mutex_init(&c->verify_lock);
-
-	c->verify_data = mca_bucket_alloc(c, &ZERO_KEY, GFP_KERNEL);
-
-	if (c->verify_data &&
-	    c->verify_data->sets[0].data)
-		list_del_init(&c->verify_data->list);
-	else
-		c->verify_data = NULL;
-#endif
 
 	c->shrink.count_objects = bch_mca_count;
 	c->shrink.scan_objects = bch_mca_scan;

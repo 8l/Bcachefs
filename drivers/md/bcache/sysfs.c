@@ -515,7 +515,6 @@ lock_root:
 		    c->congested_write_threshold_us);
 
 	sysfs_print(active_journal_entries,	fifo_used(&c->journal.pin));
-	sysfs_printf(verify,			"%i", c->verify);
 	sysfs_printf(key_merging_disabled,	"%i", c->key_merging_disabled);
 	sysfs_printf(expensive_debug_checks,
 		     "%i", c->expensive_debug_checks);
@@ -599,7 +598,6 @@ STORE(__bch_cache_set)
 		c->error_decay = strtoul_or_return(buf) / 88;
 
 	sysfs_strtoul(journal_delay_ms,		c->journal_delay_ms);
-	sysfs_strtoul(verify,			c->verify);
 	sysfs_strtoul(key_merging_disabled,	c->key_merging_disabled);
 	sysfs_strtoul(expensive_debug_checks,	c->expensive_debug_checks);
 	sysfs_strtoul(gc_always_rewrite,	c->gc_always_rewrite);
@@ -674,7 +672,6 @@ static struct attribute *bch_cache_set_internal_files[] = {
 	&sysfs_trigger_gc,
 	&sysfs_prune_cache,
 #ifdef CONFIG_BCACHE_DEBUG
-	&sysfs_verify,
 	&sysfs_key_merging_disabled,
 	&sysfs_expensive_debug_checks,
 #endif

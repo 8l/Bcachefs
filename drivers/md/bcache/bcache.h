@@ -727,9 +727,6 @@ static inline unsigned local_clock_us(void)
 #define __set_blocks(i, k, c)	DIV_ROUND_UP(__set_bytes(i, k), block_bytes(c))
 #define set_blocks(i, c)	__set_blocks(i, (i)->keys, c)
 
-#define node(i, j)		((struct bkey *) ((i)->d + (j)))
-#define end(i)			node(i, (i)->keys)
-
 #define index(i, b)							\
 	((size_t) (((void *) i - (void *) (b)->sets[0].data) /		\
 		   block_bytes(b->c)))
@@ -798,18 +795,14 @@ static inline bool ptr_available(struct cache_set *c, const struct bkey *k,
 
 /* Btree key macros */
 
-static inline void bkey_init(struct bkey *k)
-{
-	*k = ZERO_KEY;
-}
-
 /*
  * This is used for various on disk data structures - cache_sb, prio_set, bset,
  * jset: The checksum is _always_ the first 8 bytes of these structs
  */
 #define csum_set(i)							\
 	bch_crc64(((void *) (i)) + sizeof(uint64_t),			\
-	      ((void *) end(i)) - (((void *) (i)) + sizeof(uint64_t)))
+		  ((void *) bset_bkey_last(i)) -			\
+		  (((void *) (i)) + sizeof(uint64_t)))
 
 /* Error handling macros */
 

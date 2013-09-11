@@ -9,7 +9,6 @@
 #include "bcache.h"
 #include "btree.h"
 #include "debug.h"
-#include "extents.h"
 #include "request.h"
 #include "writeback.h"
 
@@ -375,9 +374,11 @@ static void uuid_io(struct cache_set *c, unsigned long rw,
 
 static char *uuid_read(struct cache_set *c, struct jset *j, struct closure *cl)
 {
-	struct bkey *k = &j->uuid_bucket;
+	int level;
+	struct bkey *k;
 
-	if (__bch_btree_ptr_invalid(c, k))
+	k = bch_journal_find_btree_root(c, j, BTREE_ID_UUIDS, &level);
+	if (!k)
 		return "bad uuid pointer";
 
 	bkey_copy(&c->uuid_bucket, k);
@@ -1527,6 +1528,7 @@ static void run_cache_set(struct cache_set *c)
 		LIST_HEAD(journal);
 		struct bkey *k;
 		struct jset *j;
+		int btree_level;
 
 		err = "cannot allocate memory for journal";
 		if (bch_journal_read(c, &journal))
@@ -1550,14 +1552,15 @@ static void run_cache_set(struct cache_set *c)
 		 * sooner we could avoid journal replay.
 		 */
 
-		k = &j->btree_root;
+		k = bch_journal_find_btree_root(c, j, BTREE_ID_EXTENTS,
+						&btree_level);
 
 		err = "bad btree root";
-		if (__bch_btree_ptr_invalid(c, k))
+		if (!k)
 			goto err;
 
 		err = "error reading btree root";
-		c->root = bch_btree_node_get(c, k, j->btree_level, true);
+		c->root = bch_btree_node_get(c, k, btree_level, true);
 		if (IS_ERR_OR_NULL(c->root))
 			goto err;
 

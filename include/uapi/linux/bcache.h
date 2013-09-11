@@ -259,7 +259,31 @@ static inline __u64 bset_magic(struct cache_sb *sb)
 
 #define BCACHE_JSET_VERSION_UUIDv1	1
 #define BCACHE_JSET_VERSION_UUID	1	/* Always latest UUID format */
-#define BCACHE_JSET_VERSION		1
+#define BCACHE_JSET_VERSION_JKEYS	2
+#define BCACHE_JSET_VERSION		2
+
+enum btree_id {
+	BTREE_ID_EXTENTS		= 0,
+	BTREE_ID_INODES			= 1,
+	BTREE_ID_DIRS			= 2,
+	BTREE_ID_NR			= 3,
+
+	BTREE_ID_UUIDS			= 255,
+};
+
+struct jset_keys {
+	__u16			keys;
+	__u8			btree_id;
+	__u8			level;
+	__u32			flags;
+
+	union {
+		struct bkey	start[0];
+		__u64		d[0];
+	};
+};
+
+BITMASK(JKEYS_BTREE_ROOT, struct jset_keys, flags, 0, 1);
 
 struct jset {
 	__u64			csum;
@@ -270,15 +294,10 @@ struct jset {
 
 	__u64			last_seq;
 
-	BKEY_PADDED(uuid_bucket);
-	BKEY_PADDED(btree_root);
-	__u16			btree_level;
-	__u16			pad[3];
-
 	__u64			prio_bucket[MAX_CACHES_PER_SET];
 
 	union {
-		struct bkey	start[0];
+		struct jset_keys start[0];
 		__u64		d[0];
 	};
 };
@@ -357,6 +376,28 @@ KEY_FIELD(KEY0_DIRTY,		high, 36, 1)
 
 KEY_FIELD(KEY0_SIZE,		high, 20, 16)
 KEY_FIELD(KEY0_INODE,		high, 0,  20)
+
+struct jset_v0 {
+	__u64			csum;
+	__u64			magic;
+	__u64			seq;
+	__u32			version;
+	__u32			keys;
+
+	__u64			last_seq;
+
+	BKEY_PADDED(uuid_bucket);
+	BKEY_PADDED(btree_root);
+	__u16			btree_level;
+	__u16			pad[3];
+
+	__u64			prio_bucket[MAX_CACHES_PER_SET];
+
+	union {
+		struct bkey	start[0];
+		__u64		d[0];
+	};
+};
 
 /* UUIDS - per backing device/flash only volume metadata */
 

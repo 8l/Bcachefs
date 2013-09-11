@@ -75,6 +75,14 @@
  * nodes that are pinning the oldest journal entries first.
  */
 
+#define JSET_RESERVE		32
+
+static inline struct jset_keys *jset_keys_next(struct jset_keys *j)
+{
+	return (void *) (&j->d[j->keys]);
+
+}
+
 /*
  * Only used for holding the journal entries we read in btree_journal_read()
  * during cache_registration
@@ -163,6 +171,9 @@ struct closure;
 struct cache_set;
 struct btree_op;
 struct keylist;
+
+struct bkey *bch_journal_find_btree_root(struct cache_set *, struct jset *,
+					 enum btree_id, int *);
 
 atomic_t *bch_journal(struct cache_set *, struct keylist *, struct closure *);
 void bch_journal_next(struct journal *);

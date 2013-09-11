@@ -26,7 +26,7 @@ int bch_keylist_realloc(struct keylist *l, int nptrs, struct cache_set *c)
 	 * bio_insert() and bio_invalidate() will insert the keys created so far
 	 * and finish the rest when the keylist is empty.
 	 */
-	if (newsize * sizeof(uint64_t) > block_bytes(c) - sizeof(struct jset))
+	if ((newsize + JSET_RESERVE) * sizeof(uint64_t) > block_bytes(c) - sizeof(struct jset))
 		return -ENOMEM;
 
 	newsize = roundup_pow_of_two(newsize);

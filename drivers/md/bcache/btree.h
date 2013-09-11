@@ -201,7 +201,7 @@ void bkey_put(struct cache_set *c, struct bkey *k);
 		hlist_for_each_entry_rcu((b), (c)->bucket_hash + iter, hash)
 
 #define for_each_key_filter(b, k, iter, filter)				\
-	for (bch_btree_iter_init((b), (iter), NULL);			\
+	for (bch_btree_iter_init((&b->keys), (iter), NULL);		\
 	     ((k) = bch_btree_iter_next_filter((iter), &(b)->keys, filter));)
 
 #define for_each_key(b, k, iter)					\

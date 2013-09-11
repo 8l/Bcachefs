@@ -178,7 +178,7 @@ int __bch_count_data(struct btree *b)
 	struct bkey *k;
 
 	if (!b->level)
-		for_each_key(b, k, &iter)
+		for_each_key(&b->keys, k, &iter)
 			ret += KEY_SIZE(k);
 	return ret;
 }
@@ -190,7 +190,7 @@ void __bch_check_keys(struct btree *b, const char *fmt, ...)
 	struct btree_iter iter;
 	const char *err;
 
-	for_each_key(b, k, &iter) {
+	for_each_key(&b->keys, k, &iter) {
 		if (!b->level) {
 			err = "Keys out of order";
 			if (p && bkey_cmp(&START_KEY(p), &START_KEY(k)) > 0)
@@ -230,6 +230,8 @@ bug:
 
 void bch_btree_iter_next_check(struct btree_iter *iter)
 {
+	// XXX:
+#if 0
 	struct bkey *k = iter->data->k, *next = bkey_next(k);
 
 	if (next < iter->data->end &&
@@ -237,6 +239,7 @@ void bch_btree_iter_next_check(struct btree_iter *iter)
 		bch_dump_bucket(iter->b);
 		panic("Key skipped backwards\n");
 	}
+#endif
 }
 
 #endif

@@ -1,7 +1,9 @@
 #ifndef _BCACHE_BSET_H
 #define _BCACHE_BSET_H
 
-#include <linux/slab.h>
+#include <linux/bcache.h>
+#include <linux/kernel.h>
+#include <linux/types.h>
 
 #include "util.h"
 
@@ -144,7 +146,6 @@
  * first key in that range of bytes again.
  */
 
-struct btree;
 struct btree_keys;
 struct btree_iter;
 struct btree_iter_set;
@@ -184,25 +185,33 @@ struct bset_tree {
 	struct bset		*data;
 };
 
-struct btree_keys {
-	bool			(*sort_cmp)(struct btree_iter_set,
-					    struct btree_iter_set);
-	void			(*sort_fixup)(struct btree_iter *);
-	bool			(*key_invalid)(struct btree_keys *,
-					       const struct bkey *);
-	bool			(*key_bad)(struct btree_keys *,
-					   const struct bkey *);
-	bool			(*key_merge)(struct btree_keys *,
-					     struct bkey *, struct bkey *);
-	uint8_t			page_order;
-	uint8_t			nsets;
-	unsigned		last_set_unwritten:1;
+struct btree_keys_ops {
+	bool		(*sort_cmp)(struct btree_iter_set,
+				    struct btree_iter_set);
+	void		(*sort_fixup)(struct btree_iter *);
+	bool		(*insert_fixup)(struct btree_keys *, struct bkey *,
+					struct btree_iter *, struct bkey *);
+
+	bool		(*key_invalid)(struct btree_keys *,
+				       const struct bkey *);
+	bool		(*key_bad)(struct btree_keys *, const struct bkey *);
+	bool		(*key_merge)(struct btree_keys *,
+				     struct bkey *, struct bkey *);
+	void		(*key_to_text)(char *, size_t, const struct bkey *);
+	void		(*key_dump)(struct btree_keys *, const struct bkey *);
 
 	/*
 	 * Only used for deciding whether to use START_KEY(k) or just the key
 	 * itself in a couple places
 	 */
-	unsigned		is_extents:1;
+	bool		is_extents;
+};
+
+struct btree_keys {
+	const struct btree_keys_ops	*ops;
+	uint8_t			page_order;
+	uint8_t			nsets;
+	unsigned		last_set_unwritten:1;
 
 	/*
 	 * Sets of sorted keys - the real btree node - plus a binary search tree
@@ -259,19 +268,19 @@ void bch_btree_keys_free(struct btree_keys *);
 int bch_btree_keys_alloc(struct btree_keys *, unsigned, gfp_t);
 
 void bch_bset_fix_invalidated_key(struct btree_keys *, struct bkey *);
+void bch_bset_build_written_tree(struct btree_keys *);
 void bch_bset_init_next(struct btree_keys *, struct bset *, uint64_t);
 void bch_bset_insert(struct btree_keys *, struct bkey *, struct bkey *);
+unsigned bch_btree_insert_key(struct btree_keys *, struct bkey *,
+			      struct bkey *);
 
-/*
- * Tries to merge l and r: l should be lower than r
- * Returns true if we were able to merge. If we did merge, l will be the merged
- * key, r will be untouched.
- */
-static inline bool bch_bkey_try_merge(struct btree_keys *b,
-				      struct bkey *l, struct bkey *r)
-{
-	return b->key_merge ?  b->key_merge(b, l, r) : false;
-}
+enum {
+	BTREE_INSERT_STATUS_NO_INSERT = 0,
+	BTREE_INSERT_STATUS_INSERT,
+	BTREE_INSERT_STATUS_BACK_MERGE,
+	BTREE_INSERT_STATUS_OVERWROTE,
+	BTREE_INSERT_STATUS_FRONT_MERGE,
+};
 
 /* Btree key iteration */
 
@@ -308,6 +317,14 @@ static inline struct bkey *bch_bset_search(struct btree_keys *b,
 	return search ? __bch_bset_search(b, t, search) : t->data->start;
 }
 
+#define for_each_key_filter(b, k, iter, filter)				\
+	for (bch_btree_iter_init((b), (iter), NULL);		\
+	     ((k) = bch_btree_iter_next_filter((iter), (b), filter));)
+
+#define for_each_key(b, k, iter)					\
+	for (bch_btree_iter_init((b), (iter), NULL);			\
+	     ((k) = bch_btree_iter_next(iter));)
+
 /* Sorting */
 
 struct bset_sort_state {
@@ -325,15 +342,15 @@ struct bset_sort_state {
 };
 
 int bch_bset_sort_state_init(struct bset_sort_state *, unsigned);
-void bch_btree_sort_lazy(struct btree *, struct bset_sort_state *);
-void bch_btree_sort_into(struct btree *, struct btree *,
+void bch_btree_sort_lazy(struct btree_keys *, struct bset_sort_state *);
+void bch_btree_sort_into(struct btree_keys *, struct btree_keys *,
 			 struct bset_sort_state *);
 void bch_btree_sort_and_fix_extents(struct btree_keys *, struct btree_iter *,
 				    struct bset_sort_state *);
-void bch_btree_sort_partial(struct btree *, unsigned,
+void bch_btree_sort_partial(struct btree_keys *, unsigned,
 			    struct bset_sort_state *);
 
-static inline void bch_btree_sort(struct btree *b,
+static inline void bch_btree_sort(struct btree_keys *b,
 				  struct bset_sort_state *state)
 {
 	bch_btree_sort_partial(b, 0, state);
@@ -392,12 +409,12 @@ static inline bool bch_cut_back(const struct bkey *where, struct bkey *k)
 
 static inline bool bch_ptr_invalid(struct btree_keys *b, const struct bkey *k)
 {
-	return b->key_invalid ? b->key_invalid(b, k) : false;
+	return b->ops->key_invalid ? b->ops->key_invalid(b, k) : false;
 }
 
 static inline bool bch_ptr_bad(struct btree_keys *b, const struct bkey *k)
 {
-	return b->key_bad ? b->key_bad(b, k) : KEY_DELETED(k);
+	return b->ops->key_bad ? b->ops->key_bad(b, k) : KEY_DELETED(k);
 }
 
 /* Keylists */
@@ -464,8 +481,6 @@ void bch_keylist_pop_front(struct keylist *);
 int __bch_keylist_realloc(struct keylist *, int);
 
 struct cache_set;
-const char *bch_ptr_status(struct cache_set *, const struct bkey *);
-
 int bch_bset_print_stats(struct cache_set *, char *);
 
 #endif

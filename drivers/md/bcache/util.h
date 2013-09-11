@@ -2,6 +2,7 @@
 #ifndef _BCACHE_UTIL_H
 #define _BCACHE_UTIL_H
 
+#include <linux/blkdev.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/llist.h>

@@ -1,25 +1,14 @@
 #ifndef _BCACHE_EXTENTS_H
 #define _BCACHE_EXTENTS_H
 
+extern const struct btree_keys_ops btree_keys_ops;
+extern const struct btree_keys_ops generic_keys_ops;
+extern const struct btree_keys_ops extent_keys_ops;
+
 struct bkey;
-struct btree_keys;
-struct btree_iter;
-struct btree_iter_set;
 struct cache_set;
 
-bool bch_key_sort_cmp(struct btree_iter_set, struct btree_iter_set);
-void bch_key_sort_fixup(struct btree_iter *);
-
-void bch_btree_ptr_sort_fixup(struct btree_iter *);
-
-bool __bch_btree_ptr_invalid(struct cache_set *, const struct bkey *);
-bool bch_btree_ptr_invalid(struct btree_keys *, const struct bkey *);
-bool bch_btree_ptr_bad(struct btree_keys *, const struct bkey *);
-
-bool bch_extent_sort_cmp(struct btree_iter_set, struct btree_iter_set);
-void bch_extent_sort_fixup(struct btree_iter *);
-bool bch_extent_invalid(struct btree_keys *, const struct bkey *);
-bool bch_extent_bad(struct btree_keys *, const struct bkey *);
-bool bch_extent_merge(struct btree_keys *, struct bkey *, struct bkey *);
+void bch_bkey_to_text(char *buf, size_t size, const struct bkey *k);
+bool __bch_btree_ptr_invalid(struct cache_set *c, const struct bkey *k);
 
 #endif /* _BCACHE_EXTENTS_H */

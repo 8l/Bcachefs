@@ -425,7 +425,7 @@ lock_root:
 			rw_lock(false, b, b->level);
 		} while (b != c->btree_roots[BTREE_ID_EXTENTS]);
 
-		for_each_key_filter(b, k, &iter, bch_ptr_bad)
+		for_each_key_filter(&b->keys, k, &iter, bch_ptr_bad)
 			bytes += bkey_bytes(k);
 
 		rw_unlock(false, b);

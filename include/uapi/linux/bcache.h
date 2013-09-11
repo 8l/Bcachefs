@@ -333,12 +333,18 @@ static inline __u64 bset_magic(struct cache_sb *sb)
 #define BCACHE_JSET_VERSION_JKEYS	2
 #define BCACHE_JSET_VERSION		2
 
+/* This enum is really the type of the pointer (in a key/ptr tuple) */
 enum btree_id {
 	BTREE_ID_EXTENTS		= 0,
 	BTREE_ID_INODES			= 1,
 	BTREE_ID_DIRS			= 2,
 	BTREE_ID_NR			= 3,
 
+	/* Pseudo btree types: */
+
+	/* BTREE_ID_BTREE = pointers to btree nodes */
+	BTREE_ID_BTREE			= 254,
+	/* Old UUID format */
 	BTREE_ID_UUIDS			= 255,
 };
 

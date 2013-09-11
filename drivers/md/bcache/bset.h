@@ -382,14 +382,6 @@ int bch_keylist_realloc(struct keylist *, int, struct cache_set *);
 
 struct cache_set;
 const char *bch_ptr_status(struct cache_set *, const struct bkey *);
-bool bch_btree_ptr_invalid(struct cache_set *, const struct bkey *);
-bool bch_extent_ptr_invalid(struct cache_set *, const struct bkey *);
-bool bch_btree_ptr_bad(struct btree *, const struct bkey *);
-bool bch_extent_ptr_bad(struct btree *, const struct bkey *);
-
-bool bch_ptr_bad(struct btree *, const struct bkey *);
-
-bool bch_bkey_try_merge(struct btree *, struct bkey *, struct bkey *);
 
 int bch_bset_print_stats(struct cache_set *, char *);
 

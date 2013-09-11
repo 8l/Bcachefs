@@ -508,7 +508,7 @@ static void make_bfloat(struct bset_tree *t, unsigned j)
 		: tree_to_prev_bkey(t, j >> ffs(j));
 
 	struct bkey *r = is_power_of_2(j + 1)
-		? node(t->data, t->data->keys - bkey_u64s(&t->end))
+		? bset_bkey_idx(t->data, t->data->keys - bkey_u64s(&t->end))
 		: tree_to_bkey(t, j >> (ffz(j) + 1));
 
 	BUG_ON(m < l || m > r);
@@ -567,7 +567,7 @@ static void bset_build_written_tree(struct btree *b)
 	bset_alloc_tree(b, t);
 
 	t->size = min_t(unsigned,
-			bkey_to_cacheline(t, end(t->data)),
+			bkey_to_cacheline(t, bset_bkey_last(t->data)),
 			b->sets->tree + bset_tree_space(b) - t->tree);
 
 	if (t->size < 2) {
@@ -590,7 +590,7 @@ static void bset_build_written_tree(struct btree *b)
 		t->tree[j].m = bkey_to_cacheline_offset(k);
 	}
 
-	while (bkey_next(k) != end(t->data))
+	while (bkey_next(k) != bset_bkey_last(t->data))
 		k = bkey_next(k);
 
 	t->end = *k;
@@ -608,7 +608,7 @@ void bch_bset_fix_invalidated_key(struct btree *b, struct bkey *k)
 	unsigned inorder, j = 1;
 
 	for (t = b->sets; t <= &b->sets[b->nsets]; t++)
-		if (k < end(t->data))
+		if (k < bset_bkey_last(t->data))
 			goto found_set;
 
 	BUG();
@@ -621,7 +621,7 @@ found_set:
 	if (k == t->data->start)
 		goto fix_left;
 
-	if (bkey_next(k) == end(t->data)) {
+	if (bkey_next(k) == bset_bkey_last(t->data)) {
 		t->end = *k;
 		goto fix_right;
 	}
@@ -687,7 +687,7 @@ void bch_bset_fix_lookup_table(struct btree *b, struct bkey *k)
 	/* Possibly add a new entry to the end of the lookup table */
 
 	for (k = table_to_bkey(t, t->size - 1);
-	     k != end(t->data);
+	     k != bset_bkey_last(t->data);
 	     k = bkey_next(k))
 		if (t->size == bkey_to_cacheline(t, k)) {
 			t->prev[t->size] = bkey_to_cacheline_offset(k);
@@ -723,7 +723,7 @@ static struct bset_search_iter bset_search_write_set(struct btree *b,
 	unsigned li = 0, ri = t->size;
 
 	BUG_ON(!b->nsets &&
-	       t->size < bkey_to_cacheline(t, end(t->data)));
+	       t->size < bkey_to_cacheline(t, bset_bkey_last(t->data)));
 
 	while (li + 1 != ri) {
 		unsigned m = (li + ri) >> 1;
@@ -736,7 +736,7 @@ static struct bset_search_iter bset_search_write_set(struct btree *b,
 
 	return (struct bset_search_iter) {
 		table_to_bkey(t, li),
-		ri < t->size ? table_to_bkey(t, ri) : end(t->data)
+		ri < t->size ? table_to_bkey(t, ri) : bset_bkey_last(t->data)
 	};
 }
 
@@ -788,7 +788,7 @@ static struct bset_search_iter bset_search_tree(struct btree *b,
 			f = &t->tree[inorder_next(j, t->size)];
 			r = cacheline_to_bkey(t, inorder, f->m);
 		} else
-			r = end(t->data);
+			r = bset_bkey_last(t->data);
 	} else {
 		r = cacheline_to_bkey(t, inorder, f->m);
 
@@ -824,7 +824,7 @@ struct bkey *__bch_bset_search(struct btree *b, struct bset_tree *t,
 
 	if (unlikely(!t->size)) {
 		i.l = t->data->start;
-		i.r = end(t->data);
+		i.r = bset_bkey_last(t->data);
 	} else if (bset_written(b, t)) {
 		/*
 		 * Each node in the auxiliary search tree covers a certain range
@@ -834,7 +834,7 @@ struct bkey *__bch_bset_search(struct btree *b, struct bset_tree *t,
 		 */
 
 		if (unlikely(bkey_cmp(search, &t->end) >= 0))
-			return end(t->data);
+			return bset_bkey_last(t->data);
 
 		if (unlikely(bkey_cmp(search, t->data->start) < 0))
 			return t->data->start;
@@ -850,7 +850,7 @@ struct bkey *__bch_bset_search(struct btree *b, struct bset_tree *t,
 			  inorder_to_tree(bkey_to_cacheline(t, i.l), t)),
 				search) > 0);
 
-		BUG_ON(i.r != end(t->data) &&
+		BUG_ON(i.r != bset_bkey_last(t->data) &&
 		       bkey_cmp(i.r, search) <= 0);
 	}
 
@@ -905,7 +905,7 @@ struct bkey *__bch_btree_iter_init(struct btree *b, struct btree_iter *iter,
 
 	for (; start <= &b->sets[b->nsets]; start++) {
 		ret = bch_bset_search(b, start, search);
-		bch_btree_iter_push(iter, ret, end(start->data));
+		bch_btree_iter_push(iter, ret, bset_bkey_last(start->data));
 	}
 
 	return ret;
@@ -1059,7 +1059,7 @@ static void __btree_sort(struct btree *b, struct btree_iter *iter,
 	} else {
 		b->sets[start].data->keys = out->keys;
 		memcpy(b->sets[start].data->start, out->start,
-		       (void *) end(out) - (void *) out->start);
+		       (void *) bset_bkey_last(out) - (void *) out->start);
 	}
 
 	if (out == b->c->sort)

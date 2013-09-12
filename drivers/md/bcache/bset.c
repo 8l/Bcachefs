@@ -496,6 +496,7 @@ static inline uint64_t shrd128(uint64_t high, uint64_t low, uint8_t shift)
 	low  |= (high << 1) << (63U - shift);
 #endif
 	return low;
+	//return (low >> shift) | (high << 1) << (63U - shift);
 }
 
 static inline unsigned bfloat_mantissa(const struct bkey *k,
@@ -503,6 +504,15 @@ static inline unsigned bfloat_mantissa(const struct bkey *k,
 {
 	const uint64_t *p = &k->low - (f->exponent >> 6);
 	return shrd128(p[-1], p[0], f->exponent & 63) & BKEY_MANTISSA_MASK;
+}
+
+static inline unsigned bfloat_mantissa_le(const u64 *k,
+					  struct bkey_float *f)
+{
+	const u32 *p = (u32 *) k + (f->exponent >> 5);
+	u64 w = p[0] | ((u64) p[1] << 32);
+
+	return (le64_to_cpu(w) >> (f->exponent & 31)) & BKEY_MANTISSA_MASK;
 }
 
 static void make_bfloat(struct bset_tree *t, unsigned j)
@@ -755,6 +765,10 @@ static struct bset_search_iter bset_search_tree(struct btree *b,
 	struct bkey *l, *r;
 	struct bkey_float *f;
 	unsigned inorder, j, n = 1;
+	u64 le[2];
+
+	le[0]	= cpu_to_le64(search->low);
+	le[1]	= cpu_to_le64(search->high);
 
 	do {
 		unsigned p = n << 4;
@@ -776,7 +790,7 @@ static struct bset_search_iter bset_search_tree(struct btree *b,
 		if (likely(f->exponent != 127))
 			n = j * 2 + (((unsigned)
 				      (f->mantissa -
-				       bfloat_mantissa(search, f))) >> 31);
+				       bfloat_mantissa_le(le, f))) >> 31);
 		else
 			n = (bkey_cmp(tree_to_bkey(t, j), search) > 0)
 				? j * 2
@@ -850,6 +864,9 @@ struct bkey *__bch_bset_search(struct btree *b, struct bset_tree *t,
 		i = bset_search_tree(b, t, search);
 	} else
 		i = bset_search_write_set(b, t, search);
+
+		i = bset_search_write_set(t, search);
+	}
 
 	if (expensive_debug_checks(b->c)) {
 		BUG_ON(bset_written(b, t) &&

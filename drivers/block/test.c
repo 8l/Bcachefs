@@ -277,7 +277,7 @@ out:
 	kfree(path);
 	return ret;
 err:
-	if (dev && dev->bdev)
+	if (dev && !IS_ERR(dev->bdev))
 		blkdev_put(dev->bdev, FMODE_READ|FMODE_WRITE|FMODE_EXCL);
 	kfree(dev);
 	goto out;

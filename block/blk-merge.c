@@ -446,38 +446,6 @@ static bool req_no_special_merge(struct request *req)
 	return !q->mq_ops && req->special;
 }
 
-static int ll_merge_requests_fn(struct request_queue *q, struct request *req,
-				struct request *next)
-{
-	int total_phys_segments;
-
-	/*
-	 * First check if the either of the requests are re-queued
-	 * requests.  Can't merge them if they are.
-	 */
-	if (req_no_special_merge(req) || req_no_special_merge(next))
-		return 0;
-
-	/*
-	 * Will it become too large?
-	 */
-	if ((blk_rq_sectors(req) + blk_rq_sectors(next)) >
-	    blk_rq_get_max_sectors(req))
-		return 0;
-
-	total_phys_segments = req->nr_phys_segments + next->nr_phys_segments;
-
-	if (total_phys_segments > queue_max_segments(q))
-		return 0;
-
-	if (blk_integrity_rq(req) && blk_integrity_merge_rq(q, req, next))
-		return 0;
-
-	/* Merge is OK... */
-	req->nr_phys_segments = total_phys_segments;
-	return 1;
-}
-
 /**
  * blk_rq_set_mixed_merge - mark a request as mixed merge
  * @rq: request to mark as mixed merge
@@ -531,6 +499,8 @@ static void blk_account_io_merge(struct request *req)
 static int attempt_merge(struct request_queue *q, struct request *req,
 			  struct request *next)
 {
+	unsigned total_phys_segments;
+
 	if (!rq_mergeable(req) || !rq_mergeable(next))
 		return 0;
 
@@ -543,6 +513,13 @@ static int attempt_merge(struct request_queue *q, struct request *req,
 	if (blk_rq_pos(req) + blk_rq_sectors(req) != blk_rq_pos(next))
 		return 0;
 
+	/*
+	 * check if the either of the requests are re-queued
+	 * requests.  Can't merge them if they are.
+	 */
+	if (req->special || next->special)
+		return 0;
+
 	if (rq_data_dir(req) != rq_data_dir(next)
 	    || req->rq_disk != next->rq_disk
 	    || req_no_special_merge(next))
@@ -553,13 +530,21 @@ static int attempt_merge(struct request_queue *q, struct request *req,
 		return 0;
 
 	/*
-	 * If we are allowed to merge, then append bio list
-	 * from next to rq and release next. merge_requests_fn
-	 * will have updated segment counts, update sector
-	 * counts here.
+	 * Will it become too large?
 	 */
-	if (!ll_merge_requests_fn(q, req, next))
+	if ((blk_rq_sectors(req) + blk_rq_sectors(next)) >
+	    blk_rq_get_max_sectors(req))
 		return 0;
+
+	total_phys_segments = req->nr_phys_segments + next->nr_phys_segments;
+	if (total_phys_segments > queue_max_segments(q))
+		return 0;
+
+	if (blk_integrity_rq(req) && blk_integrity_merge_rq(q, req, next))
+		return 0;
+
+	/* Merge is OK... */
+	req->nr_phys_segments = total_phys_segments;
 
 	/*
 	 * If failfast settings disagree or any of the two is already

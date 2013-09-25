@@ -9,6 +9,57 @@
 
 #include "blk.h"
 
+static unsigned int __blk_max_segment(struct request_queue *q, struct bio_vec *bv)
+{
+	unsigned len = bv->bv_len;
+
+	len = min_t(unsigned, len, blk_queue_cluster(q)
+		    ? queue_max_segment_size(q)
+		    : PAGE_SIZE);
+
+	len = min_t(unsigned, len,
+		    queue_segment_boundary(q) + 1 -
+		    (bvec_to_phys(bv) & queue_segment_boundary(q)));
+
+	return len;
+}
+
+#ifdef CONFIG_XEN
+unsigned int blk_max_segment(struct request_queue *q, struct bio_vec *bv)
+{
+	unsigned len = __blk_max_segment(q, bv);
+	unsigned ret;
+	struct page *next, *prev;
+
+	if (!xen_domain())
+		return len;
+
+	ret = min_t(unsigned, len, PAGE_SIZE - bv->bv_offset);
+	prev = bv->bv_page;
+
+	while (ret < len) {
+		next = nth_page(prev, 1);
+
+		if (!xen_page_phys_mergeable(prev, next))
+			break;
+
+		ret += min_t(unsigned, len - ret, PAGE_SIZE);
+		prev = next;
+	}
+
+	return ret;
+}
+
+#else
+
+unsigned int blk_max_segment(struct request_queue *q, struct bio_vec *bv)
+{
+	return __blk_max_segment(q, bv);
+}
+
+#endif
+EXPORT_SYMBOL(blk_max_segment);
+
 static struct bio *blk_bio_discard_split(struct request_queue *q,
 					 struct bio *bio,
 					 struct bio_set *bs)

@@ -58,13 +58,6 @@ struct bio {
 	 */
 	unsigned int		bi_phys_segments;
 
-	/*
-	 * To keep track of the max segment size, we account for the
-	 * sizes of the first and last mergeable segments in this bio.
-	 */
-	unsigned int		bi_seg_front_size;
-	unsigned int		bi_seg_back_size;
-
 	atomic_t		bi_remaining;
 
 	bio_end_io_t		*bi_end_io;

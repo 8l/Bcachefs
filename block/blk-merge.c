@@ -118,38 +118,24 @@ static struct bio *blk_bio_segment_split(struct request_queue *q,
 					 struct bio_set *bs)
 {
 	struct bio *split;
-	struct bio_vec bv, bvprv;
-	struct bvec_iter iter;
-	unsigned seg_size = 0, nsegs = 0, sectors = 0;
-	int prev = 0;
+	struct bvec_iter iter = bio->bi_iter;
+	unsigned nsegs = 0;
 
-	bio_for_each_segment(bv, bio, iter) {
-		sectors += bv.bv_len >> 9;
+	while (iter.bi_size) {
+		struct bio_vec bv = bio_iter_iovec(bio, iter);
+		unsigned remaining = (queue_max_sectors(q) << 9) -
+			(bio->bi_iter.bi_size - iter.bi_size);
 
-		if (sectors > queue_max_sectors(q))
+		if (bv.bv_len > remaining) {
+			bio_advance_iter(bio, &iter, remaining);
 			goto split;
-
-		if (prev && blk_queue_cluster(q)) {
-			if (seg_size + bv.bv_len > queue_max_segment_size(q))
-				goto new_segment;
-			if (!BIOVEC_PHYS_MERGEABLE(&bvprv, &bv))
-				goto new_segment;
-			if (!BIOVEC_SEG_BOUNDARY(q, &bvprv, &bv))
-				goto new_segment;
-
-			seg_size += bv.bv_len;
-			bvprv = bv;
-			prev = 1;
-			continue;
 		}
-new_segment:
+
 		if (nsegs == queue_max_segments(q))
 			goto split;
 
 		nsegs++;
-		bvprv = bv;
-		prev = 1;
-		seg_size = bv.bv_len;
+		bio_advance_iter(bio, &iter, blk_max_segment(q, &bv));
 	}
 
 	return NULL;
@@ -190,11 +176,7 @@ EXPORT_SYMBOL(blk_queue_split);
 static unsigned int __blk_recalc_rq_segments(struct request_queue *q,
 					     struct bio *bio)
 {
-	struct bio_vec bv, bvprv = { NULL };
-	int cluster, prev = 0;
-	unsigned int seg_size, nr_phys_segs;
-	struct bio *fbio, *bbio;
-	struct bvec_iter iter;
+	unsigned nr_phys_segs = 0;
 
 	if (!bio)
 		return 0;
@@ -209,49 +191,27 @@ static unsigned int __blk_recalc_rq_segments(struct request_queue *q,
 	if (bio->bi_rw & REQ_WRITE_SAME)
 		return 1;
 
-	fbio = bio;
-	cluster = blk_queue_cluster(q);
-	seg_size = 0;
-	nr_phys_segs = 0;
 	for_each_bio(bio) {
-		bio_for_each_segment(bv, bio, iter) {
-			if (prev && cluster) {
-				if (seg_size + bv.bv_len
-				    > queue_max_segment_size(q))
-					goto new_segment;
-				if (!BIOVEC_PHYS_MERGEABLE(&bvprv, &bv))
-					goto new_segment;
-				if (!BIOVEC_SEG_BOUNDARY(q, &bvprv, &bv))
-					goto new_segment;
+		struct bvec_iter iter = bio->bi_iter;
 
-				seg_size += bv.bv_len;
-				bvprv = bv;
-				continue;
-			}
-new_segment:
-			if (nr_phys_segs == 1 && seg_size >
-			    fbio->bi_seg_front_size)
-				fbio->bi_seg_front_size = seg_size;
+		while (iter.bi_size) {
+			struct bio_vec bv = bio_iter_iovec(bio, iter);
+			unsigned nbytes = blk_max_segment(q, &bv);
 
 			nr_phys_segs++;
-			bvprv = bv;
-			prev = 1;
-			seg_size = bv.bv_len;
+			bio_advance_iter(bio, &iter, nbytes);
 		}
-		bbio = bio;
 	}
-
-	if (nr_phys_segs == 1 && seg_size > fbio->bi_seg_front_size)
-		fbio->bi_seg_front_size = seg_size;
-	if (seg_size > bbio->bi_seg_back_size)
-		bbio->bi_seg_back_size = seg_size;
 
 	return nr_phys_segs;
 }
 
 void blk_recalc_rq_segments(struct request *rq)
 {
-	rq->nr_phys_segments = __blk_recalc_rq_segments(rq->q, rq->bio);
+	if (rq->bio)
+		rq->nr_phys_segments = __blk_recalc_rq_segments(rq->q, rq->bio);
+	else
+		rq->nr_phys_segments = 0;
 }
 
 void blk_recount_segments(struct request_queue *q, struct bio *bio)
@@ -265,94 +225,51 @@ void blk_recount_segments(struct request_queue *q, struct bio *bio)
 }
 EXPORT_SYMBOL(blk_recount_segments);
 
-static int blk_phys_contig_segment(struct request_queue *q, struct bio *bio,
-				   struct bio *nxt)
+static int __blk_segment_map_sg(struct request_queue *q, struct bio *bio,
+				struct scatterlist *sglist,
+				struct scatterlist **sg)
 {
-	struct bio_vec end_bv = { NULL }, nxt_bv;
-	struct bvec_iter iter;
+	unsigned nsegs = 0;
 
-	if (!blk_queue_cluster(q))
-		return 0;
+	for_each_bio(bio) {
+		struct bvec_iter iter = bio->bi_iter;
 
-	if (bio->bi_seg_back_size + nxt->bi_seg_front_size >
-	    queue_max_segment_size(q))
-		return 0;
+		while (iter.bi_size) {
+			struct bio_vec bv = bio_iter_iovec(bio, iter);
+			unsigned nbytes = blk_max_segment(q, &bv);
 
-	if (!bio_has_data(bio))
-		return 1;
+			if (!*sg)
+				*sg = sglist;
+			else {
+				/*
+				 * If the driver previously mapped a shorter
+				 * list, we could see a termination bit
+				 * prematurely unless it fully inits the sg
+				 * table on each mapping. We KNOW that there
+				 * must be more entries here or the driver
+				 * would be buggy, so force clear the
+				 * termination bit to avoid doing a full
+				 * sg_init_table() in drivers for each command.
+				 */
+				sg_unmark_end(*sg);
+				*sg = sg_next(*sg);
+			}
 
-	bio_for_each_segment(end_bv, bio, iter)
-		if (end_bv.bv_len == iter.bi_size)
-			break;
-
-	nxt_bv = bio_iovec(nxt);
-
-	if (!BIOVEC_PHYS_MERGEABLE(&end_bv, &nxt_bv))
-		return 0;
-
-	/*
-	 * bio and nxt are contiguous in memory; check if the queue allows
-	 * these two to be merged into one
-	 */
-	if (BIOVEC_SEG_BOUNDARY(q, &end_bv, &nxt_bv))
-		return 1;
-
-	return 0;
-}
-
-static inline void
-__blk_segment_map_sg(struct request_queue *q, struct bio_vec *bvec,
-		     struct scatterlist *sglist, struct bio_vec *bvprv,
-		     struct scatterlist **sg, int *nsegs, int *cluster)
-{
-
-	int nbytes = bvec->bv_len;
-
-	if (*sg && *cluster) {
-		if ((*sg)->length + nbytes > queue_max_segment_size(q))
-			goto new_segment;
-
-		if (!BIOVEC_PHYS_MERGEABLE(bvprv, bvec))
-			goto new_segment;
-		if (!BIOVEC_SEG_BOUNDARY(q, bvprv, bvec))
-			goto new_segment;
-
-		(*sg)->length += nbytes;
-	} else {
-new_segment:
-		if (!*sg)
-			*sg = sglist;
-		else {
-			/*
-			 * If the driver previously mapped a shorter
-			 * list, we could see a termination bit
-			 * prematurely unless it fully inits the sg
-			 * table on each mapping. We KNOW that there
-			 * must be more entries here or the driver
-			 * would be buggy, so force clear the
-			 * termination bit to avoid doing a full
-			 * sg_init_table() in drivers for each command.
-			 */
-			sg_unmark_end(*sg);
-			*sg = sg_next(*sg);
+			sg_set_page(*sg, bv.bv_page, nbytes, bv.bv_offset);
+			nsegs++;
+			bio_advance_iter(bio, &iter, nbytes);
 		}
-
-		sg_set_page(*sg, bvec->bv_page, nbytes, bvec->bv_offset);
-		(*nsegs)++;
 	}
-	*bvprv = *bvec;
+
+	return nsegs;
 }
 
 static int __blk_bios_map_sg(struct request_queue *q, struct bio *bio,
 			     struct scatterlist *sglist,
 			     struct scatterlist **sg)
 {
-	struct bio_vec bvec, bvprv = { NULL };
-	struct bvec_iter iter;
-	int nsegs, cluster;
-
-	nsegs = 0;
-	cluster = blk_queue_cluster(q);
+	struct scatterlist *sg = NULL;
+	unsigned nsegs;
 
 	if (bio->bi_rw & REQ_DISCARD) {
 		/*
@@ -377,10 +294,10 @@ single_segment:
 		return 1;
 	}
 
-	for_each_bio(bio)
-		bio_for_each_segment(bvec, bio, iter)
-			__blk_segment_map_sg(q, &bvec, sglist, &bvprv, sg,
-					     &nsegs, &cluster);
+	/*
+	 * for each bio in rq
+	 */
+	nsegs = __blk_segment_map_sg(q, rq->bio, sglist, &sg);
 
 	return nsegs;
 }
@@ -443,16 +360,15 @@ int blk_bio_map_sg(struct request_queue *q, struct bio *bio,
 		   struct scatterlist *sglist)
 {
 	struct scatterlist *sg = NULL;
-	int nsegs;
 	struct bio *next = bio->bi_next;
-	bio->bi_next = NULL;
+	unsigned nsegs;
 
-	nsegs = __blk_bios_map_sg(q, bio, sglist, &sg);
+	bio->bi_next = NULL;
+	nsegs = __blk_segment_map_sg(q, bio, sglist, &sg);
 	bio->bi_next = next;
 	if (sg)
 		sg_mark_end(sg);
 
-	BUG_ON(bio->bi_phys_segments && nsegs > bio->bi_phys_segments);
 	return nsegs;
 }
 EXPORT_SYMBOL(blk_bio_map_sg);
@@ -534,8 +450,6 @@ static int ll_merge_requests_fn(struct request_queue *q, struct request *req,
 				struct request *next)
 {
 	int total_phys_segments;
-	unsigned int seg_size =
-		req->biotail->bi_seg_back_size + next->bio->bi_seg_front_size;
 
 	/*
 	 * First check if the either of the requests are re-queued
@@ -552,13 +466,6 @@ static int ll_merge_requests_fn(struct request_queue *q, struct request *req,
 		return 0;
 
 	total_phys_segments = req->nr_phys_segments + next->nr_phys_segments;
-	if (blk_phys_contig_segment(q, req->biotail, next->bio)) {
-		if (req->nr_phys_segments == 1)
-			req->bio->bi_seg_front_size = seg_size;
-		if (next->nr_phys_segments == 1)
-			next->biotail->bi_seg_back_size = seg_size;
-		total_phys_segments--;
-	}
 
 	if (total_phys_segments > queue_max_segments(q))
 		return 0;

@@ -175,27 +175,6 @@ static inline void *bio_data(struct bio *bio)
 
 #define __bio_kunmap_atomic(addr)	kunmap_atomic(addr)
 
-/*
- * merge helpers etc
- */
-
-/* Default implementation of BIOVEC_PHYS_MERGEABLE */
-#define __BIOVEC_PHYS_MERGEABLE(vec1, vec2)	\
-	((bvec_to_phys((vec1)) + (vec1)->bv_len) == bvec_to_phys((vec2)))
-
-/*
- * allow arch override, for eg virtualized architectures (put in asm/io.h)
- */
-#ifndef BIOVEC_PHYS_MERGEABLE
-#define BIOVEC_PHYS_MERGEABLE(vec1, vec2)	\
-	__BIOVEC_PHYS_MERGEABLE(vec1, vec2)
-#endif
-
-#define __BIO_SEG_BOUNDARY(addr1, addr2, mask) \
-	(((addr1) | (mask)) == (((addr2) - 1) | (mask)))
-#define BIOVEC_SEG_BOUNDARY(q, b1, b2) \
-	__BIO_SEG_BOUNDARY(bvec_to_phys((b1)), bvec_to_phys((b2)) + (b2)->bv_len, queue_segment_boundary((q)))
-
 #define bio_io_error(bio) bio_endio((bio), -EIO)
 
 static inline void bvec_iter_advance(struct bio_vec *bv, struct bvec_iter *iter,
@@ -679,10 +658,6 @@ struct biovec_slab {
 
 #define bip_for_each_page(bvl, bip, iter)				\
 	__bip_for_each(bvl, bip, iter, bvec_iter_page_bytes)
-
-#define bio_for_each_integrity_vec(_bvl, _bio, _iter)			\
-	for_each_bio(_bio)						\
-		bip_for_each_segment(_bvl, _bio->bi_integrity, _iter)
 
 #define bio_integrity(bio) (bio->bi_integrity != NULL)
 

@@ -789,8 +789,8 @@ int bio_add_page(struct bio *bio, struct page *page,
 	if (bio->bi_vcnt > 0) {
 		bv = &bio->bi_io_vec[bio->bi_vcnt - 1];
 
-		if (page == bv->bv_page &&
-		    offset == bv->bv_offset + bv->bv_len) {
+		if (bvec_to_phys(bv) + bv->bv_len ==
+		    page_to_phys(page) + offset) {
 			bv->bv_len += len;
 			goto done;
 		}
@@ -799,12 +799,10 @@ int bio_add_page(struct bio *bio, struct page *page,
 	if (bio->bi_vcnt >= bio->bi_max_vecs)
 		return 0;
 
-	bv		= &bio->bi_io_vec[bio->bi_vcnt];
-	bv->bv_page	= page;
-	bv->bv_len	= len;
-	bv->bv_offset	= offset;
-
-	bio->bi_vcnt++;
+	bv = &bio->bi_io_vec[bio->bi_vcnt++];
+	bv->bv_page = page;
+	bv->bv_len = len;
+	bv->bv_offset = offset;
 done:
 	bio->bi_iter.bi_size += len;
 	return len;

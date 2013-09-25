@@ -2213,20 +2213,6 @@ static void origin_status(struct dm_target *ti, status_type_t type,
 	}
 }
 
-static int origin_merge(struct dm_target *ti, struct bvec_merge_data *bvm,
-			struct bio_vec *biovec, int max_size)
-{
-	struct dm_dev *dev = ti->private;
-	struct request_queue *q = bdev_get_queue(dev->bdev);
-
-	if (!q->merge_bvec_fn)
-		return max_size;
-
-	bvm->bi_bdev = dev->bdev;
-
-	return min(max_size, q->merge_bvec_fn(q, bvm, biovec));
-}
-
 static int origin_iterate_devices(struct dm_target *ti,
 				  iterate_devices_callout_fn fn, void *data)
 {
@@ -2244,7 +2230,6 @@ static struct target_type origin_target = {
 	.map     = origin_map,
 	.resume  = origin_resume,
 	.status  = origin_status,
-	.merge	 = origin_merge,
 	.iterate_devices = origin_iterate_devices,
 };
 

@@ -2666,7 +2666,6 @@ enum drbd_ret_code conn_new_minor(struct drbd_tconn *tconn, unsigned int minor, 
 	   This triggers a max_bio_size message upon first attach or connect */
 	blk_queue_max_hw_sectors(q, DRBD_MAX_BIO_SIZE_SAFE >> 8);
 	blk_queue_bounce_limit(q, BLK_BOUNCE_ANY);
-	blk_queue_merge_bvec(q, drbd_merge_bvec);
 	q->queue_lock = &mdev->tconn->req_lock; /* needed since we use */
 
 	mdev->md_io_page = alloc_page(GFP_KERNEL);

@@ -120,8 +120,7 @@ EXPORT_SYMBOL_GPL(dm_get_rq_mapinfo);
 #define DMF_FREEING 3
 #define DMF_DELETING 4
 #define DMF_NOFLUSH_SUSPENDING 5
-#define DMF_MERGE_IS_OPTIONAL 6
-#define DMF_DEFERRED_REMOVE 7
+#define DMF_DEFERRED_REMOVE 6
 
 /*
  * A dummy definition to make RCU happy.
@@ -1401,61 +1400,6 @@ static void __split_and_process_bio(struct mapped_device *md,
  * CRUD END
  *---------------------------------------------------------------*/
 
-static int dm_merge_bvec(struct request_queue *q,
-			 struct bvec_merge_data *bvm,
-			 struct bio_vec *biovec)
-{
-	struct mapped_device *md = q->queuedata;
-	struct dm_table *map = dm_get_live_table_fast(md);
-	struct dm_target *ti;
-	sector_t max_sectors;
-	int max_size = 0;
-
-	if (unlikely(!map))
-		goto out;
-
-	ti = dm_table_find_target(map, bvm->bi_sector);
-	if (!dm_target_is_valid(ti))
-		goto out;
-
-	/*
-	 * Find maximum amount of I/O that won't need splitting
-	 */
-	max_sectors = min(max_io_len(bvm->bi_sector, ti),
-			  (sector_t) BIO_MAX_SECTORS);
-	max_size = (max_sectors << SECTOR_SHIFT) - bvm->bi_size;
-	if (max_size < 0)
-		max_size = 0;
-
-	/*
-	 * merge_bvec_fn() returns number of bytes
-	 * it can accept at this offset
-	 * max is precomputed maximal io size
-	 */
-	if (max_size && ti->type->merge)
-		max_size = ti->type->merge(ti, bvm, biovec, max_size);
-	/*
-	 * If the target doesn't support merge method and some of the devices
-	 * provided their merge_bvec method (we know this by looking at
-	 * queue_max_hw_sectors), then we can't allow bios with multiple vector
-	 * entries.  So always set max_size to 0, and the code below allows
-	 * just one page.
-	 */
-	else if (queue_max_hw_sectors(q) <= PAGE_SIZE >> 9)
-
-		max_size = 0;
-
-out:
-	dm_put_live_table_fast(md);
-	/*
-	 * Always allow an entire first page
-	 */
-	if (max_size <= biovec->bv_len && !(bvm->bi_size >> SECTOR_SHIFT))
-		max_size = biovec->bv_len;
-
-	return max_size;
-}
-
 /*
  * The request function that just remaps the bio built up by
  * dm_merge_bvec.
@@ -1852,7 +1796,6 @@ static void dm_init_md_queue(struct mapped_device *md)
 	md->queue->backing_dev_info.congested_data = md;
 	blk_queue_make_request(md->queue, dm_request);
 	blk_queue_bounce_limit(md->queue, BLK_BOUNCE_ANY);
-	blk_queue_merge_bvec(md->queue, dm_merge_bvec);
 }
 
 /*
@@ -2060,59 +2003,6 @@ static void __set_size(struct mapped_device *md, sector_t size)
 }
 
 /*
- * Return 1 if the queue has a compulsory merge_bvec_fn function.
- *
- * If this function returns 0, then the device is either a non-dm
- * device without a merge_bvec_fn, or it is a dm device that is
- * able to split any bios it receives that are too big.
- */
-int dm_queue_merge_is_compulsory(struct request_queue *q)
-{
-	struct mapped_device *dev_md;
-
-	if (!q->merge_bvec_fn)
-		return 0;
-
-	if (q->make_request_fn == dm_request) {
-		dev_md = q->queuedata;
-		if (test_bit(DMF_MERGE_IS_OPTIONAL, &dev_md->flags))
-			return 0;
-	}
-
-	return 1;
-}
-
-static int dm_device_merge_is_compulsory(struct dm_target *ti,
-					 struct dm_dev *dev, sector_t start,
-					 sector_t len, void *data)
-{
-	struct block_device *bdev = dev->bdev;
-	struct request_queue *q = bdev_get_queue(bdev);
-
-	return dm_queue_merge_is_compulsory(q);
-}
-
-/*
- * Return 1 if it is acceptable to ignore merge_bvec_fn based
- * on the properties of the underlying devices.
- */
-static int dm_table_merge_is_optional(struct dm_table *table)
-{
-	unsigned i = 0;
-	struct dm_target *ti;
-
-	while (i < dm_table_get_num_targets(table)) {
-		ti = dm_table_get_target(table, i++);
-
-		if (ti->type->iterate_devices &&
-		    ti->type->iterate_devices(ti, dm_device_merge_is_compulsory, NULL))
-			return 0;
-	}
-
-	return 1;
-}
-
-/*
  * Returns old map, which caller must destroy.
  */
 static struct dm_table *__bind(struct mapped_device *md, struct dm_table *t,
@@ -2121,7 +2011,6 @@ static struct dm_table *__bind(struct mapped_device *md, struct dm_table *t,
 	struct dm_table *old_map;
 	struct request_queue *q = md->queue;
 	sector_t size;
-	int merge_is_optional;
 
 	size = dm_table_get_size(t);
 
@@ -2147,17 +2036,11 @@ static struct dm_table *__bind(struct mapped_device *md, struct dm_table *t,
 
 	__bind_mempools(md, t);
 
-	merge_is_optional = dm_table_merge_is_optional(t);
-
 	old_map = md->map;
 	rcu_assign_pointer(md->map, t);
 	md->immutable_target_type = dm_table_get_immutable_target_type(t);
 
 	dm_table_set_restrictions(t, q, limits);
-	if (merge_is_optional)
-		set_bit(DMF_MERGE_IS_OPTIONAL, &md->flags);
-	else
-		clear_bit(DMF_MERGE_IS_OPTIONAL, &md->flags);
 	dm_sync_table(md);
 
 	return old_map;

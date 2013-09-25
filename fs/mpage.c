@@ -286,8 +286,8 @@ do_mpage_readpage(struct bio *bio, struct page *page, unsigned nr_pages,
 alloc_new:
 	if (bio == NULL) {
 		bio = mpage_alloc(bdev, blocks[0] << (blkbits - 9),
-			  	min_t(int, nr_pages, bio_get_nr_vecs(bdev)),
-				GFP_KERNEL);
+				  min_t(int, nr_pages, BIO_MAX_PAGES),
+				  GFP_KERNEL);
 		if (bio == NULL)
 			goto confused;
 	}
@@ -575,7 +575,7 @@ page_is_mapped:
 alloc_new:
 	if (bio == NULL) {
 		bio = mpage_alloc(bdev, blocks[0] << (blkbits - 9),
-				bio_get_nr_vecs(bdev), GFP_NOFS|__GFP_HIGH);
+				  BIO_MAX_PAGES, GFP_NOFS|__GFP_HIGH);
 		if (bio == NULL)
 			goto confused;
 	}

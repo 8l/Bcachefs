@@ -2585,14 +2585,7 @@ btrfs_bio_alloc(struct block_device *bdev, u64 first_sector, int nr_vecs,
 	struct btrfs_io_bio *btrfs_bio;
 	struct bio *bio;
 
-	bio = bio_alloc_bioset(gfp_flags, nr_vecs, btrfs_bioset);
-
-	if (bio == NULL && (current->flags & PF_MEMALLOC)) {
-		while (!bio && (nr_vecs /= 2)) {
-			bio = bio_alloc_bioset(gfp_flags,
-					       nr_vecs, btrfs_bioset);
-		}
-	}
+	bio = bio_alloc_bioset(gfp_flags, min(nr_vecs, BIO_MAX_PAGES), btrfs_bioset);
 
 	if (bio) {
 		bio->bi_bdev = bdev;
@@ -2687,7 +2680,6 @@ static int submit_extent_page(int rw, struct extent_io_tree *tree,
 {
 	int ret = 0;
 	struct bio *bio;
-	int nr;
 	int contig = 0;
 	int this_compressed = bio_flags & EXTENT_BIO_COMPRESSED;
 	int old_compressed = prev_bio_flags & EXTENT_BIO_COMPRESSED;
@@ -2712,12 +2704,9 @@ static int submit_extent_page(int rw, struct extent_io_tree *tree,
 			return 0;
 		}
 	}
-	if (this_compressed)
-		nr = BIO_MAX_PAGES;
-	else
-		nr = bio_get_nr_vecs(bdev);
 
-	bio = btrfs_bio_alloc(bdev, sector, nr, GFP_NOFS | __GFP_HIGH);
+	bio = btrfs_bio_alloc(bdev, sector, BIO_MAX_PAGES,
+			      GFP_NOFS | __GFP_HIGH);
 	if (!bio)
 		return -ENOMEM;
 

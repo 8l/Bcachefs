@@ -1295,7 +1295,6 @@ try_next_bio:
 static void pkt_start_write(struct pktcdvd_device *pd, struct packet_data *pkt)
 {
 	int f;
-	struct bio_vec *bvec = pkt->w_bio->bi_io_vec;
 
 	bio_reset(pkt->w_bio);
 	pkt->w_bio->bi_iter.bi_sector = pkt->sector;
@@ -1305,9 +1304,10 @@ static void pkt_start_write(struct pktcdvd_device *pd, struct packet_data *pkt)
 
 	/* XXX: locking? */
 	for (f = 0; f < pkt->frames; f++) {
-		bvec[f].bv_page = pkt->pages[(f * CD_FRAMESIZE) / PAGE_SIZE];
-		bvec[f].bv_offset = (f * CD_FRAMESIZE) % PAGE_SIZE;
-		if (!bio_add_page(pkt->w_bio, bvec[f].bv_page, CD_FRAMESIZE, bvec[f].bv_offset))
+		if (bio_add_page(pkt->w_bio,
+				 pkt->pages[(f * CD_FRAMESIZE) / PAGE_SIZE],
+				 CD_FRAMESIZE,
+				 (f * CD_FRAMESIZE) % PAGE_SIZE) != CD_FRAMESIZE)
 			BUG();
 	}
 	pkt_dbg(2, pd, "vcnt=%d\n", pkt->w_bio->bi_vcnt);
@@ -1325,7 +1325,7 @@ static void pkt_start_write(struct pktcdvd_device *pd, struct packet_data *pkt)
 		pkt->write_size, (unsigned long long)pkt->sector);
 
 	if (test_bit(PACKET_MERGE_SEGS, &pd->flags) || (pkt->write_size < pkt->frames)) {
-		pkt_make_local_copy(pkt, bvec);
+		pkt_make_local_copy(pkt, pkt->w_bio->bi_io_vec);
 		pkt->cache_valid = 1;
 	} else {
 		pkt->cache_valid = 0;

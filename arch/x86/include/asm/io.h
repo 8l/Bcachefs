@@ -335,6 +335,9 @@ extern bool is_early_ioremap_ptep(pte_t *ptep);
 #include <xen/xen.h>
 struct bio_vec;
 
+extern bool xen_page_phys_mergeable(const struct page *p1,
+				    const struct page *p2);
+
 extern bool xen_biovec_phys_mergeable(const struct bio_vec *vec1,
 				      const struct bio_vec *vec2);
 

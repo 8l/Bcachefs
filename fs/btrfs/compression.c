@@ -198,15 +198,15 @@ csum_failed:
 	if (cb->errors) {
 		bio_io_error(cb->orig_bio);
 	} else {
-		int i;
-		struct bio_vec *bvec;
+		struct bio_vec bvec;
+		struct bvec_iter iter;
 
 		/*
 		 * we have verified the checksum already, set page
 		 * checked so the end_io handlers know about it
 		 */
-		bio_for_each_segment_all(bvec, cb->orig_bio, i)
-			SetPageChecked(bvec->bv_page);
+		bio_for_each_page_all(bvec, cb->orig_bio, iter)
+			SetPageChecked(bvec.bv_page);
 
 		bio_endio(cb->orig_bio, 0);
 	}

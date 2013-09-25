@@ -1423,68 +1423,6 @@ bool bio_attempt_front_merge(struct request_queue *q, struct request *req,
 	return true;
 }
 
-/**
- * blk_attempt_plug_merge - try to merge with %current's plugged list
- * @q: request_queue new bio is being queued at
- * @bio: new bio being queued
- * @request_count: out parameter for number of traversed plugged requests
- *
- * Determine whether @bio being queued on @q can be merged with a request
- * on %current's plugged list.  Returns %true if merge was successful,
- * otherwise %false.
- *
- * Plugging coalesces IOs from the same issuer for the same purpose without
- * going through @q->queue_lock.  As such it's more of an issuing mechanism
- * than scheduling, and the request, while may have elvpriv data, is not
- * added on the elevator at this point.  In addition, we don't have
- * reliable access to the elevator outside queue lock.  Only check basic
- * merging parameters without querying the elevator.
- */
-bool blk_attempt_plug_merge(struct request_queue *q, struct bio *bio,
-			    unsigned int *request_count)
-{
-	struct blk_plug *plug;
-	struct request *rq;
-	bool ret = false;
-	struct list_head *plug_list;
-
-	if (blk_queue_nomerges(q))
-		goto out;
-
-	plug = current->plug;
-	if (!plug)
-		goto out;
-	*request_count = 0;
-
-	if (q->mq_ops)
-		plug_list = &plug->mq_list;
-	else
-		plug_list = &plug->list;
-
-	list_for_each_entry_reverse(rq, plug_list, queuelist) {
-		int el_ret;
-
-		if (rq->q == q)
-			(*request_count)++;
-
-		if (rq->q != q || !blk_rq_merge_ok(rq, bio))
-			continue;
-
-		el_ret = blk_try_merge(rq, bio);
-		if (el_ret == ELEVATOR_BACK_MERGE) {
-			ret = bio_attempt_back_merge(q, rq, bio);
-			if (ret)
-				break;
-		} else if (el_ret == ELEVATOR_FRONT_MERGE) {
-			ret = bio_attempt_front_merge(q, rq, bio);
-			if (ret)
-				break;
-		}
-	}
-out:
-	return ret;
-}
-
 void init_request_from_bio(struct request *req, struct bio *bio)
 {
 	req->cmd_type = REQ_TYPE_FS;
@@ -1502,10 +1440,10 @@ void init_request_from_bio(struct request *req, struct bio *bio)
 void blk_queue_bio(struct request_queue *q, struct bio *bio)
 {
 	const bool sync = !!(bio->bi_rw & REQ_SYNC);
-	struct blk_plug *plug;
 	int el_ret, rw_flags, where = ELEVATOR_INSERT_SORT;
 	struct request *req;
-	unsigned int request_count = 0;
+
+	spin_lock_irq(q->queue_lock);
 
 	blk_queue_split(q, &bio, q->bio_split);
 
@@ -1522,19 +1460,9 @@ void blk_queue_bio(struct request_queue *q, struct bio *bio)
 	}
 
 	if (bio->bi_rw & (REQ_FLUSH | REQ_FUA)) {
-		spin_lock_irq(q->queue_lock);
 		where = ELEVATOR_INSERT_FLUSH;
 		goto get_rq;
 	}
-
-	/*
-	 * Check if we can merge with the plugged list before grabbing
-	 * any locks.
-	 */
-	if (blk_attempt_plug_merge(q, bio, &request_count))
-		return;
-
-	spin_lock_irq(q->queue_lock);
 
 	el_ret = elv_merge(q, &req, bio);
 	if (el_ret == ELEVATOR_BACK_MERGE) {
@@ -1584,29 +1512,11 @@ get_rq:
 	if (test_bit(QUEUE_FLAG_SAME_COMP, &q->queue_flags))
 		req->cpu = raw_smp_processor_id();
 
-	plug = current->plug;
-	if (plug) {
-		/*
-		 * If this is the first request added after a plug, fire
-		 * of a plug trace.
-		 */
-		if (!request_count)
-			trace_block_plug(q);
-		else {
-			if (request_count >= BLK_MAX_REQUEST_COUNT) {
-				blk_flush_plug_list(plug, false);
-				trace_block_plug(q);
-			}
-		}
-		list_add_tail(&req->queuelist, &plug->list);
-		blk_account_io_start(req, true);
-	} else {
-		spin_lock_irq(q->queue_lock);
-		add_acct_request(q, req, where);
-		__blk_run_queue(q);
+	spin_lock_irq(q->queue_lock);
+	add_acct_request(q, req, where);
+	__blk_run_queue(q);
 out_unlock:
-		spin_unlock_irq(q->queue_lock);
-	}
+	spin_unlock_irq(q->queue_lock);
 }
 EXPORT_SYMBOL_GPL(blk_queue_bio);	/* for device mapper only */
 
@@ -1718,6 +1628,8 @@ generic_make_request_checks(struct bio *bio)
 
 	might_sleep();
 
+	BUG_ON(bio->bi_next);
+
 	if (bio_check_eod(bio, nr_sectors))
 		goto end_io;
 
@@ -1816,10 +1728,18 @@ end_io:
  */
 void generic_make_request(struct bio *bio)
 {
-	struct bio_list bio_list_on_stack;
+	struct task_struct *tsk = current;
+	struct request_queue *q;
+	struct bio **p;
+	struct bio_list splits;
+	struct blk_plug plug;
+
+	bio_list_init(&splits);
 
 	if (!generic_make_request_checks(bio))
 		return;
+
+	q = bdev_get_queue(bio->bi_bdev);
 
 	/*
 	 * We only want one ->make_request_fn to be active at a time, else
@@ -1831,36 +1751,27 @@ void generic_make_request(struct bio *bio)
 	 * it is non-NULL, then a make_request is active, and new requests
 	 * should be added at the tail
 	 */
-	if (current->bio_list) {
-		bio_list_add(current->bio_list, bio);
+	blk_start_plug(&plug);
+
+	bio = splits.head;
+	p = &tsk->plug->list.head;
+
+	while (*p &&
+	       ((bio->bi_bdev > (*p)->bi_bdev) ||
+		(bio->bi_bdev == (*p)->bi_bdev &&
+		 bio->bi_iter.bi_sector > (*p)->bi_iter.bi_sector)))
+		p = &(*p)->bi_next;
+
+	splits.tail->bi_next = *p;
+	if (!splits.tail->bi_next)
+		tsk->plug->list.tail = splits.tail;
+
+	*p = splits.head;
+
+	if (tsk->plug != &plug)
 		return;
-	}
 
-	/* following loop may be a bit non-obvious, and so deserves some
-	 * explanation.
-	 * Before entering the loop, bio->bi_next is NULL (as all callers
-	 * ensure that) so we have a list with a single bio.
-	 * We pretend that we have just taken it off a longer list, so
-	 * we assign bio_list to a pointer to the bio_list_on_stack,
-	 * thus initialising the bio_list of new bios to be
-	 * added.  ->make_request() may indeed add some more bios
-	 * through a recursive call to generic_make_request.  If it
-	 * did, we find a non-NULL value in bio_list and re-enter the loop
-	 * from the top.  In this case we really did just take the bio
-	 * of the top of the list (no pretending) and so remove it from
-	 * bio_list, and call into ->make_request() again.
-	 */
-	BUG_ON(bio->bi_next);
-	bio_list_init(&bio_list_on_stack);
-	current->bio_list = &bio_list_on_stack;
-	do {
-		struct request_queue *q = bdev_get_queue(bio->bi_bdev);
-
-		q->make_request_fn(q, bio);
-
-		bio = bio_list_pop(current->bio_list);
-	} while (bio);
-	current->bio_list = NULL; /* deactivate */
+	blk_finish_plug(&plug);
 }
 EXPORT_SYMBOL(generic_make_request);
 
@@ -2938,8 +2849,8 @@ void blk_start_plug(struct blk_plug *plug)
 	struct task_struct *tsk = current;
 
 	plug->magic = PLUG_MAGIC;
-	INIT_LIST_HEAD(&plug->list);
 	INIT_LIST_HEAD(&plug->mq_list);
+	bio_list_init(&plug->list);
 	INIT_LIST_HEAD(&plug->cb_list);
 
 	/*
@@ -2955,34 +2866,6 @@ void blk_start_plug(struct blk_plug *plug)
 	}
 }
 EXPORT_SYMBOL(blk_start_plug);
-
-static int plug_rq_cmp(void *priv, struct list_head *a, struct list_head *b)
-{
-	struct request *rqa = container_of(a, struct request, queuelist);
-	struct request *rqb = container_of(b, struct request, queuelist);
-
-	return !(rqa->q < rqb->q ||
-		(rqa->q == rqb->q && blk_rq_pos(rqa) < blk_rq_pos(rqb)));
-}
-
-/*
- * If 'from_schedule' is true, then postpone the dispatch of requests
- * until a safe kblockd context. We due this to avoid accidental big
- * additional stack usage in driver dispatch, in places where the originally
- * plugger did not intend it.
- */
-static void queue_unplugged(struct request_queue *q, unsigned int depth,
-			    bool from_schedule)
-	__releases(q->queue_lock)
-{
-	trace_block_unplug(q, depth, !from_schedule);
-
-	if (from_schedule)
-		blk_run_queue_async(q);
-	else
-		__blk_run_queue(q);
-	spin_unlock(q->queue_lock);
-}
 
 static void flush_plug_callbacks(struct blk_plug *plug, bool from_schedule)
 {
@@ -3029,10 +2912,7 @@ EXPORT_SYMBOL(blk_check_plugged);
 void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 {
 	struct request_queue *q;
-	unsigned long flags;
-	struct request *rq;
-	LIST_HEAD(list);
-	unsigned int depth;
+	struct bio *bio, *end;
 
 	BUG_ON(plug->magic != PLUG_MAGIC);
 
@@ -3041,62 +2921,28 @@ void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 	if (!list_empty(&plug->mq_list))
 		blk_mq_flush_plug_list(plug, from_schedule);
 
-	if (list_empty(&plug->list))
-		return;
 
-	list_splice_init(&plug->list, &list);
+	while (plug->list.head) {
+		end = bio = plug->list.head;
+		while (end->bi_next &&
+		       end->bi_next->bi_bdev == bio->bi_bdev)
+			end = end->bi_next;
 
-	list_sort(NULL, &list, plug_rq_cmp);
+		plug->list.head = end->bi_next;
+		end->bi_next = NULL;
 
-	q = NULL;
-	depth = 0;
+		q = bdev_get_queue(bio->bi_bdev);
 
-	/*
-	 * Save and disable interrupts here, to avoid doing it for every
-	 * queue lock we have to take.
-	 */
-	local_irq_save(flags);
-	while (!list_empty(&list)) {
-		rq = list_entry_rq(list.next);
-		list_del_init(&rq->queuelist);
-		BUG_ON(!rq->q);
-		if (rq->q != q) {
-			/*
-			 * This drops the queue lock
-			 */
-			if (q)
-				queue_unplugged(q, depth, from_schedule);
-			q = rq->q;
-			depth = 0;
-			spin_lock(q->queue_lock);
+		while (bio) {
+			struct bio *p = bio;
+
+			bio = bio->bi_next;
+			p->bi_next = NULL;
+			q->make_request_fn(q, p);
 		}
-
-		/*
-		 * Short-circuit if @q is dead
-		 */
-		if (unlikely(blk_queue_dying(q))) {
-			__blk_end_request_all(rq, -ENODEV);
-			continue;
-		}
-
-		/*
-		 * rq is already accounted, so use raw insert
-		 */
-		if (rq->cmd_flags & (REQ_FLUSH | REQ_FUA))
-			__elv_add_request(q, rq, ELEVATOR_INSERT_FLUSH);
-		else
-			__elv_add_request(q, rq, ELEVATOR_INSERT_SORT_MERGE);
-
-		depth++;
 	}
 
-	/*
-	 * This drops the queue lock
-	 */
-	if (q)
-		queue_unplugged(q, depth, from_schedule);
-
-	local_irq_restore(flags);
+	bio_list_init(&plug->list);
 }
 
 void blk_finish_plug(struct blk_plug *plug)

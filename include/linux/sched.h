@@ -1412,9 +1412,6 @@ struct task_struct {
 /* journalling filesystem info */
 	void *journal_info;
 
-/* stacked block device info */
-	struct bio_list *bio_list;
-
 #ifdef CONFIG_BLOCK
 /* stack plugging */
 	struct blk_plug *plug;

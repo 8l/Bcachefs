@@ -1036,11 +1036,10 @@ static inline void blk_post_runtime_resume(struct request_queue *q, int err) {}
  */
 struct blk_plug {
 	unsigned long magic; /* detect uninitialized use-cases */
-	struct list_head list; /* requests */
+	struct bio_list list;
 	struct list_head mq_list; /* blk-mq requests */
 	struct list_head cb_list; /* md requires an unplug callback */
 };
-#define BLK_MAX_REQUEST_COUNT 16
 
 struct blk_plug_cb;
 typedef void (*blk_plug_cb_fn)(struct blk_plug_cb *, bool);
@@ -1076,7 +1075,7 @@ static inline bool blk_needs_flush_plug(struct task_struct *tsk)
 	struct blk_plug *plug = tsk->plug;
 
 	return plug &&
-		(!list_empty(&plug->list) ||
+		(!bio_list_empty(&plug->list) ||
 		 !list_empty(&plug->mq_list) ||
 		 !list_empty(&plug->cb_list));
 }

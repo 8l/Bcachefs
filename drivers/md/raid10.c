@@ -954,9 +954,7 @@ static void wait_barrier(struct r10conf *conf)
 		 */
 		wait_event_lock_irq(conf->wait_barrier,
 				    !conf->barrier ||
-				    (conf->nr_pending &&
-				     current->bio_list &&
-				     !bio_list_empty(current->bio_list)),
+				    conf->nr_pending,
 				    conf->resync_lock);
 		conf->nr_waiting--;
 	}
@@ -1032,7 +1030,7 @@ static void raid10_unplug(struct blk_plug_cb *cb, bool from_schedule)
 	struct r10conf *conf = mddev->private;
 	struct bio *bio;
 
-	if (from_schedule || current->bio_list) {
+	if (from_schedule) {
 		spin_lock_irq(&conf->device_lock);
 		bio_list_merge(&conf->pending_bio_list, &plug->pending);
 		conf->pending_count += plug->pending_cnt;

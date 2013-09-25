@@ -80,50 +80,38 @@ static int __bdev_writeseg(struct super_block *sb, u64 ofs, pgoff_t index,
 	struct address_space *mapping = super->s_mapping_inode->i_mapping;
 	struct bio *bio;
 	struct page *page;
-	unsigned int max_pages;
-	int i;
+	int i = 0;
 
-	max_pages = min(nr_pages, (size_t) BIO_MAX_PAGES);
+	bio = bio_alloc(GFP_NOFS,
+			min(nr_pages - i, (size_t) BIO_MAX_PAGES));
 
-	bio = bio_alloc(GFP_NOFS, max_pages);
-	BUG_ON(!bio);
+	bio->bi_bdev = super->s_bdev;
+	bio->bi_iter.bi_sector = (ofs + i * PAGE_SIZE) >> 9;
+	bio->bi_private = sb;
+	bio->bi_end_io = writeseg_end_io;
 
 	for (i = 0; i < nr_pages; i++) {
-		if (i >= max_pages) {
-			/* Block layer cannot split bios :( */
-			bio->bi_vcnt = i;
-			bio->bi_iter.bi_size = i * PAGE_SIZE;
-			bio->bi_bdev = super->s_bdev;
-			bio->bi_iter.bi_sector = ofs >> 9;
-			bio->bi_private = sb;
-			bio->bi_end_io = writeseg_end_io;
-			atomic_inc(&super->s_pending_writes);
-			submit_bio(WRITE, bio);
-
-			ofs += i * PAGE_SIZE;
-			index += i;
-			nr_pages -= i;
-			i = 0;
-
-			bio = bio_alloc(GFP_NOFS, max_pages);
-			BUG_ON(!bio);
-		}
 		page = find_lock_page(mapping, index + i);
 		BUG_ON(!page);
-		bio->bi_io_vec[i].bv_page = page;
-		bio->bi_io_vec[i].bv_len = PAGE_SIZE;
-		bio->bi_io_vec[i].bv_offset = 0;
-
 		BUG_ON(PageWriteback(page));
 		set_page_writeback(page);
 		unlock_page(page);
+retry:
+		if (bio_add_page(bio, page, PAGE_SIZE, 0) != PAGE_SIZE) {
+			atomic_inc(&super->s_pending_writes);
+			submit_bio(WRITE, bio);
+start:
+			bio = bio_alloc(GFP_NOFS,
+					min(nr_pages - i, (size_t) BIO_MAX_PAGES));
+
+			bio->bi_bdev = super->s_bdev;
+			bio->bi_iter.bi_sector = (ofs + i * PAGE_SIZE) >> 9;
+			bio->bi_private = sb;
+			bio->bi_end_io = writeseg_end_io;
+			goto retry;
+
+		}
 	}
-	bio->bi_vcnt = nr_pages;
-	bio->bi_iter.bi_size = nr_pages * PAGE_SIZE;
-	bio->bi_bdev = super->s_bdev;
-	bio->bi_iter.bi_sector = ofs >> 9;
-	bio->bi_private = sb;
-	bio->bi_end_io = writeseg_end_io;
 	atomic_inc(&super->s_pending_writes);
 	submit_bio(WRITE, bio);
 	return 0;

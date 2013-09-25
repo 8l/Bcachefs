@@ -63,15 +63,23 @@
  */
 #define __bvec_iter_bvec(bvec, iter)	(&(bvec)[(iter).bi_idx])
 
-#define bvec_iter_page(bvec, iter)				\
-	(__bvec_iter_bvec((bvec), (iter))->bv_page)
+#define bvec_iter_page(bvec, iter)					\
+	nth_page(__bvec_iter_bvec((bvec), (iter))->bv_page,		\
+		 __bvec_iter_offset((bvec), (iter)) >> PAGE_SHIFT)
 
-#define bvec_iter_len(bvec, iter)				\
-	min((iter).bi_size,					\
+#define bvec_iter_page_bytes(bvec, iter)				\
+	min_t(unsigned, bvec_iter_len((bvec), (iter)),			\
+	      PAGE_SIZE - bvec_iter_offset((bvec), (iter)))
+
+#define bvec_iter_len(bvec, iter)					\
+	min((iter).bi_size,						\
 	    __bvec_iter_bvec((bvec), (iter))->bv_len - (iter).bi_bvec_done)
 
-#define bvec_iter_offset(bvec, iter)				\
+#define __bvec_iter_offset(bvec, iter)					\
 	(__bvec_iter_bvec((bvec), (iter))->bv_offset + (iter).bi_bvec_done)
+
+#define bvec_iter_offset(bvec, iter)					\
+	(__bvec_iter_offset((bvec), (iter)) & (PAGE_SIZE - 1))
 
 #define bvec_iter_bvec(bvec, iter)				\
 ((struct bio_vec) {						\
@@ -85,6 +93,8 @@
 
 #define bio_iter_page(bio, iter)				\
 	bvec_iter_page((bio)->bi_io_vec, (iter))
+#define bio_iter_page_bytes(bio, iter)				\
+	bvec_iter_page_bytes((bio)->bi_io_vec, (iter))
 #define bio_iter_len(bio, iter)					\
 	bvec_iter_len((bio)->bi_io_vec, (iter))
 #define bio_iter_offset(bio, iter)				\
@@ -188,13 +198,6 @@ static inline void *bio_data(struct bio *bio)
 
 #define bio_io_error(bio) bio_endio((bio), -EIO)
 
-/*
- * drivers should _never_ use the all version - the bio may have been split
- * before it got to the driver and the driver won't own all of it
- */
-#define bio_for_each_segment_all(bvl, bio, i)				\
-	for (i = 0, bvl = (bio)->bi_io_vec; i < (bio)->bi_vcnt; i++, bvl++)
-
 static inline void bvec_iter_advance(struct bio_vec *bv, struct bvec_iter *iter,
 				     unsigned bytes)
 {
@@ -215,13 +218,6 @@ static inline void bvec_iter_advance(struct bio_vec *bv, struct bvec_iter *iter,
 	}
 }
 
-#define for_each_bvec(bvl, bio_vec, iter, start)			\
-	for ((iter) = start;						\
-	     (bvl) = bvec_iter_bvec((bio_vec), (iter)),			\
-		(iter).bi_size;						\
-	     bvec_iter_advance((bio_vec), &(iter), (bvl).bv_len))
-
-
 static inline void bio_advance_iter(struct bio *bio, struct bvec_iter *iter,
 				    unsigned bytes)
 {
@@ -233,14 +229,41 @@ static inline void bio_advance_iter(struct bio *bio, struct bvec_iter *iter,
 		bvec_iter_advance(bio->bi_io_vec, iter, bytes);
 }
 
-#define __bio_for_each_segment(bvl, bio, iter, start)			\
+#define BVEC_ITER_ALL_INITIALIZER (struct bvec_iter)			\
+{									\
+	.bi_sector	= 0,						\
+	.bi_size	= UINT_MAX,					\
+	.bi_idx		= 0,						\
+	.bi_bvec_done	= 0,						\
+}
+
+#define __bio_for_each(bvl, bio, iter, start, condition, advance)	\
 	for (iter = (start);						\
-	     (iter).bi_size &&						\
-		((bvl = bio_iter_iovec((bio), (iter))), 1);		\
-	     bio_advance_iter((bio), &(iter), (bvl).bv_len))
+	     (condition) &&						\
+		((bvl) = bio_iter_iovec((bio), (iter)), 1);		\
+	     bio_advance_iter((bio), &(iter), advance((bio), (iter))))
+
+#define __bio_for_each_segment(bvl, bio, iter, start)			\
+	__bio_for_each((bvl), (bio), (iter), (start),			\
+		       (iter).bi_size, bio_iter_len)
 
 #define bio_for_each_segment(bvl, bio, iter)				\
 	__bio_for_each_segment(bvl, bio, iter, (bio)->bi_iter)
+
+#define bio_for_each_page(bvl, bio, iter)				\
+	__bio_for_each((bvl), (bio), (iter), (bio)->bi_iter,		\
+		       (iter).bi_size, bio_iter_page_bytes)
+
+/*
+ * drivers should _never_ use the all version - the bio may have been split
+ * before it got to the driver and the driver won't own all of it
+ */
+#define bio_for_each_segment_all(bvl, bio, i)				\
+	for (i = 0, bvl = (bio)->bi_io_vec; i < (bio)->bi_vcnt; i++, bvl++)
+
+#define bio_for_each_page_all(bvl, bio, iter)				\
+	__bio_for_each((bvl), (bio), (iter), BVEC_ITER_ALL_INITIALIZER,	\
+		       (iter).bi_idx < (bio)->bi_vcnt, bio_iter_page_bytes)
 
 #define bio_iter_last(bvec, iter) ((iter).bi_size == (bvec).bv_len)
 
@@ -644,16 +667,22 @@ struct biovec_slab {
 
 #if defined(CONFIG_BLK_DEV_INTEGRITY)
 
+#define __bip_for_each(bvl, bip, iter, advance)				\
+	for ((iter) = (bip)->bip_iter;					\
+	     (iter).bi_size &&						\
+		((bvl) = bvec_iter_bvec((bip)->bip_vec, (iter)), 1);	\
+	     bvec_iter_advance((bip)->bip_vec, &(iter),			\
+			       advance((bip)->bip_vec, (iter))))
 
+#define bip_for_each_segment(bvl, bip, iter)				\
+	__bip_for_each(bvl, bip, iter, bvec_iter_len)
 
-#define bip_vec_idx(bip, idx)	(&(bip->bip_vec[(idx)]))
-
-#define bip_for_each_vec(bvl, bip, iter)				\
-	for_each_bvec(bvl, (bip)->bip_vec, iter, (bip)->bip_iter)
+#define bip_for_each_page(bvl, bip, iter)				\
+	__bip_for_each(bvl, bip, iter, bvec_iter_page_bytes)
 
 #define bio_for_each_integrity_vec(_bvl, _bio, _iter)			\
 	for_each_bio(_bio)						\
-		bip_for_each_vec(_bvl, _bio->bi_integrity, _iter)
+		bip_for_each_segment(_bvl, _bio->bi_integrity, _iter)
 
 #define bio_integrity(bio) (bio->bi_integrity != NULL)
 

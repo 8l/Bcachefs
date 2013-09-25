@@ -496,16 +496,22 @@ EXPORT_SYMBOL(bio_alloc_bioset);
 
 void zero_fill_bio(struct bio *bio)
 {
-	unsigned long flags;
 	struct bio_vec bv;
 	struct bvec_iter iter;
 
-	bio_for_each_segment(bv, bio, iter) {
+#if defined(CONFIG_HIGHMEM) || defined(ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE)
+	bio_for_each_page(bv, bio, iter) {
+		unsigned long flags;
 		char *data = bvec_kmap_irq(&bv, &flags);
 		memset(data, 0, bv.bv_len);
 		flush_dcache_page(bv.bv_page);
 		bvec_kunmap_irq(data, &flags);
 	}
+#else
+	bio_for_each_segment(bv, bio, iter)
+		memset(page_address(bv.bv_page) + bv.bv_offset,
+		       0, bv.bv_len);
+#endif
 }
 EXPORT_SYMBOL(zero_fill_bio);
 
@@ -1557,11 +1563,11 @@ EXPORT_SYMBOL(bio_copy_kern);
  */
 void bio_set_pages_dirty(struct bio *bio)
 {
-	struct bio_vec *bvec;
-	int i;
+	struct bio_vec bvec;
+	struct bvec_iter iter;
 
-	bio_for_each_segment_all(bvec, bio, i) {
-		struct page *page = bvec->bv_page;
+	bio_for_each_page_all(bvec, bio, iter) {
+		struct page *page = bvec.bv_page;
 
 		if (page && !PageCompound(page))
 			set_page_dirty_lock(page);
@@ -1657,7 +1663,7 @@ void bio_flush_dcache_pages(struct bio *bi)
 	struct bio_vec bvec;
 	struct bvec_iter iter;
 
-	bio_for_each_segment(bvec, bi, iter)
+	bio_for_each_page(bvec, bi, iter)
 		flush_dcache_page(bvec.bv_page);
 }
 EXPORT_SYMBOL(bio_flush_dcache_pages);

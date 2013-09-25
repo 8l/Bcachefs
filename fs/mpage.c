@@ -43,11 +43,11 @@
  */
 static void mpage_end_io(struct bio *bio, int err)
 {
-	struct bio_vec *bv;
-	int i;
+	struct bio_vec bv;
+	struct bvec_iter iter;
 
-	bio_for_each_segment_all(bv, bio, i) {
-		struct page *page = bv->bv_page;
+	bio_for_each_page_all(bv, bio, iter) {
+		struct page *page = bv.bv_page;
 
 		if (bio_data_dir(bio) == READ) {
 			if (!err) {

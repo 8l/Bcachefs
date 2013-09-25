@@ -137,6 +137,16 @@ int bio_integrity_add_page(struct bio *bio, struct page *page,
 	struct bio_integrity_payload *bip = bio->bi_integrity;
 	struct bio_vec *iv;
 
+	if (bip->bip_vcnt) {
+		iv = bip->bip_vec + bip->bip_vcnt - 1;
+
+		if (bvec_to_phys(iv) + iv->bv_len ==
+		    page_to_phys(page) + offset) {
+			iv->bv_len += len;
+			return len;
+		}
+	}
+
 	if (bip->bip_vcnt >= bip_integrity_vecs(bip)) {
 		printk(KERN_ERR "%s: bip_vec full\n", __func__);
 		return 0;

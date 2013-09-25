@@ -2375,33 +2375,33 @@ int end_extent_writepage(struct page *page, int err, u64 start, u64 end)
  */
 static void end_bio_extent_writepage(struct bio *bio, int err)
 {
-	struct bio_vec *bvec;
+	struct bio_vec bvec;
+	struct bvec_iter iter;
 	u64 start;
 	u64 end;
-	int i;
 
-	bio_for_each_segment_all(bvec, bio, i) {
-		struct page *page = bvec->bv_page;
+	bio_for_each_page_all(bvec, bio, iter) {
+		struct page *page = bvec.bv_page;
 
 		/* We always issue full-page reads, but if some block
 		 * in a page fails to read, blk_update_request() will
 		 * advance bv_offset and adjust bv_len to compensate.
 		 * Print a warning for nonzero offsets, and an error
 		 * if they don't add up to a full page.  */
-		if (bvec->bv_offset || bvec->bv_len != PAGE_CACHE_SIZE) {
-			if (bvec->bv_offset + bvec->bv_len != PAGE_CACHE_SIZE)
+		if (bvec.bv_offset || bvec.bv_len != PAGE_CACHE_SIZE) {
+			if (bvec.bv_offset + bvec.bv_len != PAGE_CACHE_SIZE)
 				btrfs_err(BTRFS_I(page->mapping->host)->root->fs_info,
 				   "partial page write in btrfs with offset %u and length %u",
-					bvec->bv_offset, bvec->bv_len);
+					bvec.bv_offset, bvec.bv_len);
 			else
 				btrfs_info(BTRFS_I(page->mapping->host)->root->fs_info,
 				   "incomplete page write in btrfs with offset %u and "
 				   "length %u",
-					bvec->bv_offset, bvec->bv_len);
+					bvec.bv_offset, bvec.bv_len);
 		}
 
 		start = page_offset(page);
-		end = start + bvec->bv_offset + bvec->bv_len - 1;
+		end = start + bvec.bv_offset + bvec.bv_len - 1;
 
 		if (end_extent_writepage(page, err, start, end))
 			continue;
@@ -2437,7 +2437,8 @@ endio_readpage_release_extent(struct extent_io_tree *tree, u64 start, u64 len,
  */
 static void end_bio_extent_readpage(struct bio *bio, int err)
 {
-	struct bio_vec *bvec;
+	struct bio_vec bvec;
+	struct bvec_iter iter;
 	int uptodate = test_bit(BIO_UPTODATE, &bio->bi_flags);
 	struct btrfs_io_bio *io_bio = btrfs_io_bio(bio);
 	struct extent_io_tree *tree;
@@ -2449,13 +2450,12 @@ static void end_bio_extent_readpage(struct bio *bio, int err)
 	u64 extent_len = 0;
 	int mirror;
 	int ret;
-	int i;
 
 	if (err)
 		uptodate = 0;
 
-	bio_for_each_segment_all(bvec, bio, i) {
-		struct page *page = bvec->bv_page;
+	bio_for_each_page_all(bvec, bio, iter) {
+		struct page *page = bvec.bv_page;
 		struct inode *inode = page->mapping->host;
 
 		pr_debug("end_bio_extent_readpage: bi_sector=%llu, err=%d, "
@@ -2468,21 +2468,21 @@ static void end_bio_extent_readpage(struct bio *bio, int err)
 		 * advance bv_offset and adjust bv_len to compensate.
 		 * Print a warning for nonzero offsets, and an error
 		 * if they don't add up to a full page.  */
-		if (bvec->bv_offset || bvec->bv_len != PAGE_CACHE_SIZE) {
-			if (bvec->bv_offset + bvec->bv_len != PAGE_CACHE_SIZE)
+		if (bvec.bv_offset || bvec.bv_len != PAGE_CACHE_SIZE) {
+			if (bvec.bv_offset + bvec.bv_len != PAGE_CACHE_SIZE)
 				btrfs_err(BTRFS_I(page->mapping->host)->root->fs_info,
 				   "partial page read in btrfs with offset %u and length %u",
-					bvec->bv_offset, bvec->bv_len);
+					bvec.bv_offset, bvec.bv_len);
 			else
 				btrfs_info(BTRFS_I(page->mapping->host)->root->fs_info,
 				   "incomplete page read in btrfs with offset %u and "
 				   "length %u",
-					bvec->bv_offset, bvec->bv_len);
+					bvec.bv_offset, bvec.bv_len);
 		}
 
 		start = page_offset(page);
-		end = start + bvec->bv_offset + bvec->bv_len - 1;
-		len = bvec->bv_len;
+		end = start + bvec.bv_offset + bvec.bv_len - 1;
+		len = bvec.bv_len;
 
 		mirror = io_bio->mirror_num;
 		if (likely(uptodate && tree->ops &&
@@ -3452,18 +3452,20 @@ static void end_extent_buffer_writeback(struct extent_buffer *eb)
 
 static void end_bio_extent_buffer_writepage(struct bio *bio, int err)
 {
-	struct bio_vec *bvec;
+	int uptodate = err == 0;
+	struct bio_vec bvec;
+	struct bvec_iter iter;
 	struct extent_buffer *eb;
-	int i, done;
+	int done;
 
-	bio_for_each_segment_all(bvec, bio, i) {
-		struct page *page = bvec->bv_page;
+	bio_for_each_page_all(bvec, bio, iter) {
+		struct page *page = bvec.bv_page;
 
 		eb = (struct extent_buffer *)page->private;
 		BUG_ON(!eb);
 		done = atomic_dec_and_test(&eb->io_pages);
 
-		if (err || test_bit(EXTENT_BUFFER_IOERR, &eb->bflags)) {
+		if (!uptodate || test_bit(EXTENT_BUFFER_IOERR, &eb->bflags)) {
 			set_bit(EXTENT_BUFFER_IOERR, &eb->bflags);
 			ClearPageUptodate(page);
 			SetPageError(page);

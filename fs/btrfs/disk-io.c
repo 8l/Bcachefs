@@ -839,13 +839,14 @@ int btrfs_wq_submit_bio(struct btrfs_fs_info *fs_info, struct inode *inode,
 
 static int btree_csum_one_bio(struct bio *bio)
 {
-	struct bio_vec *bvec;
+	struct bio_vec bvec;
+	struct bvec_iter iter;
 	struct btrfs_root *root;
-	int i, ret = 0;
+	int ret = 0;
 
-	bio_for_each_segment_all(bvec, bio, i) {
-		root = BTRFS_I(bvec->bv_page->mapping->host)->root;
-		ret = csum_dirty_buffer(root, bvec->bv_page);
+	bio_for_each_page_all(bvec, bio, iter) {
+		root = BTRFS_I(bvec.bv_page->mapping->host)->root;
+		ret = csum_dirty_buffer(root, bvec.bv_page);
 		if (ret)
 			break;
 	}

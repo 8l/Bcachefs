@@ -6955,31 +6955,31 @@ unlock_err:
 static void btrfs_endio_direct_read(struct bio *bio, int err)
 {
 	struct btrfs_dio_private *dip = bio->bi_private;
-	struct bio_vec *bvec;
+	struct bio_vec bvec;
+	struct bvec_iter iter;
 	struct inode *inode = dip->inode;
 	struct btrfs_root *root = BTRFS_I(inode)->root;
 	struct bio *dio_bio;
 	u32 *csums = (u32 *)dip->csum;
 	u64 start;
-	int i;
+	int i = 0;
 
 	start = dip->logical_offset;
-	bio_for_each_segment_all(bvec, bio, i) {
+	bio_for_each_page_all(bvec, bio, iter) {
 		if (!(BTRFS_I(inode)->flags & BTRFS_INODE_NODATASUM)) {
-			struct page *page = bvec->bv_page;
 			char *kaddr;
 			u32 csum = ~(u32)0;
 			unsigned long flags;
 
 			local_irq_save(flags);
-			kaddr = kmap_atomic(page);
-			csum = btrfs_csum_data(kaddr + bvec->bv_offset,
-					       csum, bvec->bv_len);
+			kaddr = kmap_atomic(bvec.bv_page);
+			csum = btrfs_csum_data(kaddr + bvec.bv_offset,
+					       csum, bvec.bv_len);
 			btrfs_csum_final(csum, (char *)&csum);
 			kunmap_atomic(kaddr);
 			local_irq_restore(flags);
 
-			flush_dcache_page(bvec->bv_page);
+			flush_dcache_page(bvec.bv_page);
 			if (csum != csums[i]) {
 				btrfs_err(root->fs_info, "csum failed ino %llu off %llu csum %u expected csum %u",
 					  btrfs_ino(inode), start, csum,
@@ -6988,7 +6988,8 @@ static void btrfs_endio_direct_read(struct bio *bio, int err)
 			}
 		}
 
-		start += bvec->bv_len;
+		start += bvec.bv_len;
+		i++;
 	}
 
 	unlock_extent(&BTRFS_I(inode)->io_tree, dip->logical_offset,

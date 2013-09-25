@@ -457,7 +457,7 @@ int btrfs_csum_one_bio(struct btrfs_root *root, struct inode *inode,
 	sums->bytenr = (u64)bio->bi_iter.bi_sector << 9;
 	index = 0;
 
-	bio_for_each_segment(bvec, bio, iter) {
+	bio_for_each_page_all(bvec, bio, iter) {
 		if (!contig)
 			offset = page_offset(bvec.bv_page) + bvec.bv_offset;
 

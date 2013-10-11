@@ -25,6 +25,7 @@
 #include <linux/file.h>
 #include <linux/mm.h>
 #include <linux/mman.h>
+#include <linux/bio.h>
 #include <linux/mmu_context.h>
 #include <linux/percpu.h>
 #include <linux/slab.h>
@@ -825,49 +826,11 @@ out:
 	return ret;
 }
 
-/* aio_complete
- *	Called when the io request on the given iocb is complete.
- */
-void aio_complete(struct kiocb *iocb, long res, long res2)
+static inline unsigned kioctx_ring_put(struct kioctx *ctx, struct kiocb *req,
+				       unsigned tail)
 {
-	struct kioctx	*ctx = iocb->ki_ctx;
-	struct aio_ring	*ring;
 	struct io_event	*ev_page, *event;
-	unsigned long	flags;
-	unsigned tail, pos;
-
-	/*
-	 * Special case handling for sync iocbs:
-	 *  - events go directly into the iocb for fast handling
-	 *  - the sync task with the iocb in its stack holds the single iocb
-	 *    ref, no other paths have a way to get another ref
-	 *  - the sync task helpfully left a reference to itself in the iocb
-	 */
-	if (is_sync_kiocb(iocb)) {
-		iocb->ki_user_data = res;
-		smp_wmb();
-		iocb->ki_ctx = ERR_PTR(-EXDEV);
-		wake_up_process(iocb->ki_obj.tsk);
-		return;
-	}
-
-	if (iocb->ki_list.next) {
-		unsigned long flags;
-
-		spin_lock_irqsave(&ctx->ctx_lock, flags);
-		list_del(&iocb->ki_list);
-		spin_unlock_irqrestore(&ctx->ctx_lock, flags);
-	}
-
-	/*
-	 * Add a completion event to the ring buffer. Must be done holding
-	 * ctx->completion_lock to prevent other code from messing with the tail
-	 * pointer since we might be called from irq context.
-	 */
-	spin_lock_irqsave(&ctx->completion_lock, flags);
-
-	tail = ctx->tail;
-	pos = tail + AIO_EVENTS_OFFSET;
+	unsigned pos = tail + AIO_EVENTS_OFFSET;
 
 	if (++tail >= ctx->nr_events)
 		tail = 0;
@@ -875,22 +838,30 @@ void aio_complete(struct kiocb *iocb, long res, long res2)
 	ev_page = kmap_atomic(ctx->ring_pages[pos / AIO_EVENTS_PER_PAGE]);
 	event = ev_page + pos % AIO_EVENTS_PER_PAGE;
 
-	event->obj = (u64)(unsigned long)iocb->ki_obj.user;
-	event->data = iocb->ki_user_data;
-	event->res = res;
-	event->res2 = res2;
+	event->obj	= (u64)(unsigned long)req->ki_obj.user;
+	event->data	= req->ki_user_data;
+	event->res	= req->ki_res;
+	event->res2	= req->ki_res2;
 
 	kunmap_atomic(ev_page);
 	flush_dcache_page(ctx->ring_pages[pos / AIO_EVENTS_PER_PAGE]);
 
 	pr_debug("%p[%u]: %p: %p %Lx %lx %lx\n",
-		 ctx, tail, iocb, iocb->ki_obj.user, iocb->ki_user_data,
-		 res, res2);
+		 ctx, tail, req, req->ki_obj.user, req->ki_user_data,
+		 req->ki_res, req->ki_res2);
 
-	/* after flagging the request as done, we
-	 * must never even look at it again
-	 */
-	smp_wmb();	/* make event visible before updating tail */
+	return tail;
+}
+
+static inline void kioctx_ring_unlock(struct kioctx *ctx, unsigned tail)
+{
+	struct aio_ring *ring;
+
+	if (!ctx)
+		return;
+
+	smp_wmb();
+	/* make event visible before updating tail */
 
 	ctx->tail = tail;
 
@@ -899,20 +870,7 @@ void aio_complete(struct kiocb *iocb, long res, long res2)
 	kunmap_atomic(ring);
 	flush_dcache_page(ctx->ring_pages[0]);
 
-	spin_unlock_irqrestore(&ctx->completion_lock, flags);
-
-	pr_debug("added to ring %p at [%u]\n", iocb, tail);
-
-	/*
-	 * Check if the user asked us to deliver the result through an
-	 * eventfd. The eventfd_signal() function is safe to be called
-	 * from IRQ context.
-	 */
-	if (iocb->ki_eventfd != NULL)
-		eventfd_signal(iocb->ki_eventfd, 1);
-
-	/* everything turned out well, dispose of the aiocb. */
-	kiocb_free(iocb);
+	spin_unlock(&ctx->completion_lock);
 
 	/*
 	 * We have to order our ring_info tail store above and test
@@ -922,12 +880,102 @@ void aio_complete(struct kiocb *iocb, long res, long res2)
 	 */
 	smp_mb();
 
-	if (waitqueue_active(&ctx->wait))
-		wake_up(&ctx->wait);
-
-	percpu_ref_put(&ctx->reqs);
+	if (waitqueue_active(&ctx->wait)) {
+		/* Irqs are already disabled */
+		spin_lock(&ctx->wait.lock);
+		wake_up_locked(&ctx->wait);
+		spin_unlock(&ctx->wait.lock);
+	}
 }
-EXPORT_SYMBOL(aio_complete);
+
+void batch_complete_aio(struct batch_complete *batch)
+{
+	struct kioctx *ctx = NULL;
+	struct kiocb *req, *next;
+	unsigned long flags;
+	unsigned tail = 0;
+
+	local_irq_save(flags);
+
+	for (req = batch->kiocb; req; req = req->ki_next) {
+		if (req->ki_ctx != ctx) {
+			kioctx_ring_unlock(ctx, tail);
+
+			ctx = req->ki_ctx;
+			spin_lock(&ctx->completion_lock);
+			tail = ctx->tail;
+		}
+
+		tail = kioctx_ring_put(ctx, req, tail);
+	}
+
+	kioctx_ring_unlock(ctx, tail);
+	local_irq_restore(flags);
+
+	for (req = batch->kiocb; req; req = next) {
+		next = req->ki_next;
+
+		if (req->ki_eventfd)
+			eventfd_signal(req->ki_eventfd, 1);
+
+		kiocb_free(req);
+	}
+}
+EXPORT_SYMBOL(batch_complete_aio);
+
+/* aio_complete_batch
+ *	Called when the io request on the given iocb is complete; @batch may be
+ *	NULL.
+ */
+void aio_complete_batch(struct kiocb *req, long res, long res2,
+			struct batch_complete *batch)
+{
+	req->ki_res = res;
+	req->ki_res2 = res2;
+
+	if (req->ki_list.next) {
+		struct kioctx *ctx = req->ki_ctx;
+		unsigned long flags;
+
+		spin_lock_irqsave(&ctx->ctx_lock, flags);
+		list_del(&req->ki_list);
+		spin_unlock_irqrestore(&ctx->ctx_lock, flags);
+	}
+
+	/*
+	 * Special case handling for sync iocbs:
+	 *  - events go directly into the iocb for fast handling
+	 *  - the sync task with the iocb in its stack holds the single iocb
+	 *    ref, no other paths have a way to get another ref
+	 *  - the sync task helpfully left a reference to itself in the iocb
+	 */
+	if (is_sync_kiocb(req)) {
+		req->ki_user_data = req->ki_res;
+		smp_wmb();
+		req->ki_ctx = ERR_PTR(-EXDEV);
+		wake_up_process(req->ki_obj.tsk);
+	} else if (batch) {
+		unsigned i = 0;
+		struct kiocb **p = &batch->kiocb;
+
+		while (*p && (*p)->ki_ctx > req->ki_ctx) {
+			p = &(*p)->ki_next;
+			if (++i == 16) {
+				batch_complete_aio(batch);
+				batch->kiocb = req;
+				return;
+			}
+		}
+
+		req->ki_next = *p;
+		*p = req;
+	} else {
+		struct batch_complete batch_stack = { .kiocb = req };
+
+		batch_complete_aio(&batch_stack);
+	}
+}
+EXPORT_SYMBOL(aio_complete_batch);
 
 /* aio_read_events
  *	Pull an event off of the ioctx's event ring.  Returns the number of

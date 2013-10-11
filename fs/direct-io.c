@@ -234,7 +234,7 @@ static inline struct page *dio_get_page(struct dio *dio,
  * dio_complete.
  */
 static ssize_t dio_complete(struct dio *dio, loff_t offset, ssize_t ret,
-		bool is_async)
+			    bool is_async, struct batch_complete *batch)
 {
 	ssize_t transferred = 0;
 
@@ -276,7 +276,7 @@ static ssize_t dio_complete(struct dio *dio, loff_t offset, ssize_t ret,
 				ret = err;
 		}
 
-		aio_complete(dio->iocb, ret, 0);
+		aio_complete_batch(dio->iocb, ret, 0, batch);
 	}
 
 	kmem_cache_free(dio_cache, dio);
@@ -287,7 +287,7 @@ static void dio_aio_complete_work(struct work_struct *work)
 {
 	struct dio *dio = container_of(work, struct dio, complete_work);
 
-	dio_complete(dio, dio->iocb->ki_pos, 0, true);
+	dio_complete(dio, dio->iocb->ki_pos, 0, true, NULL);
 }
 
 static int dio_bio_complete(struct dio *dio, struct bio *bio);
@@ -295,7 +295,8 @@ static int dio_bio_complete(struct dio *dio, struct bio *bio);
 /*
  * Asynchronous IO callback. 
  */
-static void dio_bio_end_aio(struct bio *bio, int error)
+static void dio_bio_end_aio(struct bio *bio, int error,
+			    struct batch_complete *batch)
 {
 	struct dio *dio = bio->bi_private;
 	unsigned long remaining;
@@ -316,7 +317,7 @@ static void dio_bio_end_aio(struct bio *bio, int error)
 			queue_work(dio->inode->i_sb->s_dio_done_wq,
 				   &dio->complete_work);
 		} else {
-			dio_complete(dio, dio->iocb->ki_pos, 0, true);
+			dio_complete(dio, dio->iocb->ki_pos, 0, true, batch);
 		}
 	}
 }
@@ -355,7 +356,7 @@ void dio_end_io(struct bio *bio, int error, struct batch_complete *batch)
 	struct dio *dio = bio->bi_private;
 
 	if (dio->is_async)
-		dio_bio_end_aio(bio, error);
+		dio_bio_end_aio(bio, error, batch);
 	else
 		dio_bio_end_io(bio, error);
 }
@@ -1347,7 +1348,7 @@ do_blockdev_direct_IO(int rw, struct kiocb *iocb, struct inode *inode,
 		dio_await_completion(dio);
 
 	if (drop_refcount(dio) == 0) {
-		retval = dio_complete(dio, offset, retval, false);
+		retval = dio_complete(dio, offset, retval, false, NULL);
 	} else
 		BUG_ON(retval != -EIOCBQUEUED);
 

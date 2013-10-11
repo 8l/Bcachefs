@@ -212,7 +212,8 @@ err:
 	goto out;
 }
 
-static void btree_node_read_endio(struct bio *bio, int error)
+static void btree_node_read_endio(struct bio *bio, int error,
+				  struct batch_complete *batch)
 {
 	struct closure *cl = bio->bi_private;
 	closure_put(cl);
@@ -302,7 +303,8 @@ static void btree_node_write_done(struct closure *cl)
 	__btree_node_write_done(cl);
 }
 
-static void btree_node_write_endio(struct bio *bio, int error)
+static void btree_node_write_endio(struct bio *bio, int error,
+				   struct batch_complete *batch)
 {
 	struct closure *cl = bio->bi_private;
 	struct btree *b = container_of(cl, struct btree, io.cl);

@@ -448,7 +448,8 @@ struct nvme_bio_pair {
 	atomic_t cnt;
 };
 
-static void nvme_bio_pair_endio(struct bio *bio, int err)
+static void nvme_bio_pair_endio(struct bio *bio, int err,
+				struct batch_complete *batch)
 {
 	struct nvme_bio_pair *bp = bio->bi_private;
 

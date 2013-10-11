@@ -8,6 +8,7 @@
 #include <linux/rcupdate.h>
 #include <linux/atomic.h>
 #include <linux/batch_complete.h>
+#include <linux/blk_types.h>
 
 struct kioctx;
 struct kiocb;
@@ -104,6 +105,13 @@ static inline bool kiocb_cancelled(struct kiocb *kiocb)
 {
 	return kiocb->ki_cancel == KIOCB_CANCELLED;
 }
+
+#ifdef CONFIG_BLOCK
+static inline bool bio_cancelled(struct bio *bio)
+{
+	return bio->bi_iocb && kiocb_cancelled(bio->bi_iocb);
+}
+#endif
 
 static inline bool is_sync_kiocb(struct kiocb *kiocb)
 {

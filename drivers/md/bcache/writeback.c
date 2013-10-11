@@ -9,6 +9,7 @@
 #include "bcache.h"
 #include "btree.h"
 #include "debug.h"
+#include "extents.h"
 #include "writeback.h"
 
 #include <linux/delay.h>
@@ -149,7 +150,8 @@ static void write_dirty_finish(struct closure *cl)
 		SET_KEY_CACHED(keys.top, true);
 		bch_keylist_push(&keys);
 
-		for (i = 0; i < KEY_PTRS(&w->key); i++)
+		/* XXX: hack */
+		for (i = 0; i < bch_extent_ptrs(&w->key); i++)
 			atomic_inc(&PTR_BUCKET(dc->disk.c, &w->key, i)->pin);
 
 		ret = bch_btree_insert(dc->disk.c, BTREE_ID_EXTENTS,

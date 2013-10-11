@@ -9,6 +9,7 @@
 #include "bcache.h"
 #include "btree.h"
 #include "debug.h"
+#include "extents.h"
 #include "request.h"
 #include "writeback.h"
 
@@ -208,7 +209,7 @@ static void bio_csum(struct bio *bio, struct bkey *k)
 		kunmap(bv.bv_page);
 	}
 
-	k->ptr[KEY_PTRS(k)] = csum & (~0ULL >> 1);
+	k->ptr[bch_extent_ptrs(k)] = csum & (~0ULL >> 1);
 }
 
 /* Insert data into cache */
@@ -315,7 +316,7 @@ static void bch_data_insert_error(struct closure *cl)
 	while (src != op->insert_keys.top) {
 		struct bkey *n = bkey_next(src);
 
-		SET_KEY_PTRS(src, 0);
+		bch_set_extent_ptrs(src, 0);
 		memmove(dst, src, bkey_bytes(src));
 
 		dst = bkey_next(dst);
@@ -393,7 +394,7 @@ static void bch_data_insert_start(struct closure *cl)
 		if (op->cached)
 			SET_KEY_CACHED(k, true);
 		else
-			for (i = 0; i < KEY_PTRS(k); i++)
+			for (i = 0; i < bch_extent_ptrs(k); i++)
 				SET_GC_MARK(PTR_BUCKET(op->c, k, i),
 					    GC_MARK_DIRTY);
 

@@ -62,6 +62,7 @@
 
 #include "bcache.h"
 #include "btree.h"
+#include "extents.h"
 
 #include <linux/blkdev.h>
 #include <linux/freezer.h>
@@ -453,7 +454,7 @@ void bch_bucket_free(struct cache_set *c, struct bkey *k)
 {
 	unsigned i;
 
-	for (i = 0; i < KEY_PTRS(k); i++) {
+	for (i = 0; i < bch_extent_ptrs(k); i++) {
 		struct bucket *b = PTR_BUCKET(c, k, i);
 
 		SET_GC_MARK(b, GC_MARK_RECLAIMABLE);
@@ -485,7 +486,7 @@ int __bch_bucket_alloc_set(struct cache_set *c, unsigned watermark,
 				bucket_to_sector(c, b),
 				ca->sb.nr_this_dev);
 
-		SET_KEY_PTRS(k, i + 1);
+		bch_set_extent_ptrs(k, i + 1);
 	}
 
 	return 0;
@@ -549,7 +550,7 @@ static struct open_bucket *pick_data_bucket(struct cache_set *c,
 	ret = ret_task ?: list_first_entry(&c->data_buckets,
 					   struct open_bucket, list);
 found:
-	if (!ret->sectors_free && KEY_PTRS(alloc)) {
+	if (!ret->sectors_free && bch_extent_ptrs(alloc)) {
 		ret->sectors_free = c->sb.bucket_size;
 		bkey_copy(&ret->key, alloc);
 		bkey_init(alloc);
@@ -581,7 +582,7 @@ bool bch_alloc_sectors(struct cache_set *c, struct bkey *k, unsigned sectors,
 	/*
 	 * We might have to allocate a new bucket, which we can't do with a
 	 * spinlock held. So if we have to allocate, we drop the lock, allocate
-	 * and then retry. KEY_PTRS() indicates whether alloc points to
+	 * and then retry. bch_extent_ptrs() indicates whether alloc points to
 	 * allocated bucket(s).
 	 */
 
@@ -606,22 +607,22 @@ bool bch_alloc_sectors(struct cache_set *c, struct bkey *k, unsigned sectors,
 	 * second time we call find_data_bucket(). If we allocated a bucket but
 	 * didn't use it, drop the refcount bch_bucket_alloc_set() took:
 	 */
-	if (KEY_PTRS(&alloc.key))
+	if (bch_extent_ptrs(&alloc.key))
 		bkey_put(c, &alloc.key);
 
-	for (i = 0; i < KEY_PTRS(&b->key); i++)
+	for (i = 0; i < bch_extent_ptrs(&b->key); i++)
 		EBUG_ON(ptr_stale(c, &b->key, i));
 
 	/* Set up the pointer to the space we're allocating: */
 
-	for (i = 0; i < KEY_PTRS(&b->key); i++)
+	for (i = 0; i < bch_extent_ptrs(&b->key); i++)
 		k->ptr[i] = b->key.ptr[i];
 
 	sectors = min(sectors, b->sectors_free);
 
 	SET_KEY_OFFSET(k, KEY_OFFSET(k) + sectors);
 	SET_KEY_SIZE(k, sectors);
-	SET_KEY_PTRS(k, KEY_PTRS(&b->key));
+	bch_set_extent_ptrs(k, bch_extent_ptrs(&b->key));
 
 	/*
 	 * Move b to the end of the lru, and keep track of what this bucket was
@@ -633,7 +634,7 @@ bool bch_alloc_sectors(struct cache_set *c, struct bkey *k, unsigned sectors,
 
 	b->sectors_free	-= sectors;
 
-	for (i = 0; i < KEY_PTRS(&b->key); i++) {
+	for (i = 0; i < bch_extent_ptrs(&b->key); i++) {
 		SET_PTR_OFFSET(&b->key, i, PTR_OFFSET(&b->key, i) + sectors);
 
 		atomic_long_add(sectors,
@@ -649,7 +650,7 @@ bool bch_alloc_sectors(struct cache_set *c, struct bkey *k, unsigned sectors,
 	 * get_data_bucket()'s refcount.
 	 */
 	if (b->sectors_free)
-		for (i = 0; i < KEY_PTRS(&b->key); i++)
+		for (i = 0; i < bch_extent_ptrs(&b->key); i++)
 			atomic_inc(&PTR_BUCKET(c, &b->key, i)->pin);
 
 	spin_unlock(&c->data_bucket_lock);

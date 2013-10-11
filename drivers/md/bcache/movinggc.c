@@ -7,6 +7,7 @@
 #include "bcache.h"
 #include "btree.h"
 #include "debug.h"
+#include "extents.h"
 #include "request.h"
 
 #include <trace/events/bcache.h>
@@ -24,7 +25,7 @@ static bool moving_pred(struct keybuf *buf, struct bkey *k)
 					   moving_gc_keys);
 	unsigned i;
 
-	for (i = 0; i < KEY_PTRS(k); i++) {
+	for (i = 0; i < bch_extent_ptrs(k); i++) {
 		struct cache *ca = PTR_CACHE(c, k, i);
 		struct bucket *g = PTR_BUCKET(c, k, i);
 

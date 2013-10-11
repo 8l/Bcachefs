@@ -54,7 +54,7 @@ struct bkey *bch_journal_find_btree_root(struct cache_set *c, struct jset *j,
 			*level = jkeys->level;
 
 			if (!jkeys->keys ||
-			    jkeys->keys != bkey_u64s(k))
+			    jkeys->keys != KEY_U64s(k))
 				goto err;
 
 			goto found;
@@ -89,7 +89,7 @@ static void bch_journal_add_keys(struct jset *j, enum btree_id id,
 static void bch_journal_add_btree_root(struct jset *j, enum btree_id id,
 				       struct bkey *k, unsigned level)
 {
-	bch_journal_add_keys(j, id, k, bkey_u64s(k), level, true);
+	bch_journal_add_keys(j, id, k, KEY_U64s(k), level, true);
 }
 
 /*
@@ -339,7 +339,7 @@ static void bch_journal_mark_key(struct cache_set *c, struct bkey *k)
 	struct bucket *g;
 	unsigned ptr;
 
-	for (ptr = 0; ptr < KEY_PTRS(k); ptr++) {
+	for (ptr = 0; ptr < bch_extent_ptrs(k); ptr++) {
 		g = PTR_BUCKET(c, k, ptr);
 		atomic_inc(&g->pin);
 
@@ -631,7 +631,7 @@ static void journal_reclaim(struct cache_set *c)
 	}
 
 	bkey_init(k);
-	SET_KEY_PTRS(k, n);
+	bch_set_extent_ptrs(k, n);
 
 	if (n)
 		c->journal.blocks_free = c->sb.bucket_size >> c->block_bits;
@@ -739,7 +739,7 @@ static void journal_write_unlocked(struct closure *cl)
 
 	sectors = set_blocks(w->data, block_bytes(c)) * c->sb.block_size;
 
-	for (i = 0; i < KEY_PTRS(k); i++) {
+	for (i = 0; i < bch_extent_ptrs(k); i++) {
 		ca = PTR_CACHE(c, k, i);
 		bio = &ca->journal.bio;
 

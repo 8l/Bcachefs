@@ -222,8 +222,8 @@ static int blockdev_inode_find_fn(struct btree_op *b_op, struct btree *b, struct
 		struct bch_inode_blockdev *binode =
 			container_of(inode, struct bch_inode_blockdev, i_inode);
 
-		pr_debug("found inode %llu: %pU (ptrs %llu)",
-			 KEY_INODE(k), binode->i_uuid, KEY_PTRS(k));
+		pr_debug("found inode %llu: %pU (u64s %llu)",
+			 KEY_INODE(k), binode->i_uuid, KEY_U64s(k));
 
 		if (!memcmp(op->uuid, binode->i_uuid, 16)) {
 			memcpy(op->ret, binode, sizeof(*binode));
@@ -250,6 +250,8 @@ int bch_blockdev_inode_find_by_uuid(struct cache_set *c, u8 *uuid,
 
 /* Old UUID code */
 
+#include "extents.h"
+
 static void uuid_endio(struct bio *bio, int error)
 {
 	struct closure *cl = bio->bi_private;
@@ -264,7 +266,7 @@ static int uuid_io(struct cache_set *c, struct bkey *k,
 	struct closure cl;
 	closure_init_stack(&cl);
 
-	for (i = 0; i < KEY_PTRS(k); i++) {
+	for (i = 0; i < bch_extent_ptrs(k); i++) {
 		struct bio *bio = bch_bbio_alloc(c);
 
 		bio->bi_rw	= REQ_SYNC|REQ_META|READ_SYNC;

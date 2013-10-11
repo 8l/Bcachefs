@@ -43,16 +43,13 @@ static inline void SET_##name(struct bkey *k, unsigned i, __u64 v)	\
 #define KEY_SIZE_BITS		16
 #define KEY_SIZE_MAX		((1U << KEY_SIZE_BITS) - 1)
 
-#define KEY_PTR_BITS		6
+#define KEY_MAX_U64S		64
 
-#define KEY_MAX_U64S		(2 + (1 << KEY_PTR_BITS))
-
-//KEY_FIELD(KEY_FORMAT,	high, 60, 4)
-KEY_FIELD(KEY_PTRS,	high, 54, 6)	/* Max value 8 * ((1 << 6) - 1) bytes */
-KEY_FIELD(KEY_DELETED,	high, 53, 1)
-KEY_FIELD(KEY_CACHED,	high, 52, 1)
-KEY_FIELD(KEY_CSUM,	high, 50, 2)
-/* KEY_FIELD(UNUSED,	high, 48, 2) */
+KEY_FIELD(KEY_U64s,	high, 58, 8)
+KEY_FIELD(KEY_DELETED,	high, 57, 1)
+KEY_FIELD(KEY_CACHED,	high, 56, 1)
+KEY_FIELD(KEY_CSUM,	high, 54, 2)
+/* KEY_FIELD(UNUSED,	high, 48, 6) */
 
 KEY_FIELD(KEY_SIZE,	high, 32, KEY_SIZE_BITS)
 KEY_FIELD(KEY_VERSION,	high, 0,  32)
@@ -62,7 +59,7 @@ KEY_FIELD(KEY_OFFSET,	low,  0, KEY_OFFSET_BITS)
 
 #define KEY(inode, offset, size)					\
 ((struct bkey) {							\
-	.high = ((__u64) (size) << 32),					\
+	.high = (2ULL << 58)|((__u64) (size) << 32),			\
 	.low = (((__u64) inode) << KEY_OFFSET_BITS) | (offset),		\
 })
 
@@ -88,14 +85,9 @@ PTR_FIELD(PTR_GEN,			0,  8)
 
 /* Bkey utility code */
 
-static inline unsigned long bkey_u64s(const struct bkey *k)
-{
-	return (sizeof(struct bkey) / sizeof(__u64)) + KEY_PTRS(k);
-}
-
 static inline unsigned long bkey_bytes(const struct bkey *k)
 {
-	return bkey_u64s(k) * sizeof(__u64);
+	return KEY_U64s(k) * sizeof(__u64);
 }
 
 #define bkey_copy(_dest, _src)	memcpy(_dest, _src, bkey_bytes(_src))
@@ -109,7 +101,7 @@ static inline void bkey_copy_key(struct bkey *dest, const struct bkey *src)
 static inline struct bkey *bkey_next(const struct bkey *k)
 {
 	__u64 *d = (void *) k;
-	return (struct bkey *) (d + bkey_u64s(k));
+	return (struct bkey *) (d + KEY_U64s(k));
 }
 
 static inline struct bkey *bkey_idx(const struct bkey *k, unsigned nr_keys)
@@ -172,12 +164,12 @@ BITMASK(INODE_NET,		struct bch_inode_blockdev,
 #define BCH_INODE_INIT(inode)					\
 do {								\
 	memset(inode, 0, sizeof(*(inode)));			\
-	SET_KEY_PTRS(&(inode)->i_inode.i_key,			\
-		     (sizeof(*inode) / 8) - 2);			\
+	SET_KEY_U64s(&(inode)->i_inode.i_key,			\
+		     sizeof(*inode) / sizeof(__u64));		\
 								\
 	if (__builtin_types_compatible_p(typeof(inode),		\
 			struct bch_inode_fs *))			\
-		(inode)->i_inode.i_inode_format = BCH_INODE_FS;		\
+		(inode)->i_inode.i_inode_format = BCH_INODE_FS;	\
 	else if (__builtin_types_compatible_p(typeof(inode),	\
 			struct bch_inode_blockdev *))		\
 		(inode)->i_inode.i_inode_format = BCH_INODE_BLOCKDEV;	\

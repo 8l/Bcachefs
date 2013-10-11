@@ -41,6 +41,7 @@
 #include <linux/migrate.h>
 #include <linux/ramfs.h>
 #include <linux/percpu-refcount.h>
+#include <linux/percpu_ida.h>
 
 #include <asm/kmap_types.h>
 #include <asm/uaccess.h>
@@ -87,6 +88,9 @@ struct kioctx {
 
 	struct __percpu kioctx_cpu *cpu;
 
+	struct percpu_ida	kiocb_tags;
+	struct kiocb		**kiocb_pages;
+
 	/*
 	 * For percpu reqs_available, number of slots we move to/from global
 	 * counter at a time:
@@ -125,11 +129,6 @@ struct kioctx {
 	} ____cacheline_aligned_in_smp;
 
 	struct {
-		spinlock_t	ctx_lock;
-		struct list_head active_reqs;	/* used for cancellation */
-	} ____cacheline_aligned_in_smp;
-
-	struct {
 		struct mutex	ring_lock;
 		wait_queue_head_t wait;
 	} ____cacheline_aligned_in_smp;
@@ -151,8 +150,16 @@ unsigned long aio_nr;		/* current system wide number of aio requests */
 unsigned long aio_max_nr = 0x10000; /* system wide maximum number of aio requests */
 /*----end sysctl variables---*/
 
-static struct kmem_cache	*kiocb_cachep;
 static struct kmem_cache	*kioctx_cachep;
+
+#define KIOCBS_PER_PAGE	(PAGE_SIZE / sizeof(struct kiocb))
+
+static inline struct kiocb *kiocb_from_id(struct kioctx *ctx, unsigned id)
+{
+	struct kiocb *req = ctx->kiocb_pages[id / KIOCBS_PER_PAGE];
+
+	return req ? req + id % KIOCBS_PER_PAGE : NULL;
+}
 
 /* aio_setup
  *	Creates the slab caches used by the aio routines, panic on
@@ -160,7 +167,6 @@ static struct kmem_cache	*kioctx_cachep;
  */
 static int __init aio_setup(void)
 {
-	kiocb_cachep = KMEM_CACHE(kiocb, SLAB_HWCACHE_ALIGN|SLAB_PANIC);
 	kioctx_cachep = KMEM_CACHE(kioctx,SLAB_HWCACHE_ALIGN|SLAB_PANIC);
 
 	pr_debug("sizeof(struct page) = %zu\n", sizeof(struct page));
@@ -379,47 +385,58 @@ static int aio_setup_ring(struct kioctx *ctx)
 
 void kiocb_set_cancel_fn(struct kiocb *req, kiocb_cancel_fn *cancel)
 {
-	struct kioctx *ctx = req->ki_ctx;
-	unsigned long flags;
+	kiocb_cancel_fn *p, *old = req->ki_cancel;
 
-	spin_lock_irqsave(&ctx->ctx_lock, flags);
+	do {
+		if (old == KIOCB_CANCELLED) {
+			cancel(req);
+			return;
+		}
 
-	if (!req->ki_list.next)
-		list_add(&req->ki_list, &ctx->active_reqs);
-
-	req->ki_cancel = cancel;
-
-	spin_unlock_irqrestore(&ctx->ctx_lock, flags);
+		p = old;
+		old = cmpxchg(&req->ki_cancel, old, cancel);
+	} while (old != p);
 }
 EXPORT_SYMBOL(kiocb_set_cancel_fn);
 
-static int kiocb_cancel(struct kioctx *ctx, struct kiocb *kiocb)
+static void kiocb_cancel(struct kioctx *ctx, struct kiocb *req)
 {
 	kiocb_cancel_fn *old, *cancel;
 
-	/*
-	 * Don't want to set kiocb->ki_cancel = KIOCB_CANCELLED unless it
-	 * actually has a cancel function, hence the cmpxchg()
-	 */
+	local_irq_disable();
+	cancel = req->ki_cancel;
 
-	cancel = ACCESS_ONCE(kiocb->ki_cancel);
 	do {
-		if (!cancel || cancel == KIOCB_CANCELLED)
-			return -EINVAL;
+		if (cancel == KIOCB_CANCELLING ||
+		    cancel == KIOCB_CANCELLED)
+			goto out;
 
 		old = cancel;
-		cancel = cmpxchg(&kiocb->ki_cancel, old, KIOCB_CANCELLED);
-	} while (cancel != old);
+		cancel = cmpxchg(&req->ki_cancel, old, KIOCB_CANCELLING);
+	} while (old != cancel);
 
-	return cancel(kiocb);
+	if (cancel)
+		cancel(req);
+
+	smp_wmb();
+	req->ki_cancel = KIOCB_CANCELLED;
+out:
+	local_irq_enable();
 }
 
 static void free_ioctx(struct work_struct *work)
 {
 	struct kioctx *ctx = container_of(work, struct kioctx, free_work);
+	unsigned i;
 
 	pr_debug("freeing %p\n", ctx);
 
+	for (i = 0; i < DIV_ROUND_UP(ctx->nr_events, KIOCBS_PER_PAGE); i++)
+		if (ctx->kiocb_pages[i])
+			free_page((unsigned long) ctx->kiocb_pages[i]);
+
+	kfree(ctx->kiocb_pages);
+	percpu_ida_destroy(&ctx->kiocb_tags);
 	aio_free_ring(ctx);
 	free_percpu(ctx->cpu);
 	kmem_cache_free(kioctx_cachep, ctx);
@@ -442,18 +459,14 @@ static void free_ioctx_users(struct percpu_ref *ref)
 {
 	struct kioctx *ctx = container_of(ref, struct kioctx, users);
 	struct kiocb *req;
+	unsigned i;
 
-	spin_lock_irq(&ctx->ctx_lock);
-
-	while (!list_empty(&ctx->active_reqs)) {
-		req = list_first_entry(&ctx->active_reqs,
-				       struct kiocb, ki_list);
-
-		list_del_init(&req->ki_list);
-		kiocb_cancel(ctx, req);
+	for (i = 0; i < ctx->nr_events; i++) {
+		req = kiocb_from_id(ctx, i);
+		if (req)
+			kiocb_cancel(ctx, req);
 	}
 
-	spin_unlock_irq(&ctx->ctx_lock);
 
 	percpu_ref_kill(&ctx->reqs);
 	percpu_ref_put(&ctx->reqs);
@@ -568,12 +581,9 @@ static struct kioctx *ioctx_alloc(unsigned nr_events)
 	if (percpu_ref_init(&ctx->reqs, free_ioctx_reqs))
 		goto err;
 
-	spin_lock_init(&ctx->ctx_lock);
 	spin_lock_init(&ctx->completion_lock);
 	mutex_init(&ctx->ring_lock);
 	init_waitqueue_head(&ctx->wait);
-
-	INIT_LIST_HEAD(&ctx->active_reqs);
 
 	ctx->cpu = alloc_percpu(struct kioctx_cpu);
 	if (!ctx->cpu)
@@ -586,6 +596,15 @@ static struct kioctx *ioctx_alloc(unsigned nr_events)
 	ctx->req_batch = (ctx->nr_events - 1) / (num_possible_cpus() * 4);
 	if (ctx->req_batch < 1)
 		ctx->req_batch = 1;
+
+	if (percpu_ida_init(&ctx->kiocb_tags, ctx->nr_events))
+		goto err;
+
+	ctx->kiocb_pages =
+		kzalloc(DIV_ROUND_UP(ctx->nr_events, KIOCBS_PER_PAGE) *
+			sizeof(struct kiocb *), GFP_KERNEL);
+	if (!ctx->kiocb_pages)
+		goto err;
 
 	/* limit the number of system wide aios */
 	spin_lock(&aio_nr_lock);
@@ -611,6 +630,8 @@ static struct kioctx *ioctx_alloc(unsigned nr_events)
 err_cleanup:
 	aio_nr_sub(ctx->max_reqs);
 err:
+	kfree(ctx->kiocb_pages);
+	percpu_ida_destroy(&ctx->kiocb_tags);
 	aio_free_ring(ctx);
 	free_percpu(ctx->cpu);
 	free_percpu(ctx->reqs.pcpu_count);
@@ -773,19 +794,46 @@ out:
 static inline struct kiocb *aio_get_req(struct kioctx *ctx)
 {
 	struct kiocb *req;
+	int id;
 
 	if (!get_reqs_available(ctx))
 		return NULL;
 
-	req = kmem_cache_alloc(kiocb_cachep, GFP_KERNEL|__GFP_ZERO);
-	if (unlikely(!req))
-		goto out_put;
+	id = percpu_ida_alloc(&ctx->kiocb_tags, GFP_NOWAIT);
+	if (id < 0)
+		goto err;
+
+	req = kiocb_from_id(ctx, id);
+	if (!req) {
+		unsigned i, page_nr = id / KIOCBS_PER_PAGE;
+		struct kiocb *p = (void *) __get_free_page(GFP_KERNEL);
+		if (!p)
+			goto err;
+
+		for (i = 0; i < KIOCBS_PER_PAGE; i++) {
+			p[i].ki_cancel = KIOCB_CANCELLED;
+			p[i].ki_id = page_nr * KIOCBS_PER_PAGE + i;
+		}
+
+		smp_wmb();
+
+		if (cmpxchg(&ctx->kiocb_pages[page_nr], NULL, p) != NULL)
+			free_page((unsigned long) p);
+	}
+
+	req = kiocb_from_id(ctx, id);
+
+	/*
+	 * Can't set ki_cancel to NULL until we're ready for it to be
+	 * cancellable - leave it as KIOCB_CANCELLED until then
+	 */
+	memset(req, 0, offsetof(struct kiocb, ki_cancel));
+	req->ki_ctx = ctx;
 
 	percpu_ref_get(&ctx->reqs);
 
-	req->ki_ctx = ctx;
 	return req;
-out_put:
+err:
 	put_reqs_available(ctx, 1);
 	return NULL;
 }
@@ -796,7 +844,7 @@ static void kiocb_free(struct kiocb *req)
 		fput(req->ki_filp);
 	if (req->ki_eventfd != NULL)
 		eventfd_ctx_put(req->ki_eventfd);
-	kmem_cache_free(kiocb_cachep, req);
+	percpu_ida_free(&req->ki_ctx->kiocb_tags, req->ki_id);
 }
 
 static struct kioctx *lookup_ioctx(unsigned long ctx_id)
@@ -930,17 +978,21 @@ EXPORT_SYMBOL(batch_complete_aio);
 void aio_complete_batch(struct kiocb *req, long res, long res2,
 			struct batch_complete *batch)
 {
+	kiocb_cancel_fn *old = NULL, *cancel = req->ki_cancel;
+
+	do {
+		if (cancel == KIOCB_CANCELLING) {
+			cpu_relax();
+			cancel = req->ki_cancel;
+			continue;
+		}
+
+		old = cancel;
+		cancel = cmpxchg(&req->ki_cancel, old, KIOCB_CANCELLED);
+	} while (old != cancel);
+
 	req->ki_res = res;
 	req->ki_res2 = res2;
-
-	if (req->ki_list.next) {
-		struct kioctx *ctx = req->ki_ctx;
-		unsigned long flags;
-
-		spin_lock_irqsave(&ctx->ctx_lock, flags);
-		list_del(&req->ki_list);
-		spin_unlock_irqrestore(&ctx->ctx_lock, flags);
-	}
 
 	/*
 	 * Special case handling for sync iocbs:
@@ -1364,7 +1416,7 @@ static int io_submit_one(struct kioctx *ctx, struct iocb __user *user_iocb,
 		}
 	}
 
-	ret = put_user(KIOCB_KEY, &user_iocb->aio_key);
+	ret = put_user(req->ki_id, &user_iocb->aio_key);
 	if (unlikely(ret)) {
 		pr_debug("EFAULT: aio_key\n");
 		goto out_put_req;
@@ -1374,6 +1426,13 @@ static int io_submit_one(struct kioctx *ctx, struct iocb __user *user_iocb,
 	req->ki_user_data = iocb->aio_data;
 	req->ki_pos = iocb->aio_offset;
 	req->ki_nbytes = iocb->aio_nbytes;
+
+	/*
+	 * ki_obj.user must point to the right iocb before making the kiocb
+	 * cancellable by setting ki_cancel = NULL:
+	 */
+	smp_wmb();
+	req->ki_cancel = NULL;
 
 	ret = aio_run_iocb(req, iocb->aio_lio_opcode,
 			   (char __user *)(unsigned long)iocb->aio_buf,
@@ -1466,19 +1525,16 @@ SYSCALL_DEFINE3(io_submit, aio_context_t, ctx_id, long, nr,
 static struct kiocb *lookup_kiocb(struct kioctx *ctx, struct iocb __user *iocb,
 				  u32 key)
 {
-	struct list_head *pos;
+	struct kiocb *req;
 
-	assert_spin_locked(&ctx->ctx_lock);
-
-	if (key != KIOCB_KEY)
+	if (key > ctx->nr_events)
 		return NULL;
 
-	/* TODO: use a hash or array, this sucks. */
-	list_for_each(pos, &ctx->active_reqs) {
-		struct kiocb *kiocb = list_kiocb(pos);
-		if (kiocb->ki_obj.user == iocb)
-			return kiocb;
-	}
+	req = kiocb_from_id(ctx, key);
+
+	if (req && req->ki_obj.user == iocb)
+		return req;
+
 	return NULL;
 }
 
@@ -1508,17 +1564,9 @@ SYSCALL_DEFINE3(io_cancel, aio_context_t, ctx_id, struct iocb __user *, iocb,
 	if (unlikely(!ctx))
 		return -EINVAL;
 
-	spin_lock_irq(&ctx->ctx_lock);
-
 	kiocb = lookup_kiocb(ctx, iocb, key);
-	if (kiocb)
-		ret = kiocb_cancel(ctx, kiocb);
-	else
-		ret = -EINVAL;
-
-	spin_unlock_irq(&ctx->ctx_lock);
-
-	if (!ret) {
+	if (kiocb) {
+		kiocb_cancel(ctx, kiocb);
 		/*
 		 * The result argument is no longer used - the io_event is
 		 * always delivered via the ring buffer. -EINPROGRESS indicates

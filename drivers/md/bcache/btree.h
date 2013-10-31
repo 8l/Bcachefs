@@ -179,9 +179,34 @@ static inline struct btree_write *btree_prev_write(struct btree *b)
 	return b->writes + (btree_node_write_idx(b) ^ 1);
 }
 
-static inline unsigned bset_offset(struct btree *b, struct bset *i)
+static inline struct bset_tree *bset_tree_last(struct btree *b)
 {
-	return (((size_t) i) - ((size_t) b->sets->data)) >> 9;
+	return b->sets + b->nsets;
+}
+
+static inline struct bset *btree_bset_first(struct btree *b)
+{
+	return b->sets->data;
+}
+
+static inline struct bset *btree_bset_last(struct btree *b)
+{
+	return bset_tree_last(b)->data;
+}
+
+static inline unsigned bset_byte_offset(struct btree *b, struct bset *i)
+{
+	return ((size_t) i) - ((size_t) b->sets->data);
+}
+
+static inline unsigned bset_sector_offset(struct btree *b, struct bset *i)
+{
+	return (((void *) i) - ((void *) btree_bset_first(b))) >> 9;
+}
+
+static inline unsigned bset_block_offset(struct btree *b, struct bset *i)
+{
+	return bset_sector_offset(b, i) >> b->c->block_bits;
 }
 
 static inline struct bset *write_block(struct btree *b)

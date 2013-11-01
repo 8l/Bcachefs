@@ -2320,6 +2320,12 @@ bool bch_keybuf_check_overlapping(struct keybuf *buf, struct bkey *start,
 	spin_lock(&buf->lock);
 	w = RB_GREATER(&buf->keys, s, node, keybuf_nonoverlapping_cmp);
 
+	if (w) {
+		BUG_ON(bkey_cmp(&w->key, start) <= 0);
+		p = RB_PREV(w, node);
+		BUG_ON(p && bkey_cmp(&p->key, start) > 0);
+	}
+
 	while (w && bkey_cmp(&START_KEY(&w->key), end) < 0) {
 		p = w;
 		w = RB_NEXT(w, node);

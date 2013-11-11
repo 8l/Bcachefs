@@ -1694,7 +1694,8 @@ static bool fix_overlapping_extents(struct btree *b,
 			if (KEY_START(k) > KEY_START(insert) + sectors_found)
 				goto check_failed;
 
-			if (KEY_PTRS(&op->replace) != KEY_PTRS(k))
+			if (KEY_PTRS(k) != KEY_PTRS(&op->replace) ||
+			    KEY_DIRTY(k) != KEY_DIRTY(&op->replace))
 				goto check_failed;
 
 			/* skip past gen */
@@ -1754,6 +1755,9 @@ static bool fix_overlapping_extents(struct btree *b,
 		if (bkey_cmp(insert, k) < 0) {
 			bch_cut_front(insert, k);
 		} else {
+			if (bkey_cmp(&START_KEY(insert), &START_KEY(k)) > 0)
+				old_offset = KEY_START(insert);
+
 			if (bkey_written(b, k) &&
 			    bkey_cmp(&START_KEY(insert), &START_KEY(k)) <= 0) {
 				/*
@@ -1815,6 +1819,10 @@ static bool btree_insert_key(struct btree *b, struct btree_op *op,
 		if (fix_overlapping_extents(b, k, &iter, op))
 			return false;
 
+		if (KEY_DIRTY(k))
+			bcache_dev_sectors_dirty_add(b->c, KEY_INODE(k),
+						     KEY_START(k), KEY_SIZE(k));
+
 		while (m != end(i) &&
 		       bkey_cmp(k, &START_KEY(m)) > 0)
 			prev = m, m = bkey_next(m);
@@ -1843,10 +1851,6 @@ static bool btree_insert_key(struct btree *b, struct btree_op *op,
 insert:	shift_keys(b, m, k);
 copy:	bkey_copy(m, k);
 merged:
-	if (KEY_DIRTY(k))
-		bcache_dev_sectors_dirty_add(b->c, KEY_INODE(k),
-					     KEY_START(k), KEY_SIZE(k));
-
 	bch_check_keys(b, "%s for %s at %s: %s", status,
 		       op_type(op), pbtree(b), pkey(k));
 	bch_check_key_order_msg(b, i, "%s for %s at %s: %s", status,

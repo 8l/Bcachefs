@@ -212,7 +212,7 @@ void bch_btree_node_read_done(struct btree *b)
 	iter->used = 0;
 
 #ifdef CONFIG_BCACHE_DEBUG
-	iter->b = b;
+	iter->b = &b->keys;
 #endif
 
 	if (!i->seq)
@@ -1188,7 +1188,7 @@ static bool btree_gc_mark_node(struct btree *b, struct gc_stat *gc)
 
 	gc->nodes++;
 
-	for_each_key_filter(b, k, &iter, bch_ptr_invalid) {
+	for_each_key_filter(&b->keys, k, &iter, bch_ptr_invalid) {
 		stale = max(stale, btree_mark_key(b, k));
 		keys++;
 
@@ -1379,7 +1379,7 @@ static unsigned btree_gc_count_keys(struct btree *b)
 	struct btree_iter iter;
 	unsigned ret = 0;
 
-	for_each_key_filter(b, k, &iter, bch_ptr_bad)
+	for_each_key_filter(&b->keys, k, &iter, bch_ptr_bad)
 		ret += bkey_u64s(k);
 
 	return ret;
@@ -1399,7 +1399,7 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 	struct gc_merge_info *last = r + GC_MERGE_NODES - 1;
 
 	bch_keylist_init(&keys);
-	bch_btree_iter_init(b, &iter, &b->c->gc_done);
+	bch_btree_iter_init(&b->keys, &iter, &b->c->gc_done);
 
 	for (i = 0; i < GC_MERGE_NODES; i++)
 		r[i].b = ERR_PTR(-EINTR);
@@ -1715,7 +1715,7 @@ static int bch_btree_check_recurse(struct btree *b, struct btree_op *op,
 	struct bucket *g;
 	struct btree_iter iter;
 
-	for_each_key_filter(b, k, &iter, bch_ptr_invalid) {
+	for_each_key_filter(&b->keys, k, &iter, bch_ptr_invalid) {
 		for (i = 0; i < KEY_PTRS(k); i++) {
 			if (!ptr_available(b->c, k, i))
 				continue;
@@ -1738,7 +1738,7 @@ static int bch_btree_check_recurse(struct btree *b, struct btree_op *op,
 	}
 
 	if (b->level) {
-		bch_btree_iter_init(b, &iter, NULL);
+		bch_btree_iter_init(&b->keys, &iter, NULL);
 
 		do {
 			k = bch_btree_iter_next_filter(&iter, &b->keys,
@@ -1885,7 +1885,7 @@ static bool fix_overlapping_extents(struct btree *b, struct bkey *insert,
 				 * depends on us inserting a new key for the top
 				 * here.
 				 */
-				top = bch_bset_search(b,
+				top = bch_bset_search(&b->keys,
 						      bset_tree_last(&b->keys),
 						      insert);
 				bch_bset_insert(&b->keys, top, k);
@@ -1958,7 +1958,7 @@ static bool btree_insert_key(struct btree *b, struct btree_op *op,
 		 * the previous key.
 		 */
 		prev = NULL;
-		m = bch_btree_iter_init(b, &iter,
+		m = bch_btree_iter_init(&b->keys, &iter,
 					PRECEDING_KEY(&START_KEY(k)));
 
 		if (fix_overlapping_extents(b, k, &iter, replace_key)) {
@@ -1994,7 +1994,7 @@ static bool btree_insert_key(struct btree *b, struct btree_op *op,
 			goto copy;
 	} else {
 		BUG_ON(replace_key);
-		m = bch_bset_search(b, bset_tree_last(&b->keys), k);
+		m = bch_bset_search(&b->keys, bset_tree_last(&b->keys), k);
 	}
 
 insert:	bch_bset_insert(&b->keys, m, k);
@@ -2350,7 +2350,7 @@ static int bch_btree_map_nodes_recurse(struct btree *b, struct btree_op *op,
 		struct bkey *k;
 		struct btree_iter iter;
 
-		bch_btree_iter_init(b, &iter, from);
+		bch_btree_iter_init(&b->keys, &iter, from);
 
 		while ((k = bch_btree_iter_next_filter(&iter, &b->keys,
 						       bch_ptr_bad))) {
@@ -2383,7 +2383,7 @@ static int bch_btree_map_keys_recurse(struct btree *b, struct btree_op *op,
 	struct bkey *k;
 	struct btree_iter iter;
 
-	bch_btree_iter_init(b, &iter, from);
+	bch_btree_iter_init(&b->keys, &iter, from);
 
 	while ((k = bch_btree_iter_next_filter(&iter, &b->keys, bch_ptr_bad))) {
 		ret = !b->level

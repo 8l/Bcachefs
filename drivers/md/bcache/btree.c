@@ -480,9 +480,9 @@ void bch_btree_node_write(struct btree *b, struct closure *parent)
 
 	/* If not a leaf node, always sort */
 	if (b->level && b->keys.nsets)
-		bch_btree_sort(b, &b->c->sort);
+		bch_btree_sort(&b->keys, &b->c->sort);
 	else
-		bch_btree_sort_lazy(b, &b->c->sort);
+		bch_btree_sort_lazy(&b->keys, &b->c->sort);
 
 	if (b->written < btree_blocks(b))
 		bch_bset_init_next(&b->keys, write_block(b),
@@ -1080,7 +1080,7 @@ static struct btree *btree_node_alloc_replacement(struct btree *b, bool wait)
 {
 	struct btree *n = bch_btree_node_alloc(b->c, b->level, wait);
 	if (!IS_ERR_OR_NULL(n)) {
-		bch_btree_sort_into(b, n, &b->c->sort);
+		bch_btree_sort_into(&b->keys, &n->keys, &b->c->sort);
 		bkey_copy_key(&n->key, &b->key);
 	}
 

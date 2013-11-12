@@ -113,9 +113,9 @@ static void bch_dump_bucket(struct btree *b)
 	unsigned i;
 
 	console_lock();
-	for (i = 0; i <= b->nsets; i++)
-		dump_bset(b, b->sets[i].data,
-			  btree_block(b, b->sets[i].data));
+	for (i = 0; i <= b->keys.nsets; i++)
+		dump_bset(b, b->keys.sets[i].data,
+			  btree_block(b, b->keys.sets[i].data));
 	console_unlock();
 }
 
@@ -259,14 +259,14 @@ void __bch_check_keys(struct btree *b, const char *fmt, ...)
 			if (p && bkey_cmp(&START_KEY(p), &START_KEY(k)) > 0)
 				goto bug;
 
-			if (bch_ptr_invalid(b, k))
+			if (bch_ptr_invalid(&b->keys, k))
 				continue;
 
 			err =  "Overlapping keys";
 			if (p && bkey_cmp(p, &START_KEY(k)) > 0)
 				goto bug;
 		} else {
-			if (bch_ptr_bad(b, k))
+			if (bch_ptr_bad(&b->keys, k))
 				continue;
 
 			err = "Duplicate keys";

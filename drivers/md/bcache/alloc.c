@@ -476,12 +476,12 @@ out:
 
 	if (reserve <= RESERVE_PRIO) {
 		SET_GC_MARK(b, GC_MARK_METADATA);
-		SET_GC_MOVE(b, 0);
+		SET_GC_GEN(b, 0);
 		b->read_prio = BTREE_PRIO;
 		b->write_prio = BTREE_PRIO;
 	} else {
 		SET_GC_MARK(b, GC_MARK_RECLAIMABLE);
-		SET_GC_MOVE(b, 0);
+		SET_GC_GEN(b, 0);
 		b->read_prio = INITIAL_PRIO;
 		b->write_prio = INITIAL_PRIO;
 	}

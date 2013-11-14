@@ -28,7 +28,7 @@ static bool moving_pred(struct keybuf *buf, struct bkey *k)
 	for (i = 0; i < bch_extent_ptrs(k); i++) {
 		struct bucket *g = PTR_BUCKET(c, k, i);
 
-		if (GC_MOVE(g))
+		if (GC_GEN(g))
 			return true;
 	}
 
@@ -187,15 +187,20 @@ err:		if (!IS_ERR_OR_NULL(w->private))
 	closure_sync(&cl);
 }
 
-static bool bucket_cmp(struct bucket *l, struct bucket *r)
+static bool bucket_sectors_cmp(struct bucket *l, struct bucket *r)
 {
 	return GC_SECTORS_USED(l) < GC_SECTORS_USED(r);
 }
 
-static unsigned bucket_heap_top(struct cache *ca)
+static unsigned bucket_sectors_heap_top(struct cache *ca)
 {
 	struct bucket *b;
 	return (b = heap_peek(&ca->heap)) ? GC_SECTORS_USED(b) : 0;
+}
+
+static unsigned bucket_write_prio_cmp(struct bucket *l, struct bucket *r)
+{
+	return l->write_prio < r->write_prio;
 }
 
 void bch_moving_gc(struct cache_set *c)
@@ -212,33 +217,59 @@ void bch_moving_gc(struct cache_set *c)
 	for_each_cache(ca, c, i) {
 		unsigned sectors_to_move = 0;
 		unsigned reserve_sectors = ca->sb.bucket_size *
-			fifo_used(&ca->free[RESERVE_MOVINGGC]);
+			max_t(int, 0, fifo_used(&ca->free[RESERVE_MOVINGGC]) -
+			      NUM_GC_GENS);
+		unsigned sectors_gen, gen_current, sectors_total;
+
+		if (reserve_sectors < ca->sb.block_size)
+			continue;
+
+		/*
+		 * sorts out smallest buckets into the gc heap, and then shrinks
+		 * the heap to fit into a reasonable amount of reserve sectors
+		 */
 
 		ca->heap.used = 0;
-
 		for_each_bucket(b, ca) {
 			if (!GC_SECTORS_USED(b))
 				continue;
 
 			if (!heap_full(&ca->heap)) {
 				sectors_to_move += GC_SECTORS_USED(b);
-				heap_add(&ca->heap, b, bucket_cmp);
-			} else if (bucket_cmp(b, heap_peek(&ca->heap))) {
-				sectors_to_move -= bucket_heap_top(ca);
+				heap_add(&ca->heap, b, bucket_sectors_cmp);
+			} else if (bucket_sectors_cmp(b, heap_peek(&ca->heap))) {
+				sectors_to_move -= bucket_sectors_heap_top(ca);
 				sectors_to_move += GC_SECTORS_USED(b);
 
 				ca->heap.data[0] = b;
-				heap_sift(&ca->heap, 0, bucket_cmp);
+				heap_sift(&ca->heap, 0, bucket_sectors_cmp);
 			}
 		}
 
 		while (sectors_to_move > reserve_sectors) {
-			heap_pop(&ca->heap, b, bucket_cmp);
+			heap_pop(&ca->heap, b, bucket_sectors_cmp);
 			sectors_to_move -= GC_SECTORS_USED(b);
 		}
 
-		while (heap_pop(&ca->heap, b, bucket_cmp))
-			SET_GC_MOVE(b, 1);
+		/*
+		 * resort by write_prio to group into generations, attempts to
+		 * keep hot and cold data in the same locality.
+		 */
+
+		heap_resort(&ca->heap, bucket_write_prio_cmp);
+
+		sectors_gen = sectors_to_move / NUM_GC_GENS;
+		gen_current = 1;
+		sectors_total = 0;
+
+		while (heap_pop(&ca->heap, b, bucket_write_prio_cmp)) {
+			sectors_total += GC_SECTORS_USED(b);
+			SET_GC_GEN(b, gen_current);
+
+			if (gen_current < NUM_GC_GENS &&
+			    sectors_total >= sectors_gen * gen_current)
+				gen_current++;
+		}
 	}
 
 	mutex_unlock(&c->bucket_lock);

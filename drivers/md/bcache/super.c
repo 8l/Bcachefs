@@ -1678,6 +1678,7 @@ void bch_cache_release(struct kobject *kobj)
 		ca->set->cache[ca->sb.nr_this_dev] = NULL;
 
 	bio_split_pool_free(&ca->bio_split_hook);
+	bioset_free(ca->replica_set);
 
 	free_pages((unsigned long) ca->disk_buckets, ilog2(bucket_pages(ca)));
 	kfree(ca->prio_buckets);
@@ -1732,7 +1733,8 @@ static int cache_alloc(struct cache_sb *sb, struct cache *ca)
 	    !(ca->prio_buckets	= kzalloc(sizeof(uint64_t) * prio_buckets(ca) *
 					  2, GFP_KERNEL)) ||
 	    !(ca->disk_buckets	= alloc_bucket_pages(GFP_KERNEL, ca)) ||
-	    bio_split_pool_init(&ca->bio_split_hook))
+	    bio_split_pool_init(&ca->bio_split_hook) ||
+	    !(ca->replica_set = bioset_create(4, offsetof(struct bbio, bio))))
 		return -ENOMEM;
 
 	ca->prio_last_buckets = ca->prio_buckets + prio_buckets(ca);

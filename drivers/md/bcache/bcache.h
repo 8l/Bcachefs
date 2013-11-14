@@ -479,6 +479,9 @@ struct cache {
 	atomic_long_t		sectors_written;
 
 	struct bio_split_pool	bio_split_hook;
+
+	/* biosets used in cloned bios for replicas and moving_gc */
+	struct bio_set		*replica_set;
 };
 
 struct gc_stat {

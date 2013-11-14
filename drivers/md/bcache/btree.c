@@ -1766,7 +1766,7 @@ static int bch_btree_check_recurse(struct btree *b, struct btree_op *op,
 				    !ptr_stale(b->c, k, i)) {
 					g = PTR_BUCKET(b->c, k, i);
 					g->gen = PTR_GEN(k, i);
-					g->prio = INITIAL_PRIO;
+					g->read_prio = INITIAL_PRIO;
 				}
 			}
 		}

@@ -343,9 +343,9 @@ static void bch_journal_mark_key(struct cache_set *c, struct bkey *k)
 		g = PTR_BUCKET(c, k, ptr);
 		atomic_inc(&g->pin);
 
-		if (g->prio == BTREE_PRIO &&
+		if (g->read_prio == BTREE_PRIO &&
 		    !ptr_stale(c, k, ptr))
-			g->prio = INITIAL_PRIO;
+			g->read_prio = INITIAL_PRIO;
 	}
 
 	__bch_btree_mark_key(c, 0, k);

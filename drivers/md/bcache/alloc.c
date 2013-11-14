@@ -110,13 +110,18 @@ void bch_rescale_priorities(struct cache_set *c, int sectors)
 	c->min_prio = USHRT_MAX;
 
 	for_each_cache(ca, c, i)
-		for_each_bucket(b, ca)
-			if (b->prio &&
-			    b->prio != BTREE_PRIO &&
-			    !atomic_read(&b->pin)) {
-				b->prio--;
-				c->min_prio = min(c->min_prio, b->prio);
+		for_each_bucket(b, ca) {
+			if (!atomic_read(&b->pin))
+				continue;
+
+			if (b->read_prio && b->read_prio != BTREE_PRIO) {
+				b->read_prio--;
+				c->min_prio = min(c->min_prio, b->read_prio);
 			}
+
+			if (b->write_prio && b->write_prio != BTREE_PRIO)
+				b->write_prio--;
+		}
 
 	mutex_unlock(&c->bucket_lock);
 }
@@ -143,7 +148,7 @@ bool bch_bucket_add_unused(struct cache *ca, struct bucket *b)
 		return false;
 	}
 add:
-	b->prio = 0;
+	b->read_prio = 0;
 
 	if (can_inc_bucket_gen(b) &&
 	    fifo_push(&ca->unused, b - ca->buckets)) {
@@ -164,7 +169,8 @@ static bool can_invalidate_bucket(struct cache *ca, struct bucket *b)
 static void invalidate_one_bucket(struct cache *ca, struct bucket *b)
 {
 	bch_inc_gen(ca, b);
-	b->prio = INITIAL_PRIO;
+	b->read_prio = INITIAL_PRIO;
+	b->write_prio = INITIAL_PRIO;
 	atomic_inc(&b->pin);
 	fifo_push(&ca->free_inc, b - ca->buckets);
 }
@@ -182,7 +188,7 @@ static void invalidate_one_bucket(struct cache *ca, struct bucket *b)
 ({									\
 	unsigned min_prio = (INITIAL_PRIO - ca->set->min_prio) / 8;	\
 									\
-	(b->prio - ca->set->min_prio + min_prio) * GC_SECTORS_USED(b);	\
+	(b->read_prio - ca->set->min_prio + min_prio) * GC_SECTORS_USED(b);\
 })
 
 #define bucket_max_cmp(l, r)	(bucket_prio(l) < bucket_prio(r))
@@ -471,11 +477,13 @@ out:
 	if (reserve <= RESERVE_PRIO) {
 		SET_GC_MARK(b, GC_MARK_METADATA);
 		SET_GC_MOVE(b, 0);
-		b->prio = BTREE_PRIO;
+		b->read_prio = BTREE_PRIO;
+		b->write_prio = BTREE_PRIO;
 	} else {
 		SET_GC_MARK(b, GC_MARK_RECLAIMABLE);
 		SET_GC_MOVE(b, 0);
-		b->prio = INITIAL_PRIO;
+		b->read_prio = INITIAL_PRIO;
+		b->write_prio = INITIAL_PRIO;
 	}
 
 	return r;

@@ -196,7 +196,8 @@
 
 struct bucket {
 	atomic_t	pin;
-	uint16_t	prio;
+	uint16_t	read_prio;
+	uint16_t	write_prio;
 	uint8_t		gen;
 	uint8_t		disk_gen;
 	uint8_t		last_gc; /* Most out of date gen in the btree */

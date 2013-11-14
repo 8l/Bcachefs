@@ -792,7 +792,7 @@ SHOW(__bch_cache)
 
 		mutex_lock(&ca->set->bucket_lock);
 		for (i = ca->sb.first_bucket; i < n; i++)
-			p[i] = ca->buckets[i].prio;
+			p[i] = ca->buckets[i].read_prio;
 		mutex_unlock(&ca->set->bucket_lock);
 
 		sort(p, n, sizeof(uint16_t), cmp, NULL);

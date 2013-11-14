@@ -198,7 +198,7 @@ static void bch_bkey_dump(struct btree_keys *keys, const struct bkey *k)
 
 		if (n >= b->c->sb.first_bucket && n < b->c->sb.nbuckets)
 			printk(" prio %i",
-			       PTR_BUCKET(b->c, k, j)->prio);
+			       PTR_BUCKET(b->c, k, j)->read_prio);
 	}
 
 	printk(" %s\n", bch_ptr_status(b->c, k));
@@ -303,7 +303,7 @@ err:
 	btree_bug(b,
 "inconsistent btree pointer %s: bucket %li pin %i prio %i gen %i last_gc %i mark %llu gc_gen %i",
 		  buf, PTR_BUCKET_NR(b->c, k, i), atomic_read(&g->pin),
-		  g->prio, g->gen, g->last_gc, GC_MARK(g), g->gc_gen);
+		  g->read_prio, g->gen, g->last_gc, GC_MARK(g), g->gc_gen);
 	return true;
 }
 
@@ -680,7 +680,7 @@ err:
 	btree_bug(b,
 "inconsistent extent pointer %s:\nbucket %zu pin %i prio %i gen %i last_gc %i mark %llu gc_gen %i",
 		  buf, PTR_BUCKET_NR(b->c, k, ptr), atomic_read(&g->pin),
-		  g->prio, g->gen, g->last_gc, GC_MARK(g), g->gc_gen);
+		  g->read_prio, g->gen, g->last_gc, GC_MARK(g), g->gc_gen);
 	return true;
 }
 

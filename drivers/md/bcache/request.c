@@ -689,7 +689,7 @@ static int cache_lookup_fn(struct btree_op *op, struct btree *b, struct bkey *k)
 	/* XXX: figure out best pointer - for multiple cache devices */
 	ptr = 0;
 
-	PTR_BUCKET(b->c, k, ptr)->prio = INITIAL_PRIO;
+	PTR_BUCKET(b->c, k, ptr)->read_prio = INITIAL_PRIO;
 
 	if (!KEY_CACHED(k))
 		s->read_dirty_data = true;

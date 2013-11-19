@@ -1379,6 +1379,7 @@ static void cache_set_flush(struct closure *cl)
 	struct btree *b;
 	unsigned i;
 
+	cancel_delayed_work_sync(&c->moving_gc_pd.update);
 	bch_cache_accounting_destroy(&c->accounting);
 
 	kobject_put(&c->internal);
@@ -1706,6 +1707,8 @@ static void run_cache_set(struct cache_set *c)
 		bch_cached_dev_attach(dc, c);
 
 	flash_devs_run(c);
+
+	bch_pd_controller_start(&c->moving_gc_pd);
 
 	set_bit(CACHE_SET_RUNNING, &c->flags);
 	closure_put(&c->caching);

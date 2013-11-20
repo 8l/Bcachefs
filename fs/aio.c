@@ -1444,6 +1444,14 @@ rw_common:
 		ret = file->f_op->aio_fsync(req, 0);
 		break;
 
+	case IOCB_CMD_IOCTL:
+		if (!file->f_op->aio_ioctl)
+			return -EINVAL;
+
+		ret = file->f_op->aio_ioctl(req, req->ki_nbytes,
+					    (unsigned long) buf);
+		break;
+
 	default:
 		pr_debug("EINVAL: no operation provided\n");
 		return -EINVAL;

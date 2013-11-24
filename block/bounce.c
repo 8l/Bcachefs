@@ -196,6 +196,43 @@ static int must_snapshot_stable_pages(struct request_queue *q, struct bio *bio)
 }
 #endif /* CONFIG_NEED_BOUNCE_POOL */
 
+static struct bio *bio_clone_segments(struct bio *bio_src, gfp_t gfp_mask,
+				      struct bio_set *bs, unsigned nsegs)
+{
+	struct bvec_iter iter;
+	struct bio_vec bv;
+	struct bio *bio;
+
+	bio = bio_alloc_bioset(gfp_mask, nsegs, bs);
+	if (!bio)
+		return NULL;
+
+	bio->bi_bdev		= bio_src->bi_bdev;
+	bio->bi_rw		= bio_src->bi_rw;
+	bio->bi_iter.bi_sector	= bio_src->bi_iter.bi_sector;
+
+	bio_for_each_segment(bv, bio_src, iter) {
+		bio->bi_io_vec[bio->bi_vcnt++] = bv;
+		bio->bi_iter.bi_size += bv.bv_len;
+		if (!--nsegs)
+			break;
+	}
+
+	if (bio_integrity(bio_src)) {
+		int ret;
+
+		ret = bio_integrity_clone(bio, bio_src, gfp_mask);
+		if (ret < 0) {
+			bio_put(bio);
+			return NULL;
+		}
+	}
+
+	bio_src->bi_iter = iter;
+
+	return bio;
+}
+
 static void __blk_queue_bounce(struct request_queue *q, struct bio **bio_orig,
 			       mempool_t *pool, int force)
 {
@@ -203,17 +240,24 @@ static void __blk_queue_bounce(struct request_queue *q, struct bio **bio_orig,
 	int rw = bio_data_dir(*bio_orig);
 	struct bio_vec *to, from;
 	struct bvec_iter iter;
-	unsigned i;
+	int i, nsegs = 0, bounce = force;
 
-	if (force)
-		goto bounce;
-	bio_for_each_segment(from, *bio_orig, iter)
+	bio_for_each_segment(from, *bio_orig, iter) {
+		nsegs++;
 		if (page_to_pfn(from.bv_page) > queue_bounce_pfn(q))
-			goto bounce;
+			bounce = 1;
+	}
 
-	return;
-bounce:
-	bio = bio_clone_bioset(*bio_orig, GFP_NOIO, fs_bio_set);
+	if (!bounce)
+		return;
+
+	bio = bio_clone_segments(*bio_orig, GFP_NOIO, fs_bio_set,
+				 min(nsegs, BIO_MAX_PAGES));
+
+	if ((*bio_orig)->bi_iter.bi_size) {
+		atomic_inc(&(*bio_orig)->bi_remaining);
+		generic_make_request(*bio_orig);
+	}
 
 	bio_for_each_segment_all(to, bio, i) {
 		struct page *page = to->bv_page;

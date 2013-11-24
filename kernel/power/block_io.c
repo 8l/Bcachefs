@@ -34,7 +34,6 @@ static int submit(int rw, struct block_device *bdev, sector_t sector,
 	bio = bio_alloc(__GFP_WAIT | __GFP_HIGH, 1);
 	bio->bi_iter.bi_sector = sector;
 	bio->bi_bdev = bdev;
-	bio->bi_end_io = end_swap_bio_read;
 
 	if (bio_add_page(bio, page, PAGE_SIZE, 0) < PAGE_SIZE) {
 		printk(KERN_ERR "PM: Adding page to bio failed at %llu\n",
@@ -44,15 +43,29 @@ static int submit(int rw, struct block_device *bdev, sector_t sector,
 	}
 
 	lock_page(page);
-	bio_get(bio);
 
 	if (bio_chain == NULL) {
-		submit_bio(bio_rw, bio);
-		wait_on_page_locked(page);
+		int err = submit_bio_wait(bio_rw, bio);
+
+		if (err) {
+			SetPageError(page);
+			ClearPageUptodate(page);
+			printk(KERN_ALERT "Read-error on swap-device (%u:%u:%Lu)\n",
+			       imajor(bio->bi_bdev->bd_inode),
+			       iminor(bio->bi_bdev->bd_inode),
+			       (unsigned long long)bio->bi_iter.bi_sector);
+		} else {
+			SetPageUptodate(page);
+		}
+
 		if (rw == READ)
-			bio_set_pages_dirty(bio);
+			set_page_dirty_lock(page);
+		unlock_page(page);
 		bio_put(bio);
 	} else {
+		bio->bi_end_io = end_swap_bio_read;
+		bio_get(bio);
+
 		if (rw == READ)
 			get_page(page);	/* These pages are freed later */
 		bio->bi_private = *bio_chain;

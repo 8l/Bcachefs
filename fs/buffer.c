@@ -3049,13 +3049,13 @@ int _submit_bh(int rw, struct buffer_head *bh, unsigned long bio_flags)
 	if (buffer_prio(bh))
 		rw |= REQ_PRIO;
 
-	bio_get(bio);
+	atomic_inc(&bio->bi_remaining);
 	submit_bio(rw, bio);
 
 	if (bio_flagged(bio, BIO_EOPNOTSUPP))
 		ret = -EOPNOTSUPP;
 
-	bio_put(bio);
+	bio_endio(bio, 0);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(_submit_bh);

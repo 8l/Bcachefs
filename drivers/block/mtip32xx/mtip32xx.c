@@ -2680,24 +2680,6 @@ static void mtip_hw_submit_io(struct driver_data *dd, sector_t sector,
 }
 
 /*
- * Release a command slot.
- *
- * @dd  Pointer to the driver data structure.
- * @tag Slot tag
- *
- * return value
- *      None
- */
-static void mtip_hw_release_scatterlist(struct driver_data *dd, int tag,
-								int unaligned)
-{
-	struct semaphore *sem = unaligned ? &dd->port->cmd_slot_unal :
-							&dd->port->cmd_slot;
-	release_slot(dd->port, tag);
-	up(sem);
-}
-
-/*
  * Obtain a command slot and return its associated scatter list.
  *
  * @dd  Pointer to the driver data structure.
@@ -4035,8 +4017,6 @@ static void mtip_make_request(struct request_queue *queue, struct bio *bio)
 
 	blk_queue_bounce(queue, &bio);
 
-	blk_queue_split(queue, &bio, queue->bio_split);
-
 	if (unlikely(dd->dd_flag & MTIP_DDF_STOP_IO)) {
 		if (unlikely(test_bit(MTIP_DDF_REMOVE_PENDING_BIT,
 							&dd->dd_flag))) {
@@ -4086,21 +4066,22 @@ static void mtip_make_request(struct request_queue *queue, struct bio *bio)
 
 	sg = mtip_hw_get_scatterlist(dd, &tag, unaligned);
 	if (likely(sg != NULL)) {
-		if (unlikely((bio)->bi_vcnt > MTIP_MAX_SG)) {
-			dev_warn(&dd->pdev->dev,
-				"Maximum number of SGL entries exceeded\n");
-			bio_io_error(bio);
-			mtip_hw_release_scatterlist(dd, tag, unaligned);
-			return;
-		}
-
 		/* Create the scatter list for this bio. */
 		bio_for_each_segment(bvec, bio, iter) {
-			sg_set_page(&sg[nents],
-					bvec.bv_page,
-					bvec.bv_len,
-					bvec.bv_offset);
-			nents++;
+			if (unlikely(nents == MTIP_MAX_SG)) {
+				struct bio *split = bio_clone(bio, GFP_NOIO);
+
+				split->bi_iter = iter;
+				bio->bi_iter.bi_size -= iter.bi_size;
+				bio_chain(split, bio);
+				generic_make_request(split);
+				break;
+			}
+
+			sg_set_page(&sg[nents++],
+				    bvec.bv_page,
+				    bvec.bv_len,
+				    bvec.bv_offset);
 		}
 
 		/* Issue the read/write. */

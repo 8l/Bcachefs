@@ -812,6 +812,8 @@ static void zram_make_request(struct request_queue *queue, struct bio *bio)
 {
 	struct zram *zram = queue->queuedata;
 
+	blk_queue_split(queue, &bio, queue->bio_split);
+
 	down_read(&zram->init_lock);
 	if (unlikely(!init_done(zram)))
 		goto error;

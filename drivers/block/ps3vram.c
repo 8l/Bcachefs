@@ -603,6 +603,8 @@ static void ps3vram_make_request(struct request_queue *q, struct bio *bio)
 	struct ps3vram_priv *priv = ps3_system_bus_get_drvdata(dev);
 	int busy;
 
+	blk_queue_split(q, &bio, q->bio_split);
+
 	dev_dbg(&dev->core, "%s\n", __func__);
 
 	spin_lock_irq(&priv->lock);

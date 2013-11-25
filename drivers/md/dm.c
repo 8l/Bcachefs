@@ -1566,6 +1566,8 @@ static void dm_request(struct request_queue *q, struct bio *bio)
 {
 	struct mapped_device *md = q->queuedata;
 
+	blk_queue_split(q, &bio, q->bio_split);
+
 	if (dm_request_based(md))
 		blk_queue_bio(q, bio);
 	else

@@ -829,6 +829,8 @@ static void nvme_make_request(struct request_queue *q, struct bio *bio)
 	struct nvme_queue *nvmeq = get_nvmeq(ns->dev);
 	int result = -EBUSY;
 
+	blk_queue_split(q, &bio, q->bio_split);
+
 	if (!nvmeq) {
 		bio_endio(bio, -EIO);
 		return;

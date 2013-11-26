@@ -139,7 +139,6 @@ static void write_dirty_finish(struct closure *cl)
 
 	if (!io->error) {
 		int ret;
-		unsigned i;
 		struct keylist keys;
 
 		bch_keylist_init(&keys);
@@ -149,8 +148,7 @@ static void write_dirty_finish(struct closure *cl)
 		bch_keylist_push(&keys);
 
 		/* XXX: hack */
-		for (i = 0; i < bch_extent_ptrs(&w->key); i++)
-			atomic_inc(&PTR_BUCKET(dc->disk.c, &w->key, i)->pin);
+		bkey_get(dc->disk.c, &w->key);
 
 		ret = bch_btree_insert(dc->disk.c, BTREE_ID_EXTENTS,
 				       &keys, NULL, &w->key);

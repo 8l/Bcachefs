@@ -181,6 +181,15 @@ void bkey_put(struct cache_set *c, struct bkey *k)
 			atomic_dec_bug(&PTR_BUCKET(c, k, i)->pin);
 }
 
+void bkey_get(struct cache_set *c, struct bkey *k)
+{
+	unsigned i;
+
+	for (i = 0; i < bch_extent_ptrs(k); i++)
+		if (ptr_available(c, k, i))
+			atomic_inc(&PTR_BUCKET(c, k, i)->pin);
+}
+
 /* Btree IO */
 
 static void convert_v0_keys(struct btree *b, struct bset *i)

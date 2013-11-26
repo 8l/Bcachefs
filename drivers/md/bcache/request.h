@@ -8,7 +8,6 @@ struct data_insert_op {
 	struct cache_set	*c;
 	struct bio		*bio;
 
-	unsigned		inode;
 	uint16_t		write_point;
 	uint16_t		write_prio;
 	short			error;
@@ -18,9 +17,7 @@ struct data_insert_op {
 
 	struct {
 		unsigned	bypass:1;
-		unsigned	cached:1;
 		unsigned	flush_journal:1;
-		unsigned	csum:1;
 
 		unsigned	replace:1;
 		unsigned	replace_collision:1;
@@ -30,6 +27,7 @@ struct data_insert_op {
 	};
 
 	struct keylist		insert_keys;
+	BKEY_PADDED(insert_key);
 	BKEY_PADDED(replace_key);
 };
 

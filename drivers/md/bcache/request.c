@@ -291,7 +291,8 @@ static void bch_data_invalidate(struct closure *cl)
 		bio->bi_iter.bi_size	-= sectors << 9;
 
 		bch_keylist_add(&op->insert_keys,
-				&KEY(op->inode, bio->bi_iter.bi_sector, sectors));
+				&KEY(KEY_INODE(&op->insert_key),
+				     bio->bi_iter.bi_sector, sectors));
 	}
 
 	op->insert_data_done = true;
@@ -337,7 +338,7 @@ static void bch_data_insert_endio(struct bio *bio, int error)
 
 	if (error) {
 		/* TODO: We could try to recover from this. */
-		if (!op->cached)
+		if (!KEY_CACHED(&op->insert_key))
 			op->error = error;
 		else if (!op->replace)
 			set_closure_fn(cl, bch_data_insert_error, bcache_wq);
@@ -374,33 +375,28 @@ static void bch_data_insert_start(struct closure *cl)
 
 		/* 1 for the device pointer and 1 for the chksum */
 		if (bch_keylist_realloc(&op->insert_keys,
-					3 + (op->csum ? 1 : 0),
+					3 + (KEY_CSUM(&op->insert_key) ? 1 : 0),
 					op->c))
 			continue_at(cl, bch_data_insert_keys, bcache_wq);
 
 		k = op->insert_keys.top;
-		bkey_init(k);
-		SET_KEY_INODE(k, op->inode);
+		bkey_copy(k, &op->insert_key);
 		SET_KEY_OFFSET(k, bio->bi_iter.bi_sector);
 
 		if (!bch_alloc_sectors(op->c, k, bio_sectors(bio),
 				       op->write_point, op->write_prio,
-				       !op->cached))
+				       !KEY_CACHED(k)))
 			goto err;
 
 		n = bio_next_split(bio, KEY_SIZE(k), GFP_NOIO, split);
-
 		n->bi_end_io	= bch_data_insert_endio;
 		n->bi_private	= cl;
 
-		if (op->cached)
-			SET_KEY_CACHED(k, true);
-		else
+		if (!KEY_CACHED(k))
 			for (i = 0; i < bch_extent_ptrs(k); i++)
 				SET_GC_MARK(PTR_BUCKET(op->c, k, i),
 					    GC_MARK_DIRTY);
 
-		SET_KEY_CSUM(k, op->csum);
 		if (KEY_CSUM(k))
 			bio_csum(n, k);
 
@@ -415,7 +411,7 @@ static void bch_data_insert_start(struct closure *cl)
 	continue_at(cl, bch_data_insert_keys, bcache_wq);
 err:
 	/* bch_alloc_sectors() blocks if s->writeback = true */
-	BUG_ON(!op->cached);
+	BUG_ON(!KEY_CACHED(&op->insert_key));
 
 	/*
 	 * But if it's not a writeback write we'd rather just bail out if
@@ -470,7 +466,7 @@ void bch_data_insert(struct closure *cl)
 {
 	struct data_insert_op *op = container_of(cl, struct data_insert_op, cl);
 
-	trace_bcache_write(op->bio, !op->cached, op->bypass);
+	trace_bcache_write(op->bio, !KEY_CACHED(&op->insert_key), op->bypass);
 
 	bch_keylist_init(&op->insert_keys);
 	bio_get(op->bio);
@@ -619,6 +615,7 @@ struct search {
 	struct bcache_device	*d;
 
 	unsigned		insert_bio_sectors;
+	unsigned		inode;
 	unsigned		recoverable:1;
 	unsigned		write:1;
 	unsigned		read_dirty_data:1;
@@ -664,13 +661,13 @@ static int cache_lookup_fn(struct btree_op *op, struct btree *b, struct bkey *k)
 	struct bkey *bio_key;
 	unsigned ptr;
 
-	if (bkey_cmp(k, &KEY(s->iop.inode, bio->bi_iter.bi_sector, 0)) <= 0)
+	if (bkey_cmp(k, &KEY(s->inode, bio->bi_iter.bi_sector, 0)) <= 0)
 		return MAP_CONTINUE;
 
-	if (KEY_INODE(k) != s->iop.inode ||
+	if (KEY_INODE(k) != s->inode ||
 	    KEY_START(k) > bio->bi_iter.bi_sector) {
 		unsigned bio_sectors = bio_sectors(bio);
-		unsigned sectors = KEY_INODE(k) == s->iop.inode
+		unsigned sectors = KEY_INODE(k) == s->inode
 			? min_t(uint64_t, INT_MAX,
 				KEY_START(k) - bio->bi_iter.bi_sector)
 			: INT_MAX;
@@ -701,8 +698,8 @@ static int cache_lookup_fn(struct btree_op *op, struct btree *b, struct bkey *k)
 	bio_key = &container_of(n, struct bbio, bio)->key;
 	bch_bkey_copy_single_ptr(bio_key, k, ptr);
 
-	bch_cut_front(&KEY(s->iop.inode, n->bi_iter.bi_sector, 0), bio_key);
-	bch_cut_back(&KEY(s->iop.inode, bio_end_sector(n), 0), bio_key);
+	bch_cut_front(&KEY(s->inode, n->bi_iter.bi_sector, 0), bio_key);
+	bch_cut_back(&KEY(s->inode, bio_end_sector(n), 0), bio_key);
 
 	n->bi_end_io	= bch_cache_read_endio;
 	n->bi_private	= &s->cl;
@@ -731,7 +728,7 @@ static void cache_lookup(struct closure *cl)
 	bch_btree_op_init(&s->op, -1);
 
 	ret = bch_btree_map_keys(&s->op, s->iop.c, BTREE_ID_EXTENTS,
-				 &KEY(s->iop.inode, bio->bi_iter.bi_sector, 0),
+				 &KEY(s->inode, bio->bi_iter.bi_sector, 0),
 				 cache_lookup_fn, MAP_END_KEY);
 	if (ret == -EAGAIN)
 		continue_at(cl, cache_lookup, bcache_wq);
@@ -814,10 +811,10 @@ static inline struct search *search_alloc(struct bio *bio,
 	s->write		= (bio->bi_rw & REQ_WRITE) != 0;
 	s->read_dirty_data	= 0;
 	s->start_time		= jiffies;
+	s->inode		= bcache_dev_inum(d);
 
 	s->iop.c		= d->c;
 	s->iop.bio		= NULL;
-	s->iop.inode		= bcache_dev_inum(d);
 	s->iop.write_point	= hash_long((unsigned long) current, 16);
 	s->iop.write_prio	= 0;
 	s->iop.error		= 0;
@@ -912,6 +909,7 @@ static void cached_dev_read_done(struct closure *cl)
 	if (s->iop.bio &&
 	    !test_bit(CACHE_SET_STOPPING, &s->iop.c->flags)) {
 		BUG_ON(!s->iop.replace);
+		bkey_init_header(&s->iop.insert_key, 0, 0, 0, 0, s->inode);
 		closure_call(&s->iop.cl, bch_data_insert, NULL, cl);
 	}
 
@@ -957,7 +955,7 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 
 	s->insert_bio_sectors = min(sectors, bio_sectors(bio) + reada);
 
-	s->iop.replace_key = KEY(s->iop.inode,
+	s->iop.replace_key = KEY(s->inode,
 				 bio->bi_iter.bi_sector + s->insert_bio_sectors,
 				 s->insert_bio_sectors);
 
@@ -1034,6 +1032,7 @@ static void cached_dev_write(struct cached_dev *dc, struct search *s)
 	struct bkey start = KEY(inode, bio->bi_iter.bi_sector, 0);
 	struct bkey end = KEY(inode, bio_end_sector(bio), 0);
 	bool writeback = false;
+	bool cached = false;
 
 	bch_keybuf_check_overlapping(&s->iop.c->moving_gc_keys, &start, &end);
 
@@ -1088,12 +1087,13 @@ static void cached_dev_write(struct cached_dev *dc, struct search *s)
 			closure_bio_submit(flush, cl, s->d);
 		}
 	} else {
-		s->iop.cached = true;
+		cached = true;
 		s->iop.bio = bio_clone_fast(bio, GFP_NOIO, dc->disk.bio_split);
 
 		closure_bio_submit(bio, cl, s->d);
 	}
 
+	bkey_init_header(&s->iop.insert_key, cached, 0, 0, 0, s->inode);
 	closure_call(&s->iop.cl, bch_data_insert, NULL, cl);
 	continue_at(cl, cached_dev_write_complete, NULL);
 }
@@ -1273,6 +1273,7 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 		s->iop.bypass		= (bio->bi_rw & REQ_DISCARD) != 0;
 		s->iop.bio		= bio;
 
+		bkey_init_header(&s->iop.insert_key, 0, 0, 0, 0, s->inode);
 		closure_call(&s->iop.cl, bch_data_insert, NULL, cl);
 	} else {
 		closure_call(&s->iop.cl, cache_lookup, NULL, cl);

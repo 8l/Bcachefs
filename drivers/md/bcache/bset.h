@@ -403,6 +403,17 @@ static inline void bkey_init(struct bkey *k)
 	*k = ZERO_KEY;
 }
 
+static inline void bkey_init_header(struct bkey *k, int cached, int csum,
+				    int replicas, int version, int inode)
+{
+	bkey_init(k);
+	SET_KEY_CACHED(k, cached);
+	SET_KEY_CSUM(k, csum);
+	SET_KEY_REPLICAS(k, replicas);
+	SET_KEY_VERSION(k, version);
+	SET_KEY_INODE(k, inode);
+}
+
 static __always_inline int64_t bkey_cmp(const struct bkey *l,
 					const struct bkey *r)
 {

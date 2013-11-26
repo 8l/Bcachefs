@@ -107,9 +107,7 @@ static void write_moving(struct closure *cl)
 		op->write_prio		= 1;
 		op->bio			= &io->bio.bio;
 
-		op->cached		= KEY_CACHED(&io->w->key);
-		op->csum		= KEY_CSUM(&io->w->key);
-
+		bkey_copy(&op->insert_key, &io->w->key);
 		bkey_copy(&op->replace_key, &io->w->key);
 		op->replace		= true;
 
@@ -159,7 +157,6 @@ static void read_moving(struct cache_set *c)
 
 		w->private	= io;
 		io->w		= w;
-		io->op.inode	= KEY_INODE(&w->key);
 		io->op.c	= c;
 
 		moving_init(io);

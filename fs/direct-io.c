@@ -50,8 +50,8 @@ struct dio {
 	/* BIO completion state */
 	int		page_error;	/* errno from get_user_pages() */
 	int		io_error;	/* IO error in completion path */
+	bool		async;
 	bool defer_completion;		/* defer AIO completion to workqueue? */
-	atomic_t	refcount;	/* direct_io_worker() and bios */
 
 	dio_iodone_t	*end_io;	/* IO completion function */
 	void		*private;	/* copy from map_bh.b_private */
@@ -144,7 +144,6 @@ static void dio_aio_complete_work(struct work_struct *work)
 void dio_end_io(struct bio *bio, int error)
 {
 	struct dio *dio = bio->bi_private;
-	unsigned remaining;
 
 	if (error)
 		dio->io_error = -EIO;
@@ -157,21 +156,16 @@ void dio_end_io(struct bio *bio, int error)
 
 		bio_for_each_segment_all(bv, bio, i)
 			page_cache_release(bv->bv_page);
-		bio_put(bio);
 	}
 
-	remaining = atomic_dec_return(&dio->refcount);
-
-	if (remaining == DIO_WAKEUP)
+	if (!dio->async) {
 		wake_up_process(dio->waiter);
-	else if (!remaining) {
-		if (dio->defer_completion) {
-			INIT_WORK(&dio->complete_work, dio_aio_complete_work);
-			queue_work(dio->inode->i_sb->s_dio_done_wq,
-				   &dio->complete_work);
-		} else {
-			dio_complete(dio, dio->iocb->ki_pos, 0, true);
-		}
+	} else if (dio->defer_completion) {
+		INIT_WORK(&dio->complete_work, dio_aio_complete_work);
+		queue_work(dio->inode->i_sb->s_dio_done_wq,
+			   &dio->complete_work);
+	} else {
+		dio_complete(dio, dio->iocb->ki_pos, 0, true);
 	}
 }
 EXPORT_SYMBOL_GPL(dio_end_io);
@@ -356,6 +350,36 @@ static int dio_bio_submit(struct dio *dio, struct bio *bio,
 	return split == bio;
 }
 
+static int dio_write_hole(struct dio *dio, struct bio *bio,
+			  struct dio_mapping *map,
+			  struct file *file, loff_t offset)
+{
+	while (map->size) {
+		struct bio_vec bv = bio_iovec(bio);
+		unsigned bytes = min_t(size_t, map->size, bv.bv_len);
+		ssize_t ret;
+
+		ret = file->f_op->write(file,
+				       page_address(bv.bv_page) + bv.bv_offset,
+				       bytes, &offset);
+		if (ret != bytes) {
+			bio_endio(bio, -EIO);
+			return 1;
+		}
+
+		bio_advance(bio, bytes);
+		offset += bytes;
+		map->size -= bytes;
+	}
+
+	if (!bio->bi_iter.bi_size) {
+		bio_endio(bio, 0);
+		return 1;
+	}
+
+	return 0;
+}
+
 static void dio_write_zeroes(struct dio *dio, struct bio *parent,
 			     struct block_device *bdev,
 			     sector_t sector, size_t size,
@@ -433,8 +457,9 @@ static int dio_is_aligned(struct dio *dio, struct dio_mapping *map)
 		!(map->size & blocksize_mask);
 }
 
-static int dio_send_bio(struct dio *dio, struct bio *bio, loff_t offset,
-			get_block_t *get_block, dio_submit_t *submit_io)
+static void __dio_send_bio(struct dio *dio, struct bio *bio,
+			   struct file *file, loff_t offset,
+			   get_block_t *get_block, dio_submit_t *submit_io)
 {
 	struct dio_mapping map;
 	int ret = 0, rw = dio->rw & WRITE;
@@ -449,15 +474,17 @@ static int dio_send_bio(struct dio *dio, struct bio *bio, loff_t offset,
 
 		ret = get_blocks(dio, offset, bio->bi_iter.bi_size,
 				 &map, get_block);
-		if (ret)
-			break;
+		if (ret) {
+			bio_endio(bio, ret);
+			return;
+		}
 
 		switch (map.state|rw) {
 		case MAP_MAPPED|READ:
 		case MAP_MAPPED|WRITE:
 			if (!dio_is_aligned(dio, &map)) {
-				ret = -EINVAL;
-				goto out;
+				bio_endio(bio, -EINVAL);
+				return;
 			}
 
 			if (dio_bio_submit(dio, bio, &map, offset, submit_io))
@@ -471,8 +498,8 @@ static int dio_send_bio(struct dio *dio, struct bio *bio, loff_t offset,
 			break;
 		case MAP_NEW|WRITE:
 			if (!dio_is_aligned(dio, &map)) {
-				ret = -EINVAL;
-				goto out;
+				bio_endio(bio, -EINVAL);
+				return;
 			}
 
 			dio_zero_partial_block_front(dio, bio, &map,
@@ -488,9 +515,10 @@ static int dio_send_bio(struct dio *dio, struct bio *bio, loff_t offset,
 
 			break;
 		case MAP_UNMAPPED|WRITE:
-			/* AKPM: eargh, -ENOTBLK is a hack */
-			ret = -ENOTBLK;
-			goto out;
+			if (dio_write_hole(dio, bio, &map, file, offset))
+				return;
+
+			break;
 		}
 
 		offset += map.size;
@@ -503,49 +531,30 @@ out:
 	}
 
 	bio_endio(bio, 0);
-	return ret;
 }
 
-static int dio_alloc_bios(struct dio *dio, loff_t offset,
-			  struct iov_iter *iter, unsigned nr_pages,
-			  get_block_t *get_block, dio_submit_t *submit_io)
+static void dio_send_bio(struct dio *dio, struct bio *bio,
+			struct file *file, loff_t offset,
+			get_block_t *get_block, dio_submit_t *submit_io)
 {
-	ssize_t ret;
-	struct bio *bio;
+	if (dio->flags & DIO_LOCKING) {
+		struct address_space *mapping = file->f_mapping;
+		int ret;
 
-	bio = &dio->bio;
-	bio_get(bio);
-	goto start;
+		mutex_lock(&dio->inode->i_mutex);
 
-	while (iter->count) {
-		BUG_ON(!nr_pages);
-
-		bio = bio_alloc(GFP_KERNEL,
-				min_t(unsigned, BIO_MAX_PAGES, nr_pages));
-start:
-		bio->bi_private = dio;
-		bio->bi_end_io = dio_end_io;
-
-		ret = bio_get_user_pages(bio, iter, dio->rw == READ);
-		if (ret < 0) {
-			bio_put(bio);
-			dio->page_error = ret;
-			return 0;
+		ret = filemap_write_and_wait_range(mapping, offset,
+					offset + bio->bi_iter.bi_size - 1);
+		if (ret) {
+			mutex_unlock(&dio->inode->i_mutex);
+			bio_endio(bio, ret);
 		}
-
-		nr_pages -= bio->bi_vcnt;
-
-		atomic_inc(&dio->refcount);
-		ret = dio_send_bio(dio, bio, offset + dio->result,
-				   get_block, submit_io);
-		if (ret)
-			return ret;
-
-		if (dio->rw == READ && offset + dio->result == dio->i_size)
-			break;
 	}
 
-	return 0;
+	__dio_send_bio(dio, bio, file, offset, get_block, submit_io);
+
+	if (dio->flags & DIO_LOCKING)
+		mutex_unlock(&dio->inode->i_mutex);
 }
 
 /*
@@ -576,9 +585,10 @@ do_blockdev_direct_IO(int rw, struct kiocb *iocb, struct inode *inode,
 {
 	unsigned nr_pages = 0, i_blkbits;
 	size_t size = iocb->ki_nbytes;
-	ssize_t retval = 0;
-	struct dio *dio;
+	ssize_t ret = 0;
 	struct blk_plug plug;
+
+	BUG_ON((flags & DIO_LOCKING) && (rw & WRITE));
 
 	if (rw & WRITE)
 		rw = WRITE_ODIRECT;
@@ -593,78 +603,49 @@ do_blockdev_direct_IO(int rw, struct kiocb *iocb, struct inode *inode,
 	if (nr_pages < 0)
 		return nr_pages;
 
-	if (flags & DIO_LOCKING) {
-		if (rw == READ) {
-			struct address_space *mapping =
-					iocb->ki_filp->f_mapping;
-
-			/* will be released by direct_io_worker */
-			mutex_lock(&inode->i_mutex);
-
-			retval = filemap_write_and_wait_range(mapping, offset,
-							   offset + size - 1);
-			if (retval) {
-				mutex_unlock(&inode->i_mutex);
-				return retval;
-			}
-		}
-	}
-
-	/*
-	 * Will be decremented at I/O completion time.
-	 */
 	atomic_inc(&inode->i_dio_count);
-
-	dio = container_of(bio_alloc_bioset(GFP_KERNEL,
-				    min_t(unsigned, BIO_MAX_PAGES, nr_pages),
-				    dio_pool),
-			   struct dio, bio);
-
-	dio->flags	= flags;
-	dio->rw		= rw;
-	dio->inode	= inode;
-	dio->i_size	= i_size_read(inode);
-	dio->i_blkbits	= i_blkbits;
-	dio->end_io	= end_io;
-	dio->private	= NULL;
-	dio->page_error	= 0;
-	dio->io_error	= 0;
-	atomic_set(&dio->refcount, 1);
-	dio->waiter	= current;
-	dio->iocb	= iocb;
-	dio->result	= 0;
 
 	blk_start_plug(&plug);
 
-	retval = dio_alloc_bios(dio, offset, iter, nr_pages,
-				get_block, submit_io);
+	while (iov_iter_count(iter)) {
+		struct bio *bio;
+		struct dio *dio;
 
-	if (retval == -ENOTBLK) {
-		/*
-		 * The remaining part of the request will be
-		 * be handled by buffered I/O when we return
-		 */
-		retval = 0;
+		BUG_ON(!nr_pages);
+
+		bio = bio_alloc_bioset(GFP_KERNEL,
+			min_t(unsigned, BIO_MAX_PAGES, nr_pages), dio_pool);
+
+		dio = container_of(bio, struct dio, bio);
+		dio->flags	= flags;
+		dio->rw		= rw;
+		dio->inode	= inode;
+		dio->i_size	= i_size_read(inode);
+		dio->i_blkbits	= i_blkbits;
+		dio->end_io	= end_io;
+		dio->private	= NULL;
+		dio->page_error	= 0;
+		dio->io_error	= 0;
+		dio->waiter	= current;
+		dio->iocb	= iocb;
+		dio->result	= 0;
+
+		bio->bi_private	= dio;
+		bio->bi_end_io	= dio_end_io;
+
+		ret = bio_get_user_pages(bio, iter, dio->rw == READ);
+		if (ret) {
+			bio_put(bio);
+			break;
+		}
+
+		nr_pages -= bio->bi_vcnt;
+
+		dio_send_bio(dio, bio, iocb->ki_filp, offset + dio->result,
+			     get_block, submit_io);
 	}
 
 	blk_finish_plug(&plug);
-
-	/*
-	 * All block lookups have been performed. For READ requests
-	 * we can let i_mutex go now that its achieved its purpose
-	 * of protecting us from looking up uninitialized blocks.
-	 */
-	if (rw == READ && (dio->flags & DIO_LOCKING))
-		mutex_unlock(&dio->inode->i_mutex);
-
-	/*
-	 * The only time we want to leave bios in flight is when a successful
-	 * partial aio read or full aio write have been setup.  In that case
-	 * bio completion will call aio_complete.  The only time it's safe to
-	 * call aio_complete is when we return -EIOCBQUEUED, so we key on that.
-	 * This had *better* be the only place that raises -EIOCBQUEUED.
-	 */
-	BUG_ON(retval == -EIOCBQUEUED);
 
 	/*
 	 * For file extending writes updating i_size before data
@@ -673,21 +654,21 @@ do_blockdev_direct_IO(int rw, struct kiocb *iocb, struct inode *inode,
 	 * returning in this case.
 	 */
 	if (!is_sync_kiocb(iocb) &&
-	    retval == 0 && dio->result &&
+	    ret == 0 && dio->result &&
 	    ((rw == READ) ||
 	     (offset + size <= dio->i_size &&
 	      dio->result == size))) {
 		if (atomic_dec_and_test(&dio->refcount))
-			retval = dio_complete(dio, offset, retval, false);
+			ret = dio_complete(dio, offset, ret, false);
 		else
-			retval = -EIOCBQUEUED;
+			ret = -EIOCBQUEUED;
 	} else {
 		dio_wait_completion(dio);
-		retval = dio_complete(dio, offset, retval, false);
-		BUG_ON(retval == -EIOCBQUEUED);
+		ret = dio_complete(dio, offset, ret, false);
+		BUG_ON(ret == -EIOCBQUEUED);
 	}
 
-	return retval;
+	return ret;
 }
 
 ssize_t

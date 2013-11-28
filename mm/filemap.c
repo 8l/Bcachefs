@@ -2165,7 +2165,7 @@ again:
 			 * once without a pagefault.
 			 */
 			bytes = min_t(unsigned long, PAGE_CACHE_SIZE - offset,
-						iov_iter_single_seg_count(i));
+				      iov_iter_iovec(i).iov_len);
 			goto again;
 		}
 		pos += copied;

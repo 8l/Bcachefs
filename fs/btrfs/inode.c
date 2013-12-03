@@ -7161,12 +7161,11 @@ static int btrfs_submit_direct_hook(int rw, struct btrfs_dio_private *dip,
 	struct btrfs_root *root = BTRFS_I(inode)->root;
 	struct bio *bio;
 	struct bio *orig_bio = dip->orig_bio;
-	struct bio_vec *bvec = orig_bio->bi_io_vec;
+	struct bio_vec bvec;
+	struct bvec_iter iter;
 	u64 start_sector = orig_bio->bi_iter.bi_sector;
 	u64 file_offset = dip->logical_offset;
-	u64 submit_len = 0;
 	u64 map_length;
-	int nr_pages = 0;
 	int ret = 0;
 	int async_submit = 0;
 
@@ -7197,10 +7196,12 @@ static int btrfs_submit_direct_hook(int rw, struct btrfs_dio_private *dip,
 	bio->bi_end_io = btrfs_end_dio_bio;
 	atomic_inc(&dip->pending_bios);
 
-	while (bvec <= (orig_bio->bi_io_vec + orig_bio->bi_vcnt - 1)) {
-		if (unlikely(map_length < submit_len + bvec->bv_len ||
-		    bio_add_page(bio, bvec->bv_page, bvec->bv_len,
-				 bvec->bv_offset) < bvec->bv_len)) {
+	bio_for_each_segment(bvec, orig_bio, iter) {
+		if (unlikely(map_length < bio->bi_iter.bi_size + bvec.bv_len ||
+		    bio_add_page(bio, bvec.bv_page, bvec.bv_len,
+				 bvec.bv_offset) < bvec.bv_len)) {
+			unsigned submit_len = bio->bi_iter.bi_size;
+
 			/*
 			 * inc the count before we submit the bio so
 			 * we know the end IO handler won't happen before
@@ -7220,9 +7221,6 @@ static int btrfs_submit_direct_hook(int rw, struct btrfs_dio_private *dip,
 			start_sector += submit_len >> 9;
 			file_offset += submit_len;
 
-			submit_len = 0;
-			nr_pages = 0;
-
 			bio = btrfs_dio_bio_alloc(orig_bio->bi_bdev,
 						  start_sector, GFP_NOFS);
 			if (!bio)
@@ -7238,10 +7236,6 @@ static int btrfs_submit_direct_hook(int rw, struct btrfs_dio_private *dip,
 				bio_put(bio);
 				goto out_err;
 			}
-		} else {
-			submit_len += bvec->bv_len;
-			nr_pages++;
-			bvec++;
 		}
 	}
 

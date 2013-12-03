@@ -2632,12 +2632,18 @@ static int __must_check submit_one_bio(int rw, struct bio *bio,
 				       int mirror_num, unsigned long bio_flags)
 {
 	int ret = 0;
-	struct bio_vec *bvec = bio->bi_io_vec + bio->bi_vcnt - 1;
-	struct page *page = bvec->bv_page;
+	struct bio_vec bvec = { 0 };
+	struct bvec_iter iter;
+	struct page *page;
 	struct extent_io_tree *tree = bio->bi_private;
 	u64 start;
 
-	start = page_offset(page) + bvec->bv_offset;
+	bio_for_each_segment(bvec, bio, iter)
+		if (bio_iter_last(bvec, iter))
+			break;
+
+	page = bvec.bv_page;
+	start = page_offset(page) + bvec.bv_offset;
 
 	bio->bi_private = NULL;
 

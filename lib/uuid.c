@@ -45,3 +45,26 @@ void uuid_be_gen(uuid_be *bu)
 	bu->b[6] = (bu->b[6] & 0x0F) | 0x40;
 }
 EXPORT_SYMBOL_GPL(uuid_be_gen);
+
+int uuid_parse(const char *in, uuid_le *uuid)
+{
+	u8 *out = uuid->b;
+	const char bytes[] = { 4, 2, 2, 2, 6, 0 }, *b = bytes;
+
+	while (1) {
+		if (hex2bin(out, in, *b))
+			return -1;
+
+		in  += *b << 1;
+		out += *b;
+
+		if (!*++b)
+			break;
+
+		if (*in++ != '-')
+			return -1;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(uuid_parse);

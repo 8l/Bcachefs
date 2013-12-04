@@ -75,7 +75,8 @@ KEY_FIELD(KEY_OFFSET,	low,  0, KEY_OFFSET_BITS)
 #define KEY(inode, offset, size)					\
 ((struct bkey) {							\
 	.high = (2ULL << 56)|((__u64) (size) << 32),			\
-	.low = (((__u64) inode) << KEY_OFFSET_BITS) | (offset),		\
+	.low = (((__u64) inode) << KEY_OFFSET_BITS) |			\
+		((offset) & ~(~0ULL << KEY_OFFSET_BITS)),		\
 })
 
 #define ZERO_KEY			KEY(0, 0, 0)
@@ -189,6 +190,14 @@ do {								\
 			struct bch_inode_blockdev *))		\
 		(inode)->i_inode.i_inode_format = BCH_INODE_BLOCKDEV;	\
 } while (0)
+
+/* Dirents */
+
+struct bch_dirent {
+	struct bkey		d_key;
+	__u64			d_inum;
+	__u8			d_name[];
+};
 
 /* Enough for a key with 6 pointers */
 #define BKEY_PAD		8
@@ -343,7 +352,7 @@ static inline __u64 bset_magic(struct cache_sb *sb)
 enum btree_id {
 	BTREE_ID_EXTENTS		= 0,
 	BTREE_ID_INODES			= 1,
-	BTREE_ID_DIRS			= 2,
+	BTREE_ID_DIRENTS		= 2,
 	BTREE_ID_NR			= 3,
 
 	BTREE_ID_UUIDS			= 255,

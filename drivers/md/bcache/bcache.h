@@ -400,6 +400,13 @@ enum alloc_reserve {
 	RESERVE_NR,
 };
 
+struct open_bucket {
+	struct list_head	list;
+	unsigned		last_write_point;
+	unsigned		sectors_free;
+	BKEY_PADDED(key);
+};
+
 struct cache {
 	struct cache_set	*set;
 	struct cache_sb		sb;
@@ -454,9 +461,14 @@ struct cache {
 	 */
 	uint8_t			need_save_prio;
 
-	/* open buckets used in garbage collection */
+	/*
+	 * open buckets used in moving garbage collection
+	 * NOTE: GC_GEN == 0 signifies no moving gc, so accessing the
+	 * gc_buckets array is always GC_GEN-1.
+	 */
 #define NUM_GC_GENS 7
-	struct open_buckets	*gc_buckets[NUM_GC_GENS];
+	struct open_bucket	gc_buckets[NUM_GC_GENS];
+	struct mutex		gc_bucket_lock;
 
 	/*
 	 * If nonzero, we know we aren't going to find any buckets to invalidate
@@ -932,8 +944,13 @@ int __bch_bucket_alloc_set(struct cache_set *, unsigned,
 			   struct bkey *, int, bool);
 int bch_bucket_alloc_set(struct cache_set *, unsigned,
 			 struct bkey *, int, bool);
-bool bch_alloc_sectors(struct cache_set *, struct bkey *, unsigned,
+
+bool gc_next_bucket(struct cache *ca, unsigned gen);
+
+bool bch_alloc_sectors(struct cache_set *, struct bkey *,
 		       unsigned, unsigned, bool);
+bool gc_alloc_sectors(struct cache *, struct bkey *,
+		      unsigned, unsigned);
 
 __printf(2, 3)
 bool bch_cache_set_error(struct cache_set *, const char *, ...);
@@ -975,6 +992,7 @@ struct cache_set *bch_cache_set_alloc(struct cache_sb *);
 void bch_btree_cache_free(struct cache_set *);
 int bch_btree_cache_alloc(struct cache_set *);
 void bch_moving_init_cache_set(struct cache_set *);
+void bch_moving_init_cache(struct cache *);
 int bch_open_buckets_alloc(struct cache_set *);
 void bch_open_buckets_free(struct cache_set *);
 

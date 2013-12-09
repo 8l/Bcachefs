@@ -545,14 +545,29 @@ int bch_bucket_alloc_set(struct cache_set *c, unsigned reserve,
 	return ret;
 }
 
-/* Sector allocator */
+bool gc_next_bucket(struct cache *ca, unsigned gen)
+{
+	long b;
+	struct open_bucket *g = ca->gc_buckets + (gen-1);
 
-struct open_bucket {
-	struct list_head	list;
-	unsigned		last_write_point;
-	unsigned		sectors_free;
-	BKEY_PADDED(key);
-};
+	mutex_lock(&ca->set->bucket_lock);
+	b = bch_bucket_alloc(ca, RESERVE_MOVINGGC, true);
+	mutex_unlock(&ca->set->bucket_lock);
+
+	if (b == -1)
+		return false;
+
+	bkey_init(&g->key);
+	g->key.ptr[0] = PTR(ca->buckets[b].gen,
+			    bucket_to_sector(ca->set, b),
+			    ca->sb.nr_this_dev);
+	bch_set_extent_ptrs(&g->key, 1);
+	g->sectors_free	= ca->sb.bucket_size;
+
+	return true;
+}
+
+/* Sector allocator */
 
 /*
  * We keep multiple buckets open for writes, and try to segregate different
@@ -597,58 +612,24 @@ found:
 
 	if (!ret->sectors_free)
 		ret = NULL;
+	else {
+		/*
+		 * Move b to the end of the lru, and keep track of what
+		 * this bucket was last used for:
+		 */
+		list_move_tail(&ret->list, &c->data_buckets);
+		ret->last_write_point = write_point;
+	}
 
 	return ret;
 }
 
-/*
- * Allocates some space in the cache to write to, and k to point to the newly
- * allocated space, and updates KEY_SIZE(k) and KEY_OFFSET(k) (to point to the
- * end of the newly allocated space).
- *
- * May allocate fewer sectors than @sectors, KEY_SIZE(k) indicates how many
- * sectors were actually allocated.
- *
- * If s->writeback is true, will not fail.
- */
-bool bch_alloc_sectors(struct cache_set *c, struct bkey *k, unsigned sectors,
-		       unsigned write_point, unsigned write_prio, bool wait)
+static void alloc_sectors(struct cache_set *c, struct open_bucket *b,
+			  struct bkey *k, unsigned sectors)
 {
-	struct open_bucket *b;
-	BKEY_PADDED(key) alloc;
 	unsigned i;
 
-	/*
-	 * We might have to allocate a new bucket, which we can't do with a
-	 * spinlock held. So if we have to allocate, we drop the lock, allocate
-	 * and then retry. bch_extent_ptrs() indicates whether alloc points to
-	 * allocated bucket(s).
-	 */
-
-	bkey_init(&alloc.key);
-	spin_lock(&c->data_bucket_lock);
-
-	while (!(b = pick_data_bucket(c, k, write_point, &alloc.key))) {
-		unsigned watermark = write_prio
-			? RESERVE_MOVINGGC
-			: RESERVE_NONE;
-
-		spin_unlock(&c->data_bucket_lock);
-
-		if (bch_bucket_alloc_set(c, watermark, &alloc.key, 1, wait))
-			return false;
-
-		spin_lock(&c->data_bucket_lock);
-	}
-
-	/*
-	 * If we had to allocate, we might race and not need to allocate the
-	 * second time we call find_data_bucket(). If we allocated a bucket but
-	 * didn't use it, drop the refcount bch_bucket_alloc_set() took:
-	 */
-	if (bch_extent_ptrs(&alloc.key))
-		bkey_put(c, &alloc.key);
-
+	/* check to make sure bucket wasn't used while pinned */
 	for (i = 0; i < bch_extent_ptrs(&b->key); i++)
 		EBUG_ON(ptr_stale(c, &b->key, i));
 
@@ -663,15 +644,7 @@ bool bch_alloc_sectors(struct cache_set *c, struct bkey *k, unsigned sectors,
 	SET_KEY_SIZE(k, sectors);
 	bch_set_extent_ptrs(k, bch_extent_ptrs(&b->key));
 
-	/*
-	 * Move b to the end of the lru, and keep track of what this bucket was
-	 * last used for:
-	 */
-	list_move_tail(&b->list, &c->data_buckets);
-	bkey_copy_key(&b->key, k);
-	b->last_write_point = write_point;
-
-	b->sectors_free	-= sectors;
+	/* update open bucket for next time: */
 
 	for (i = 0; i < bch_extent_ptrs(&b->key); i++) {
 		SET_PTR_OFFSET(&b->key, i, PTR_OFFSET(&b->key, i) + sectors);
@@ -679,6 +652,8 @@ bool bch_alloc_sectors(struct cache_set *c, struct bkey *k, unsigned sectors,
 		atomic_long_add(sectors,
 				&PTR_CACHE(c, &b->key, i)->sectors_written);
 	}
+
+	b->sectors_free	-= sectors;
 
 	if (b->sectors_free < c->sb.block_size)
 		b->sectors_free = 0;
@@ -690,9 +665,76 @@ bool bch_alloc_sectors(struct cache_set *c, struct bkey *k, unsigned sectors,
 	 */
 	if (b->sectors_free)
 		bkey_get(c, &b->key);
+}
 
+/*
+ * Allocates some space in the cache to write to, and k to point to the newly
+ * allocated space, and updates KEY_SIZE(k) and KEY_OFFSET(k) (to point to the
+ * end of the newly allocated space).
+ *
+ * May allocate fewer sectors than @sectors, KEY_SIZE(k) indicates how many
+ * sectors were actually allocated.
+ *
+ * If s->writeback is true, will not fail.
+ */
+bool bch_alloc_sectors(struct cache_set *c, struct bkey *k, unsigned sectors,
+		       unsigned write_point, bool wait)
+{
+	struct open_bucket *b;
+	BKEY_PADDED(key) alloc;
+
+	/*
+	 * We might have to allocate a new bucket, which we can't do with a
+	 * spinlock held. So if we have to allocate, we drop the lock, allocate
+	 * and then retry. bch_extent_ptrs() indicates whether alloc points to
+	 * allocated bucket(s).
+	 */
+
+	bkey_init(&alloc.key);
+	spin_lock(&c->data_bucket_lock);
+
+	while (!(b = pick_data_bucket(c, k, write_point, &alloc.key))) {
+		spin_unlock(&c->data_bucket_lock);
+
+		if (bch_bucket_alloc_set(c, RESERVE_NONE, &alloc.key, 1, wait))
+			return false;
+
+		spin_lock(&c->data_bucket_lock);
+	}
+
+	/*
+	 * If we had to allocate, we might race and not need to allocate the
+	 * second time we call find_data_bucket(). If we allocated a bucket but
+	 * didn't use it, drop the refcount bch_bucket_alloc_set() took:
+	 */
+	if (bch_extent_ptrs(&alloc.key))
+		bkey_put(c, &alloc.key);
+
+	alloc_sectors(c, b, k, sectors);
+
+	b->key = *k;
 
 	spin_unlock(&c->data_bucket_lock);
+	return true;
+}
+
+
+bool gc_alloc_sectors(struct cache *ca, struct bkey *k,
+		      unsigned sectors, unsigned gen)
+{
+	struct open_bucket *b = &ca->gc_buckets[gen-1];
+
+	mutex_lock(&ca->gc_bucket_lock);
+
+	/* allocate a new bucket if needed */
+	if (!b->sectors_free) {
+		if (!gc_next_bucket(ca, gen))
+			return false;
+	}
+
+	alloc_sectors(ca->set, b, k, sectors);
+
+	mutex_unlock(&ca->gc_bucket_lock);
 	return true;
 }
 

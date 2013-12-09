@@ -6,6 +6,7 @@
 
 #include "bcache.h"
 #include "btree.h"
+#include "bset.h"
 #include "debug.h"
 #include "extents.h"
 #include "request.h"
@@ -16,7 +17,7 @@ struct moving_io {
 	struct closure		cl;
 	struct keybuf_key	*w;
 	struct data_insert_op	op;
-	struct bbio		bio;
+	struct bbio		bio; /* must be last */
 };
 
 static bool moving_pred(struct keybuf *buf, struct bkey *k)
@@ -63,22 +64,6 @@ static void write_moving_finish(struct closure *cl)
 	closure_return_with_destructor(cl, moving_io_destructor);
 }
 
-static void read_moving_endio(struct bio *bio, int error)
-{
-	struct bbio *b = container_of(bio, struct bbio, bio);
-	struct moving_io *io = container_of(bio->bi_private,
-					    struct moving_io, cl);
-
-	if (error)
-		io->op.error = error;
-	else if (KEY_CACHED(&b->key) &&
-		 ptr_stale(io->op.c, &b->key, 0)) {
-		io->op.error = -EINTR;
-	}
-
-	bch_bbio_endio(io->op.c, bio, error, "reading data to move");
-}
-
 static void moving_init(struct moving_io *io)
 {
 	struct bio *bio = &io->bio.bio;
@@ -100,16 +85,17 @@ static void write_moving(struct closure *cl)
 	struct moving_io *io = container_of(cl, struct moving_io, cl);
 	struct data_insert_op *op = &io->op;
 
-	if (!op->error) {
+	if (!op->error)	{
 		moving_init(io);
-
 		io->bio.bio.bi_iter.bi_sector = KEY_START(&io->w->key);
-		op->write_prio		= 1;
 		op->bio			= &io->bio.bio;
 
 		bkey_copy(&op->insert_key, &io->w->key);
 		bkey_copy(&op->replace_key, &io->w->key);
+
 		op->replace		= true;
+		op->moving_gc		= true;
+		op->bio = &io->bio.bio;
 
 		closure_call(&op->cl, bch_data_insert, NULL, cl);
 	}
@@ -125,6 +111,21 @@ static void read_moving_submit(struct closure *cl)
 	bch_submit_bbio(bio, io->op.c, &io->w->key, 0);
 
 	continue_at(cl, write_moving, system_wq);
+}
+
+static void read_moving_endio(struct bio *bio, int error)
+{
+	struct bbio *b = container_of(bio, struct bbio, bio);
+	struct moving_io *io = container_of(bio->bi_private,
+					    struct moving_io, cl);
+	if (error)
+		io->op.error = error;
+	else if (KEY_CACHED(&b->key) &&
+		 ptr_stale(io->op.c, &b->key, 0)) {
+		io->op.error = -EINTR;
+	}
+
+	bch_bbio_endio(io->op.c, bio, error, "reading data to move");
 }
 
 static void read_moving(struct cache_set *c)
@@ -155,13 +156,13 @@ static void read_moving(struct cache_set *c)
 		if (!io)
 			goto err;
 
-		w->private	= io;
-		io->w		= w;
-		io->op.c	= c;
+		w->private		= io;
+		io->w			= w;
+		io->op.c		= c;
+		io->op.moving_gc_gen	= GC_GEN(PTR_BUCKET(c, &w->key, 0));
 
 		moving_init(io);
 		bio = &io->bio.bio;
-
 		bio->bi_rw	= READ;
 		bio->bi_end_io	= read_moving_endio;
 
@@ -212,11 +213,10 @@ void bch_moving_gc(struct cache_set *c)
 	mutex_lock(&c->bucket_lock);
 
 	for_each_cache(ca, c, i) {
-		unsigned sectors_to_move = 0;
-		unsigned reserve_sectors = ca->sb.bucket_size *
-			max_t(int, 0, fifo_used(&ca->free[RESERVE_MOVINGGC]) -
-			      NUM_GC_GENS);
-		unsigned sectors_gen, gen_current, sectors_total;
+		unsigned sectors_to_move = 0, sectors_gen,
+			 gen_current, sectors_total;
+		int reserve_sectors = ca->sb.bucket_size *
+			(fifo_used(&ca->free[RESERVE_MOVINGGC]) - NUM_GC_GENS);
 
 		if (reserve_sectors < ca->sb.block_size)
 			continue;
@@ -280,4 +280,14 @@ void bch_moving_init_cache_set(struct cache_set *c)
 {
 	bch_keybuf_init(&c->moving_gc_keys);
 	sema_init(&c->moving_in_flight, 64);
+}
+
+void bch_moving_init_cache(struct cache *ca)
+{
+	unsigned i;
+
+	mutex_init(&ca->gc_bucket_lock);
+
+	for (i = 1; i <= NUM_GC_GENS; i++)
+		gc_next_bucket(ca, i);
 }

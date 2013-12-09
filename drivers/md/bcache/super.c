@@ -1582,6 +1582,9 @@ static void run_cache_set(struct cache_set *c)
 	if (bch_gc_thread_start(c))
 		goto err;
 
+	for_each_cache(ca, c, i)
+		bch_moving_init_cache(ca);
+
 	closure_sync(&cl);
 	c->sb.last_mount = get_seconds();
 	bcache_write_super(c);

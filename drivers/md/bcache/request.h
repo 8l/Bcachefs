@@ -9,7 +9,7 @@ struct data_insert_op {
 	struct bio		*bio;
 
 	uint16_t		write_point;
-	uint16_t		write_prio;
+	uint8_t			moving_gc_gen;
 	short			error;
 
 	union {
@@ -23,6 +23,8 @@ struct data_insert_op {
 		unsigned	replace_collision:1;
 
 		unsigned	insert_data_done:1;
+
+		unsigned	moving_gc:1;
 	};
 	};
 

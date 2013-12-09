@@ -383,9 +383,12 @@ static void bch_data_insert_start(struct closure *cl)
 		bkey_copy(k, &op->insert_key);
 		SET_KEY_OFFSET(k, bio->bi_iter.bi_sector);
 
-		if (!bch_alloc_sectors(op->c, k, bio_sectors(bio),
-				       op->write_point, op->write_prio,
-				       !KEY_CACHED(k)))
+		if (op->moving_gc ?
+		    !gc_alloc_sectors(PTR_CACHE(op->c, k, 0), k,
+				      bio_sectors(bio),
+				      op->moving_gc_gen) :
+		    !bch_alloc_sectors(op->c, k, bio_sectors(bio),
+				       op->write_point, !KEY_CACHED(k)))
 			goto err;
 
 		n = bio_next_split(bio, KEY_SIZE(k), GFP_NOIO, split);
@@ -816,10 +819,10 @@ static inline struct search *search_alloc(struct bio *bio,
 	s->iop.c		= d->c;
 	s->iop.bio		= NULL;
 	s->iop.write_point	= hash_long((unsigned long) current, 16);
-	s->iop.write_prio	= 0;
 	s->iop.error		= 0;
 	s->iop.flags		= 0;
 	s->iop.flush_journal	= (bio->bi_rw & (REQ_FLUSH|REQ_FUA)) != 0;
+	s->iop.moving_gc	= false;
 
 	return s;
 }

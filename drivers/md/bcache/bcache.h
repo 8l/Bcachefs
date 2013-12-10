@@ -497,11 +497,14 @@ struct cache {
 };
 
 struct gc_stat {
-	size_t			nodes;
-	size_t			key_bytes;
+	u64			nodes;
+	u64			key_bytes;
+	u64			nkeys;
 
-	size_t			nkeys;
-	uint64_t		data;	/* sectors */
+	u64			data;	/* sectors */
+	u64			sectors_available;
+	u64			inodes;
+
 	unsigned		in_use; /* percent */
 };
 
@@ -1003,6 +1006,8 @@ int bch_cache_allocator_init(struct cache *ca);
 
 void bch_debug_exit(void);
 int bch_debug_init(struct kobject *);
+void bch_fs_exit(void);
+int bch_fs_init(void);
 void bch_request_exit(void);
 int bch_request_init(void);
 void bch_btree_exit(void);

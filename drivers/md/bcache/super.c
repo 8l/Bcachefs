@@ -1533,6 +1533,8 @@ static void run_cache_set(struct cache_set *c)
 
 		bch_journal_replay(c, &journal);
 	} else {
+		struct bch_inode inode;
+
 		pr_notice("invalidating existing data");
 
 		for_each_cache(ca, c, i) {
@@ -1581,6 +1583,15 @@ static void run_cache_set(struct cache_set *c)
 
 		bch_journal_next(&c->journal);
 		bch_journal_meta(c, &cl);
+
+		memset(&inode, 0, sizeof(inode));
+		inode.i_key = KEY(BCACHE_ROOT_INO, 0, 0);
+		SET_KEY_U64s(&inode.i_key, sizeof(inode) / sizeof(u64));
+		inode.i_mode = S_IFDIR|S_IRWXU|S_IRGRP|S_IXGRP|S_IROTH|S_IXOTH;
+		inode.i_nlink = 2;
+
+		err = "error creating root directory";
+		bch_inode_update(c, &inode);
 	}
 
 	err = "error starting gc thread";
@@ -2001,6 +2012,7 @@ kobj_attribute_write(reboot,		reboot_test);
 static void bcache_exit(void)
 {
 	bch_debug_exit();
+	bch_fs_exit();
 	bch_request_exit();
 	bch_btree_exit();
 	if (bcache_kobj)
@@ -2035,6 +2047,7 @@ static int __init bcache_init(void)
 	    sysfs_create_files(bcache_kobj, files) ||
 	    bch_btree_init() ||
 	    bch_request_init() ||
+	    bch_fs_init() ||
 	    bch_debug_init(bcache_kobj))
 		goto err;
 

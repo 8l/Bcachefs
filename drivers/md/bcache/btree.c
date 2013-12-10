@@ -1738,6 +1738,7 @@ static void bch_btree_gc(struct cache_set *c)
 	stats.key_bytes *= sizeof(uint64_t);
 	stats.data	<<= 9;
 	stats.in_use	= (c->nbuckets - available) * 100 / c->nbuckets;
+	stats.sectors_available = available * c->sb.bucket_size;
 	memcpy(&c->gc_stats, &stats, sizeof(struct gc_stat));
 
 	trace_bcache_gc_end(c);

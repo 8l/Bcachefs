@@ -130,6 +130,8 @@ static inline struct bkey *bkey_idx(const struct bkey *k, unsigned nr_keys)
 
 #define BLOCKDEV_INODE_MAX	4096
 
+#define BCACHE_ROOT_INO		4096
+
 enum bch_inode_types {
 	BCH_INODE_BLOCKDEV	= 0,
 	BCH_INODE_FS		= 1,
@@ -150,17 +152,6 @@ struct bch_inode {
 	__s64			i_atime;
 	__s64			i_ctime;
 	__s64			i_mtime;
-};
-
-struct bch_inode_blockdev {
-	struct bch_inode	i_inode;
-
-	uuid_le			i_uuid;
-	__u8			i_label[32];
-};
-
-struct bch_inode_fs {
-	struct bch_inode	i_inode;
 
 	__u64			i_size;
 
@@ -170,6 +161,16 @@ struct bch_inode_fs {
 
 	__u16			i_mode;
 	__u16			pad;
+
+	__u32			i_dev;
+	__u32			pad2;
+};
+
+struct bch_inode_blockdev {
+	struct bch_inode	i_inode;
+
+	uuid_le			i_uuid;
+	__u8			i_label[32];
 };
 
 BITMASK(INODE_FLASH_ONLY,	struct bch_inode_blockdev,
@@ -312,6 +313,8 @@ BITMASK(BDEV_STATE,			struct cache_sb, flags, 61, 2);
  * xored with the first part of the cache set's UUID
  */
 
+#define BCACHE_SB_MAGIC			0xca451a4ef67385c6ULL
+#define BCACHE_SB_MAGIC2		0x816dba487ff56582ULL
 #define JSET_MAGIC			0x245235c1a3625032ULL
 #define PSET_MAGIC			0x6750e15f87337f91ULL
 #define BSET_MAGIC			0x90135c78b99e07f5ULL

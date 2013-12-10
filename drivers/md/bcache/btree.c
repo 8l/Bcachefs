@@ -170,6 +170,20 @@ static inline struct bset *write_block(struct btree *b)
 	return ((void *) btree_bset_first(b)) + b->written * block_bytes(b->c);
 }
 
+static void bch_btree_init_next(struct btree *b)
+{
+	/* If not a leaf node, always sort */
+	if (b->level && b->keys.nsets)
+		bch_btree_sort(&b->keys, &b->c->sort);
+	else
+		bch_btree_sort_lazy(&b->keys, &b->c->sort);
+
+	if (b->written < btree_blocks(b))
+		bch_bset_init_next(&b->keys, write_block(b),
+				   bset_magic(&b->c->sb));
+
+}
+
 /* Btree key manipulation */
 
 void bkey_put(struct cache_set *c, struct bkey *k)
@@ -475,9 +489,11 @@ static void do_btree_node_write(struct btree *b)
 	}
 }
 
-void bch_btree_node_write(struct btree *b, struct closure *parent)
+void __bch_btree_node_write(struct btree *b, struct closure *parent)
 {
 	struct bset *i = btree_bset_last(b);
+
+	lockdep_assert_held(&b->write_lock);
 
 	trace_bcache_btree_write(b);
 
@@ -502,16 +518,14 @@ void bch_btree_node_write(struct btree *b, struct closure *parent)
 			&PTR_CACHE(b->c, &b->key, 0)->btree_sectors_written);
 
 	b->written += set_blocks(i, block_bytes(b->c));
+}
 
-	/* If not a leaf node, always sort */
-	if (b->level && b->keys.nsets)
-		bch_btree_sort(&b->keys, &b->c->sort);
-	else
-		bch_btree_sort_lazy(&b->keys, &b->c->sort);
+void bch_btree_node_write(struct btree *b, struct closure *parent)
+{
+	lockdep_assert_held(&b->lock);
 
-	if (b->written < btree_blocks(b))
-		bch_bset_init_next(&b->keys, write_block(b),
-				   bset_magic(&b->c->sb));
+	__bch_btree_node_write(b, parent);
+	bch_btree_init_next(b);
 }
 
 static void bch_btree_node_write_sync(struct btree *b)
@@ -527,17 +541,18 @@ static void btree_node_write_work(struct work_struct *w)
 {
 	struct btree *b = container_of(to_delayed_work(w), struct btree, work);
 
-	rw_lock(true, b, b->level);
-
+	mutex_lock(&b->write_lock);
 	if (btree_node_dirty(b))
-		bch_btree_node_write(b, NULL);
-	rw_unlock(true, b);
+		__bch_btree_node_write(b, NULL);
+	mutex_unlock(&b->write_lock);
 }
 
 static void bch_btree_leaf_dirty(struct btree *b, atomic_t *journal_ref)
 {
 	struct bset *i = btree_bset_last(b);
 	struct btree_write *w = btree_current_write(b);
+
+	lockdep_assert_held(&b->write_lock);
 
 	BUG_ON(!b->written);
 	BUG_ON(!i->keys);
@@ -636,6 +651,8 @@ static struct btree *mca_bucket_alloc(struct cache_set *c,
 
 	init_rwsem(&b->lock);
 	lockdep_set_novalidate_class(&b->lock);
+	mutex_init(&b->write_lock);
+	lockdep_set_novalidate_class(&b->write_lock);
 	INIT_LIST_HEAD(&b->list);
 	INIT_DELAYED_WORK(&b->work, btree_node_write_work);
 	b->c = c;
@@ -669,8 +686,12 @@ static int mca_reap(struct btree *b, unsigned min_order, bool flush)
 		up(&b->io_mutex);
 	}
 
+	mutex_lock(&b->write_lock);
 	if (btree_node_dirty(b))
-		bch_btree_node_write_sync(b);
+		__bch_btree_node_write(b, &cl);
+	mutex_unlock(&b->write_lock);
+
+	closure_sync(&cl);
 
 	/* wait for any in flight btree write */
 	down(&b->io_mutex);
@@ -1122,8 +1143,10 @@ static struct btree *btree_node_alloc_replacement(struct btree *b, bool wait)
 	struct btree *n = bch_btree_node_alloc(b->c, b->level,
 					       b->btree_id, wait);
 	if (!IS_ERR_OR_NULL(n)) {
+		mutex_lock(&n->write_lock);
 		bch_btree_sort_into(&b->keys, &n->keys, &b->c->sort);
 		bkey_copy_key(&n->key, &b->key);
+		mutex_unlock(&n->write_lock);
 	}
 
 	return n;
@@ -1287,6 +1310,9 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 			goto out_nocoalesce;
 	}
 
+	for (i = 0; i < nodes; i++)
+		mutex_lock(&new_nodes[i]->write_lock);
+
 	for (i = nodes - 1; i > 0; --i) {
 		struct bset *n1 = btree_bset_first(new_nodes[i]);
 		struct bset *n2 = btree_bset_first(new_nodes[i - 1]);
@@ -1347,6 +1373,9 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 
 		bch_btree_node_write(new_nodes[i], &cl);
 	}
+
+	for (i = 0; i < nodes; i++)
+		mutex_unlock(&new_nodes[i]->write_lock);
 
 	for (i = 0; i < nodes; i++) {
 		if (__bch_keylist_realloc(keylist, 2))
@@ -1467,7 +1496,10 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 								 false);
 
 				if (!IS_ERR_OR_NULL(n)) {
+					mutex_lock(&n->write_lock);
 					bch_btree_node_write_sync(n);
+					mutex_unlock(&n->write_lock);
+
 					bch_keylist_add(&keys, &n->key);
 
 					bch_btree_insert_node(b, op, &keys,
@@ -1495,8 +1527,10 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 			 * Must flush leaf nodes before gc ends, since replace
 			 * operations aren't journalled
 			 */
+			mutex_lock(&last->b->write_lock);
 			if (btree_node_dirty(last->b))
 				bch_btree_node_write(last->b, writes);
+			mutex_unlock(&last->b->write_lock);
 			rw_unlock(true, last->b);
 		}
 
@@ -1533,7 +1567,10 @@ static int bch_btree_gc_root(struct btree *b, struct btree_op *op,
 		n = btree_node_alloc_replacement(b, false);
 
 		if (!IS_ERR_OR_NULL(n)) {
+			mutex_lock(&n->write_lock);
 			bch_btree_node_write_sync(n);
+			mutex_unlock(&n->write_lock);
+
 			bch_btree_set_root(n);
 			btree_node_free(b);
 			b = n;
@@ -1957,7 +1994,12 @@ static int btree_split(struct btree *b, struct btree_op *op,
 						  b->btree_id, true);
 			if (IS_ERR(n3))
 				goto err_free2;
+
+			mutex_lock(&n3->write_lock);
 		}
+
+		mutex_lock(&n2->write_lock);
+		mutex_lock(&n1->write_lock);
 
 		bch_btree_insert_keys(n1, op, insert_keys, replace_key);
 
@@ -1985,21 +2027,25 @@ static int btree_split(struct btree *b, struct btree_op *op,
 
 		bch_keylist_add(&parent_keys, &n2->key);
 		bch_btree_node_write(n2, &cl);
+		mutex_unlock(&n2->write_lock);
 		rw_unlock(true, n2);
 	} else {
 		trace_bcache_btree_node_compact(b, btree_bset_first(n1)->keys);
 
+		mutex_lock(&n1->write_lock);
 		bch_btree_insert_keys(n1, op, insert_keys, replace_key);
 	}
 
 	bch_keylist_add(&parent_keys, &n1->key);
 	bch_btree_node_write(n1, &cl);
+	mutex_unlock(&n1->write_lock);
 
 	if (n3) {
 		/* Depth increases, make a new root */
 		bkey_copy_key(&n3->key, &MAX_KEY);
 		bch_btree_insert_keys(n3, op, &parent_keys, NULL);
 		bch_btree_node_write(n3, &cl);
+		mutex_unlock(&n3->write_lock);
 
 		closure_sync(&cl);
 		bch_btree_set_root(n3);
@@ -2023,10 +2069,12 @@ static int btree_split(struct btree *b, struct btree_op *op,
 
 	return 0;
 err_free2:
+	mutex_unlock(&n2->write_lock);
 	bkey_put(b->c, &n2->key);
 	btree_node_free(n2);
 	rw_unlock(true, n2);
 err_free1:
+	mutex_unlock(&n1->write_lock);
 	bkey_put(b->c, &n1->key);
 	btree_node_free(n1);
 	rw_unlock(true, n1);
@@ -2047,31 +2095,45 @@ int bch_btree_insert_node(struct btree *b, struct btree_op *op,
 {
 	BUG_ON(b->level && replace_key);
 
+	mutex_lock(&b->write_lock);
+
+	if (write_block(b) != btree_bset_last(b) &&
+	    b->keys.last_set_unwritten)
+		bch_btree_init_next(b); /* just wrote a set */
+
 	if (bch_keylist_nkeys(insert_keys) > insert_u64s_remaining(b)) {
-		if (current->bio_list) {
-			op->lock = btree_node_root(b)->level + 1;
-			return -EAGAIN;
-		} else if (op->lock <= btree_node_root(b)->level) {
-			op->lock = btree_node_root(b)->level + 1;
-			return -EINTR;
-		} else {
-			/* Invalidated all iterators */
-			int ret = btree_split(b, op, insert_keys, replace_key);
+		mutex_unlock(&b->write_lock);
+		goto split;
+	}
 
-			return bch_keylist_empty(insert_keys) ?
-				0 : ret ?: -EINTR;
-		}
+	BUG_ON(write_block(b) != btree_bset_last(b));
+
+	if (bch_btree_insert_keys(b, op, insert_keys, replace_key)) {
+		if (!b->level)
+			bch_btree_leaf_dirty(b, journal_ref);
+		else
+			bch_btree_node_write_sync(b);
+	}
+
+	mutex_unlock(&b->write_lock);
+
+	return 0;
+split:
+	if (current->bio_list) {
+		op->lock = btree_node_root(b)->level + 1;
+		return -EAGAIN;
+	} else if (op->lock <= btree_node_root(b)->level) {
+		op->lock = btree_node_root(b)->level + 1;
+		return -EINTR;
 	} else {
-		BUG_ON(write_block(b) != btree_bset_last(b));
+		/* Invalidated all iterators */
+		int ret = btree_split(b, op, insert_keys, replace_key);
 
-		if (bch_btree_insert_keys(b, op, insert_keys, replace_key)) {
-			if (!b->level)
-				bch_btree_leaf_dirty(b, journal_ref);
-			else
-				bch_btree_node_write_sync(b);
-		}
-
-		return 0;
+		if (bch_keylist_empty(insert_keys))
+			return 0;
+		else if (!ret)
+			return -EINTR;
+		return ret;
 	}
 }
 

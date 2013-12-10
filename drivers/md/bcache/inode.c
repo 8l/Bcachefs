@@ -49,8 +49,10 @@ insert:
 	BUG_ON(!ret && !bch_keylist_empty(&keys));
 	bch_keylist_free(&keys);
 
+	mutex_lock(&b->write_lock);
 	if (!ret & btree_node_dirty(b)) /* this wasn't journalled... */
 		bch_btree_node_write(b, &op->cl);
+	mutex_unlock(&b->write_lock);
 
 	return ret;
 }
@@ -142,8 +144,10 @@ static int inode_rm_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 
 	BUG_ON(!ret && !bch_keylist_empty(&keys));
 
+	mutex_lock(&b->write_lock);
 	if (!ret & btree_node_dirty(b)) /* this wasn't journalled... */
 		bch_btree_node_write(b, &op->cl);
+	mutex_unlock(&b->write_lock);
 
 	return -EINTR;
 }

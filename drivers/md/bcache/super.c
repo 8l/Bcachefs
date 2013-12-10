@@ -1288,9 +1288,12 @@ static void cache_set_flush(struct closure *cl)
 			list_add(&c->btree_roots[i]->list, &c->btree_cache);
 
 	/* Should skip this if we're unregistering because of an error */
-	list_for_each_entry(b, &c->btree_cache, list)
+	list_for_each_entry(b, &c->btree_cache, list) {
+		mutex_lock(&b->write_lock);
 		if (btree_node_dirty(b))
-			bch_btree_node_write(b, NULL);
+			__bch_btree_node_write(b, NULL);
+		mutex_unlock(&b->write_lock);
+	}
 
 	for_each_cache(ca, c, i)
 		if (ca->alloc_thread)
@@ -1560,8 +1563,10 @@ static void run_cache_set(struct cache_set *c)
 			if (IS_ERR_OR_NULL(b))
 				goto err;
 
+			mutex_lock(&b->write_lock);
 			bkey_copy_key(&b->key, &MAX_KEY);
 			bch_btree_node_write(b, &cl);
+			mutex_unlock(&b->write_lock);
 
 			bch_btree_set_root(b);
 			rw_unlock(true, b);

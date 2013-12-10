@@ -988,6 +988,34 @@ static void bch_evict_inode(struct inode *inode)
 		bch_inode_rm(c, inode->i_ino);
 }
 
+struct count_inodes_op {
+	struct btree_op op;
+	u64 inodes;
+};
+
+static int bch_count_inodes_fn(struct btree_op *b_op, struct btree *b,
+			       struct bkey *k)
+{
+	struct count_inodes_op *op = container_of(b_op,
+					struct count_inodes_op, op);
+
+	op->inodes++;
+	return MAP_CONTINUE;
+}
+
+static u64 bch_count_inodes(struct cache_set *c)
+{
+	struct count_inodes_op op;
+
+	bch_btree_op_init(&op.op, -1);
+	op.inodes = 0;
+
+	bch_btree_map_keys(&op.op, c, BTREE_ID_INODES, NULL,
+			   bch_count_inodes_fn, 0);
+
+	return op.inodes;
+}
+
 static int bch_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
 	struct super_block *sb = dentry->d_sb;
@@ -1009,7 +1037,7 @@ static int bch_statfs(struct dentry *dentry, struct kstatfs *buf)
 		(c->bucket_bits - (PAGE_SHIFT - 9));
 	buf->f_bavail	= buckets_available(c) >>
 		(c->bucket_bits - (PAGE_SHIFT - 9));
-	buf->f_files	= c->gc_stats.inodes;
+	buf->f_files	= bch_count_inodes(c);
 	buf->f_namelen	= NAME_MAX;
 
 	return 0;

@@ -1440,8 +1440,7 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 					last->b = n;
 
 					/* Invalidated our iterator */
-					ret = -EINTR;
-					break;
+					bch_btree_iter_init(&b->keys, &iter, k);
 				}
 			}
 
@@ -1498,19 +1497,20 @@ static int bch_btree_gc_root(struct btree *b, struct btree_op *op,
 			bch_btree_node_write_sync(n);
 			bch_btree_set_root(n);
 			btree_node_free(b);
-			rw_unlock(true, n);
-
-			return -EINTR;
+			b = n;
 		}
 	}
 
 	if (b->level) {
 		ret = btree_gc_recurse(b, op, writes, gc);
 		if (ret)
-			return ret;
+			goto out;
 	}
 
 	bkey_copy_key(&b->c->gc_done, &b->key);
+out:
+	if (!IS_ERR_OR_NULL(n))
+		rw_unlock(true, n);
 
 	return ret;
 }

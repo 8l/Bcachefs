@@ -2,14 +2,13 @@
 #ifndef _BCACHE_UTIL_H
 #define _BCACHE_UTIL_H
 
+#include <linux/closure.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/llist.h>
 #include <linux/ratelimit.h>
 #include <linux/vmalloc.h>
 #include <linux/workqueue.h>
-
-#include "closure.h"
 
 #define PAGE_SECTORS		(PAGE_SIZE / 512)
 

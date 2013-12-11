@@ -5,11 +5,10 @@
  * Copyright 2012 Google, Inc.
  */
 
+#include <linux/closure.h>
 #include <linux/debugfs.h>
 #include <linux/module.h>
 #include <linux/seq_file.h>
-
-#include "closure.h"
 
 static inline void closure_put_after_sub(struct closure *cl, int flags)
 {

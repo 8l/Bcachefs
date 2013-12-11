@@ -179,6 +179,7 @@
 
 #include <linux/bcache.h>
 #include <linux/bio.h>
+#include <linux/closure.h>
 #include <linux/kobject.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -188,7 +189,6 @@
 #include <linux/workqueue.h>
 
 #include "util.h"
-#include "closure.h"
 
 struct bucket {
 	atomic_t	pin;

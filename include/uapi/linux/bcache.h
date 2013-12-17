@@ -6,6 +6,7 @@
  */
 
 #include <asm/types.h>
+#include <linux/uuid.h>
 
 #define BITMASK(name, type, field, offset, size)		\
 static inline __u64 name(const type *k)				\
@@ -123,6 +124,72 @@ static inline struct bkey *bkey_idx(const struct bkey *k, unsigned nr_keys)
 	__u64 *d = (void *) k;
 	return (struct bkey *) (d + nr_keys);
 }
+
+/* Inodes */
+
+#define BLOCKDEV_INODE_MAX	4096
+
+enum bch_inode_types {
+	BCH_INODE_BLOCKDEV	= 0,
+	BCH_INODE_FS		= 1,
+};
+
+struct bch_inode {
+	struct bkey		i_key;
+	/* Randomly generated, conceptually similar to a generation number */
+	__u64			i_sequence;
+
+	__u16			i_inode_format;
+	__u16			i_inode_type;
+	__u32			i_flags;
+
+	__u64			i_sectors; /* Allocated space */
+
+	/* Nanoseconds */
+	__s64			i_atime;
+	__s64			i_ctime;
+	__s64			i_mtime;
+};
+
+struct bch_inode_blockdev {
+	struct bch_inode	i_inode;
+
+	uuid_le			i_uuid;
+	__u8			i_label[32];
+};
+
+struct bch_inode_fs {
+	struct bch_inode	i_inode;
+
+	__u64			i_size;
+
+	__u32			i_uid;
+	__u32			i_gid;
+	__u32			i_nlink;
+
+	__u16			i_mode;
+	__u16			pad;
+};
+
+BITMASK(INODE_FLASH_ONLY,	struct bch_inode_blockdev,
+				i_inode.i_flags, 0, 1);
+BITMASK(INODE_NET,		struct bch_inode_blockdev,
+				i_inode.i_flags, 1, 1);
+
+#define BCH_INODE_INIT(inode)					\
+do {								\
+	memset(inode, 0, sizeof(*(inode)));			\
+	SET_KEY_U64s(&(inode)->i_inode.i_key,			\
+		     sizeof(*inode) / sizeof(__u64));		\
+								\
+	if (__builtin_types_compatible_p(typeof(inode),		\
+			struct bch_inode_fs *))			\
+		(inode)->i_inode.i_inode_format = BCH_INODE_FS;	\
+	else if (__builtin_types_compatible_p(typeof(inode),	\
+			struct bch_inode_blockdev *))		\
+		(inode)->i_inode.i_inode_format = BCH_INODE_BLOCKDEV;	\
+} while (0)
+
 /* Enough for a key with 6 pointers */
 #define BKEY_PAD		8
 
@@ -330,28 +397,6 @@ struct prio_set {
 	} __attribute((packed)) data[];
 };
 
-/* UUIDS - per backing device/flash only volume metadata */
-
-struct uuid_entry {
-	union {
-		struct {
-			__u8	uuid[16];
-			__u8	label[32];
-			__u32	first_reg;
-			__u32	last_reg;
-			__u32	invalidated;
-
-			__u32	flags;
-			/* Size of flash only volumes */
-			__u64	sectors;
-		};
-
-		__u8		pad[128];
-	};
-};
-
-BITMASK(UUID_FLASH_ONLY,	struct uuid_entry, flags, 0, 1);
-
 /* Btree nodes */
 
 /* Version 1: Seed pointer into btree node checksum
@@ -420,5 +465,25 @@ struct uuid_entry_v0 {
 	__u32		invalidated;
 	__u32		pad;
 };
+
+struct uuid_entry {
+	union {
+		struct {
+			__u8	uuid[16];
+			__u8	label[32];
+			__u32	first_reg;
+			__u32	last_reg;
+			__u32	invalidated;
+
+			__u32	flags;
+			/* Size of flash only volumes */
+			__u64	sectors;
+		};
+
+		__u8		pad[128];
+	};
+};
+
+BITMASK(UUID_FLASH_ONLY,	struct uuid_entry, flags, 0, 1);
 
 #endif /* _LINUX_BCACHE_H */

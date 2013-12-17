@@ -1250,9 +1250,6 @@ struct gc_merge_info {
 	unsigned	keys;
 };
 
-static int bch_btree_insert_node(struct btree *, struct btree_op *,
-				 struct keylist *, atomic_t *, struct bkey *);
-
 static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 			     struct keylist *keylist, struct gc_stat *gc,
 			     struct gc_merge_info *r)
@@ -1578,9 +1575,11 @@ static void btree_gc_start(struct cache_set *c)
 size_t bch_btree_gc_finish(struct cache_set *c)
 {
 	size_t available = 0;
+	struct radix_tree_iter iter;
 	struct bucket *b;
 	struct cache *ca;
 	unsigned i, id;
+	void **slot;
 
 	mutex_lock(&c->bucket_lock);
 
@@ -1597,28 +1596,25 @@ size_t bch_btree_gc_finish(struct cache_set *c)
 					    GC_MARK_METADATA);
 		}
 
-	for (i = 0; i < bch_extent_ptrs(&c->uuid_bucket); i++)
-		SET_GC_MARK(PTR_BUCKET(c, &c->uuid_bucket, i),
-			    GC_MARK_METADATA);
-
 	/* don't reclaim buckets to which writeback keys point */
 	rcu_read_lock();
-	for (i = 0; i < c->nr_uuids; i++) {
-		struct bcache_device *d = c->devices[i];
+	radix_tree_for_each_slot(slot, &c->devices, &iter, 0) {
+		struct bcache_device *d;
 		struct cached_dev *dc;
 		struct keybuf_key *w, *n;
-		unsigned j;
 
-		if (!d || UUID_FLASH_ONLY(&c->uuids[i]))
+		d = radix_tree_deref_slot(slot);
+
+		if (INODE_FLASH_ONLY(&d->inode))
 			continue;
 		dc = container_of(d, struct cached_dev, disk);
 
 		spin_lock(&dc->writeback_keys.lock);
 		rbtree_postorder_for_each_entry_safe(w, n,
 					&dc->writeback_keys.keys, node)
-			for (j = 0; j < bch_extent_ptrs(&w->key); j++)
-				SET_GC_MARK(PTR_BUCKET(c, &w->key, j),
-					    GC_MARK_DIRTY);
+			for (i = 0; i < bch_extent_ptrs(&w->key); i++)
+				SET_GC_MARK(PTR_BUCKET(c, &w->key, i),
+					GC_MARK_DIRTY);
 		spin_unlock(&dc->writeback_keys.lock);
 	}
 	rcu_read_unlock();
@@ -2036,10 +2032,9 @@ err:
 	return -ENOMEM;
 }
 
-static int bch_btree_insert_node(struct btree *b, struct btree_op *op,
-				 struct keylist *insert_keys,
-				 atomic_t *journal_ref,
-				 struct bkey *replace_key)
+int bch_btree_insert_node(struct btree *b, struct btree_op *op,
+			  struct keylist *insert_keys, atomic_t *journal_ref,
+			  struct bkey *replace_key)
 {
 	BUG_ON(b->level && replace_key);
 

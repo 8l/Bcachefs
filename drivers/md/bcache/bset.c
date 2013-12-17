@@ -791,12 +791,12 @@ unsigned bch_btree_insert_key(struct btree_keys *b, struct bkey *k,
 	if (m != bset_bkey_last(i) &&
 	    bch_extent_ptrs(m) == bch_extent_ptrs(k) && !KEY_SIZE(m))
 		goto copy;
-#endif
+
 	status = BTREE_INSERT_STATUS_FRONT_MERGE;
 	if (m != bset_bkey_last(i) &&
 	    bch_bkey_try_merge(b, k, m))
 		goto copy;
-
+#endif
 	bch_bset_insert(b, m, k);
 copy:	bkey_copy(m, k);
 merged:

@@ -1877,6 +1877,7 @@ err:
 /* Btree insertion */
 
 static bool btree_insert_key(struct btree *b, struct bkey *k,
+			     struct keylist *inserted_keys,
 			     struct bkey *replace_key)
 {
 	unsigned status;
@@ -1910,6 +1911,7 @@ static size_t insert_u64s_remaining(struct btree *b)
 
 static bool bch_btree_insert_keys(struct btree *b, struct btree_op *op,
 				  struct keylist *insert_keys,
+				  struct keylist *inserted_keys,
 				  struct bkey *replace_key)
 {
 	bool ret = false;
@@ -1921,11 +1923,20 @@ static bool bch_btree_insert_keys(struct btree *b, struct btree_op *op,
 		if (KEY_U64s(k) > insert_u64s_remaining(b))
 			break;
 
+		if (__bch_keylist_realloc(inserted_keys, KEY_U64s(k))) {
+			/* XXX */
+			break;
+		}
+
 		if (b->keys.ops->is_extents) {
 			if (bkey_cmp(k, &b->key) <= 0) {
 				bkey_put(b->c, k);
 
-				ret |= btree_insert_key(b, k, replace_key);
+				if (btree_insert_key(b, k, replace_key) !=
+				    BTREE_INSERT_STATUS_NO_INSERT) {
+					bch_keylist_add(inserted_keys, k);
+					ret = true;
+				}
 				bch_keylist_pop_front(insert_keys);
 			} else if (bkey_cmp(&START_KEY(k), &b->key) < 0) {
 				BKEY_PADDED(key) temp;
@@ -2091,9 +2102,11 @@ err:
 }
 
 int bch_btree_insert_node(struct btree *b, struct btree_op *op,
-			  struct keylist *insert_keys, atomic_t *journal_ref,
+			  struct keylist *insert_keys,
 			  struct bkey *replace_key)
 {
+	struct keylist journal_keys;
+
 	BUG_ON(b->level && replace_key);
 
 	mutex_lock(&b->write_lock);
@@ -2109,10 +2122,19 @@ int bch_btree_insert_node(struct btree *b, struct btree_op *op,
 
 	BUG_ON(write_block(b) != btree_bset_last(b));
 
-	if (bch_btree_insert_keys(b, op, insert_keys, replace_key)) {
-		if (!b->level)
+	bch_keylist_init(&journal_keys);
+
+	if (bch_btree_insert_keys(b, op, insert_keys,
+				  &journal_keys, replace_key)) {
+		if (!b->level) {
+			mutex_unlock(&b->write_lock);
+			journal_ref = bch_journal(b->c, b->btree_id,
+						  &journal_keys, cl);
+			mutex_lock(&b->write_lock);
+
 			bch_btree_leaf_dirty(b, journal_ref);
-		else
+			atomic_dec_bug(journal_ref);
+		} else
 			bch_btree_node_write_sync(b);
 	}
 
@@ -2178,7 +2200,6 @@ out:
 struct btree_insert_op {
 	struct btree_op	op;
 	struct keylist	*keys;
-	atomic_t	*journal_ref;
 	struct bkey	*replace_key;
 };
 
@@ -2187,8 +2208,7 @@ static int btree_insert_fn(struct btree_op *b_op, struct btree *b)
 	struct btree_insert_op *op = container_of(b_op,
 					struct btree_insert_op, op);
 
-	int ret = bch_btree_insert_node(b, &op->op, op->keys,
-					op->journal_ref, op->replace_key);
+	int ret = bch_btree_insert_node(b, &op->op, op->keys, op->replace_key);
 	if (ret && !bch_keylist_empty(op->keys))
 		return ret;
 	else
@@ -2196,8 +2216,7 @@ static int btree_insert_fn(struct btree_op *b_op, struct btree *b)
 }
 
 int bch_btree_insert(struct cache_set *c, enum btree_id id,
-		     struct keylist *keys, atomic_t *journal_ref,
-		     struct bkey *replace_key)
+		     struct keylist *keys, struct bkey *replace_key)
 {
 	struct btree_insert_op op;
 	int ret = 0;
@@ -2207,7 +2226,6 @@ int bch_btree_insert(struct cache_set *c, enum btree_id id,
 
 	bch_btree_op_init(&op.op, 0);
 	op.keys		= keys;
-	op.journal_ref	= journal_ref;
 	op.replace_key	= replace_key;
 
 	while (!ret && !bch_keylist_empty(keys)) {
@@ -2229,16 +2247,6 @@ int bch_btree_insert(struct cache_set *c, enum btree_id id,
 	} else if (op.op.insert_collision)
 		ret = -ESRCH;
 
-	return ret;
-}
-
-int bch_btree_insert_journalled(struct cache_set *c, enum btree_id id,
-				struct keylist *keys, struct closure *parent)
-{
-	atomic_t *journal_ref = bch_journal(c, id, keys, parent);
-	int ret = bch_btree_insert(c, id, keys, journal_ref, NULL);
-
-	atomic_dec_bug(journal_ref);
 	return ret;
 }
 

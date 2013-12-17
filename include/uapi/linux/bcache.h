@@ -21,9 +21,10 @@ static inline void SET_##name(type *k, __u64 v)			\
 /* Btree keys - all units are in sectors */
 
 struct bkey {
-	__u64	high;
-	__u64	low;
-	__u64	ptr[];
+	__u64	w1;
+	__u64	w2;
+	__u64	w3;
+	__u64	val[];
 };
 
 #define KEY_FIELD(name, field, offset, size)				\
@@ -39,38 +40,44 @@ static inline void SET_##name(struct bkey *k, unsigned i, __u64 v)	\
 	k->ptr[i] |= (v & ~(~0ULL << size)) << offset;			\
 }
 
-#define KEY_INODE_BITS		16
+#define KEY_INODE_BITS		40
 #define KEY_OFFSET_BITS		(64 - KEY_INODE_BITS)
 #define KEY_SIZE_BITS		16
 #define KEY_SIZE_MAX		((1U << KEY_SIZE_BITS) - 1)
 
 #define KEY_MAX_U64S		64
 
-KEY_FIELD(KEY_U64s,	high, 56, 8)
-KEY_FIELD(KEY_DELETED,	high, 55, 1)
-KEY_FIELD(KEY_CACHED,	high, 54, 1)
-KEY_FIELD(KEY_CSUM,	high, 52, 2)
+KEY_FIELD(KEY_U64s,	w1, 56, 8)
+KEY_FIELD(KEY_DELETED,	w1, 55, 1)
+KEY_FIELD(KEY_CACHED,	w1, 54, 1)
+KEY_FIELD(KEY_CSUM,	w1, 52, 2)
 
 /*
- * Desired amount of redundancy - we want one more bit for this. Does not
- * indicate whether the data is just replicated or whether there's reed/solomon
- * or whatever.
- *
- * Used for distributed redundancy, not local.
+ * Desired amount of redundancy. Does not indicate whether the data is just
+ * replicated or whether there's reed/solomon or whatever.
  */
-KEY_FIELD(KEY_REPLICAS,	high, 50, 2)
-/* KEY_FIELD(UNUSED,	high, 48, 2) */
+KEY_FIELD(KEY_REPLICAS,	w1, 49, 3)
 
-KEY_FIELD(KEY_SIZE,	high, 32, KEY_SIZE_BITS)
+/* Distributed replicas */
+KEY_FIELD(KEY_DREPLICAS,w1, 46, 3)
+
+KEY_FIELD(UNUSED,	w1, 32, 14)
 
 /*
  * Sequence number used to determine which extent is the newer one, when dealing
  * with overlapping extents from different servers.
  */
-KEY_FIELD(KEY_VERSION,	high, 0,  32)
+KEY_FIELD(KEY_VERSION,	w1, 0,  32)
 
-KEY_FIELD(KEY_INODE,	low,  KEY_OFFSET_BITS, KEY_INODE_BITS)
-KEY_FIELD(KEY_OFFSET,	low,  0, KEY_OFFSET_BITS)
+/* Extent size, in sectors */
+KEY_FIELD(KEY_SIZE,	w2, 48, KEY_SIZE_BITS)
+
+KEY_FIELD(KEY_INODE,	w2, 8,  KEY_INODE_BITS)
+
+KEY_FIELD(KEY_OFFSET_H,	w2,  0, 8)
+KEY_FIELD(KEY_OFFSET_L,	w3, 20, 44)
+
+KEY_FIELD(KEY_SNAPSHOT,	w3,  0, 20)
 
 #define KEY(inode, offset, size)					\
 ((struct bkey) {							\

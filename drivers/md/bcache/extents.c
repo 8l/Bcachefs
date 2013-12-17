@@ -43,6 +43,69 @@ static bool bch_key_sort_cmp(struct btree_iter_set l,
 	return c ? c > 0 : l.k < r.k;
 }
 
+static void bch_key_sort_fixup(struct btree_iter *iter)
+{
+	while (iter->used > 1) {
+		struct btree_iter_set *top = iter->data, *i = top + 1;
+
+		if (iter->used > 2 &&
+		    bch_key_sort_cmp(i[0], i[1]))
+			i++;
+
+		/*
+		 * If this key and the next key don't compare equal, we're done.
+		 */
+
+		if (bkey_cmp(top->k, i->k))
+			break;
+
+		/*
+		 * If they do compare equal, the newer key overwrote the older
+		 * key and we need to drop the older key.
+		 *
+		 * bch_key_sort_cmp() ensures that when keys compare equal the
+		 * newer key comes first; so i->k is older than top->k and we
+		 * drop i->k.
+		 */
+
+		i->k = bkey_next(i->k);
+
+		if (i->k == i->end)
+			*i = iter->data[--iter->used];
+
+		heap_sift(iter, i - top, bch_key_sort_cmp);
+	}
+}
+
+static bool bch_key_insert_fixup(struct btree_keys *b,
+				 struct bkey *insert,
+				 struct btree_iter *iter,
+				 struct bkey *replace_key)
+{
+	BUG_ON(replace_key);
+
+	while (1) {
+		struct bkey *k = bch_btree_iter_next(iter);
+		if (!k || bkey_cmp(k, insert) > 0)
+			break;
+
+		if (bkey_cmp(k, insert) < 0)
+			continue;
+
+		SET_KEY_DELETED(k, 1);
+	}
+
+	return false;
+}
+
+const struct btree_keys_ops bch_generic_keys_ops = {
+	.sort_cmp	= bch_key_sort_cmp,
+	.sort_fixup	= bch_key_sort_fixup,
+	.insert_fixup	= bch_key_insert_fixup,
+};
+
+/* Common among btree and extent ptrs */
+
 static bool __ptr_invalid(struct cache_set *c, const struct bkey *k)
 {
 	unsigned i;
@@ -61,8 +124,6 @@ static bool __ptr_invalid(struct cache_set *c, const struct bkey *k)
 
 	return false;
 }
-
-/* Common among btree and extent ptrs */
 
 static const char *bch_ptr_status(struct cache_set *c, const struct bkey *k)
 {
@@ -280,18 +341,7 @@ static bool bch_btree_ptr_insert_fixup(struct btree_keys *b,
 	if (!bkey_cmp(insert, &ZERO_KEY))
 		return false;
 
-	while (1) {
-		struct bkey *k = bch_btree_iter_next(iter);
-		if (!k || bkey_cmp(k, insert) > 0)
-			break;
-
-		if (bkey_cmp(k, insert) < 0)
-			continue;
-
-		SET_KEY_DELETED(k, 1);
-	}
-
-	return false;
+	return bch_key_insert_fixup(b, insert, iter, replace_key);
 }
 
 const struct btree_keys_ops bch_btree_keys_ops = {

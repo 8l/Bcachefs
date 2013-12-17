@@ -103,14 +103,6 @@
 
 struct btree_write {
 	atomic_t		*journal;
-
-	/* If btree_split() frees a btree node, it writes a new pointer to that
-	 * btree node indicating it was freed; it takes a refcount on
-	 * c->prio_blocked because we can't write the gens until the new
-	 * pointer is on disk. This allows btree_write_endio() to release the
-	 * refcount that btree_split() took.
-	 */
-	int			prio_blocked;
 };
 
 struct btree {

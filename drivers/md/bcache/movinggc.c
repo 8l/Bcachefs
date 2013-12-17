@@ -7,6 +7,7 @@
 #include "bcache.h"
 #include "btree.h"
 #include "debug.h"
+#include "extents.h"
 #include "request.h"
 
 #include <trace/events/bcache.h>
@@ -24,7 +25,7 @@ static bool moving_pred(struct keybuf *buf, struct bkey *k)
 					   moving_gc_keys);
 	unsigned i;
 
-	for (i = 0; i < KEY_PTRS(k); i++) {
+	for (i = 0; i < bch_extent_ptrs(k); i++) {
 		struct bucket *g = PTR_BUCKET(c, k, i);
 
 		if (GC_MOVE(g))
@@ -70,7 +71,7 @@ static void read_moving_endio(struct bio *bio, int error)
 
 	if (error)
 		io->op.error = error;
-	else if (!KEY_DIRTY(&b->key) &&
+	else if (KEY_CACHED(&b->key) &&
 		 ptr_stale(io->op.c, &b->key, 0)) {
 		io->op.error = -EINTR;
 	}
@@ -106,7 +107,7 @@ static void write_moving(struct closure *cl)
 		op->write_prio		= 1;
 		op->bio			= &io->bio.bio;
 
-		op->writeback		= KEY_DIRTY(&io->w->key);
+		op->cached		= KEY_CACHED(&io->w->key);
 		op->csum		= KEY_CSUM(&io->w->key);
 
 		bkey_copy(&op->replace_key, &io->w->key);

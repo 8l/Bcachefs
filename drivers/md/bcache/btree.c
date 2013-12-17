@@ -92,8 +92,6 @@
 #define MAX_NEED_GC		64
 #define MAX_SAVE_PRIO		72
 
-#define PTR_DIRTY_BIT		(((uint64_t) 1 << 36))
-
 #define PTR_HASH(c, k)							\
 	(((k)->ptr[0] >> c->bucket_bits) | PTR_GEN(k, 0))
 
@@ -177,20 +175,46 @@ void bkey_put(struct cache_set *c, struct bkey *k)
 {
 	unsigned i;
 
-	for (i = 0; i < KEY_PTRS(k); i++)
+	for (i = 0; i < bch_extent_ptrs(k); i++)
 		if (ptr_available(c, k, i))
 			atomic_dec_bug(&PTR_BUCKET(c, k, i)->pin);
 }
 
 /* Btree IO */
 
+static void convert_v0_keys(struct btree *b, struct bset *i)
+{
+	struct bkey *k;
+
+	for (k = i->start;
+	     k < bset_bkey_last(i);
+	     k = bkey_next(k)) {
+		struct bkey t;
+		bkey_init(&t);
+
+		SET_KEY_U64s(&t,	KEY0_PTRS(k) + 2);
+		SET_KEY_CSUM(&t,	KEY0_CSUM(k));
+		if (!b->level)
+			SET_KEY_CACHED(&t,	!KEY0_DIRTY(k));
+		SET_KEY_SIZE(&t,	KEY0_SIZE(k));
+		SET_KEY_INODE(&t,	KEY0_INODE(k));
+		SET_KEY_OFFSET(&t,	k->low);
+
+		*k = t;
+	}
+}
+
 static uint64_t btree_csum_set(struct btree *b, struct bset *i)
 {
-	uint64_t crc = b->key.ptr[0];
-	void *data = (void *) i + 8, *end = bset_bkey_last(i);
+	if (i->version < BCACHE_BSET_CSUM) {
+		return csum_set(i);
+	} else {
+		uint64_t crc = b->key.ptr[0];
+		void *data = (void *) i + 8, *end = bset_bkey_last(i);
 
-	crc = bch_crc64_update(crc, data, end - data);
-	return crc ^ 0xffffffffffffffffULL;
+		crc = bch_crc64_update(crc, data, end - data);
+		return crc ^ 0xffffffffffffffffULL;
+	}
 }
 
 void bch_btree_node_read_done(struct btree *b)
@@ -227,20 +251,15 @@ void bch_btree_node_read_done(struct btree *b)
 			goto err;
 
 		err = "bad checksum";
-		switch (i->version) {
-		case 0:
-			if (i->csum != csum_set(i))
-				goto err;
-			break;
-		case BCACHE_BSET_VERSION:
-			if (i->csum != btree_csum_set(b, i))
-				goto err;
-			break;
-		}
+		if (i->csum != btree_csum_set(b, i))
+			goto err;
 
 		err = "empty set";
 		if (i != b->keys.set[0].data && !i->keys)
 			goto err;
+
+		if (i->version < BCACHE_BSET_KEY_v1)
+			convert_v0_keys(b, i);
 
 		if (b->level) {
 			struct bkey *k;
@@ -1026,7 +1045,7 @@ static void btree_node_free(struct btree *b)
 
 	mutex_lock(&b->c->bucket_lock);
 
-	for (i = 0; i < KEY_PTRS(&b->key); i++) {
+	for (i = 0; i < bch_extent_ptrs(&b->key); i++) {
 		BUG_ON(atomic_read(&PTR_BUCKET(b->c, &b->key, i)->pin));
 
 		bch_inc_gen(PTR_CACHE(b->c, &b->key, i),
@@ -1096,7 +1115,7 @@ static void make_btree_freeing_key(struct btree *b, struct bkey *k)
 	bkey_copy_key(k, &ZERO_KEY);
 	SET_KEY_SIZE(k, 0);
 
-	for (i = 0; i < KEY_PTRS(k); i++) {
+	for (i = 0; i < bch_extent_ptrs(k); i++) {
 		uint8_t g = PTR_BUCKET(b->c, k, i)->gen + 1;
 
 		SET_PTR_GEN(k, i, g);
@@ -1143,7 +1162,7 @@ uint8_t __bch_btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 	if (!bkey_cmp(k, &ZERO_KEY))
 		return stale;
 
-	for (i = 0; i < KEY_PTRS(k); i++) {
+	for (i = 0; i < bch_extent_ptrs(k); i++) {
 		if (!ptr_available(c, k, i))
 			continue;
 
@@ -1164,7 +1183,7 @@ uint8_t __bch_btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 
 		if (level)
 			SET_GC_MARK(g, GC_MARK_METADATA);
-		else if (KEY_DIRTY(k))
+		else if (!KEY_CACHED(k))
 			SET_GC_MARK(g, GC_MARK_DIRTY);
 
 		/* guard against overflow */
@@ -1197,7 +1216,7 @@ static bool btree_gc_mark_node(struct btree *b, struct gc_stat *gc)
 		if (bch_ptr_bad(&b->keys, k))
 			continue;
 
-		gc->key_bytes += bkey_u64s(k);
+		gc->key_bytes += KEY_U64s(k);
 		gc->nkeys++;
 		good_keys++;
 
@@ -1272,12 +1291,12 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 			     k < bset_bkey_last(n2);
 			     k = bkey_next(k)) {
 				if (__set_blocks(n1, n1->keys + keys +
-						 bkey_u64s(k),
+						 KEY_U64s(k),
 						 block_bytes(b->c)) > blocks)
 					break;
 
 				last = k;
-				keys += bkey_u64s(k);
+				keys += KEY_U64s(k);
 			}
 		} else {
 			/*
@@ -1319,7 +1338,7 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 		n2->keys -= keys;
 
 		if (__bch_keylist_realloc(keylist,
-					  bkey_u64s(&new_nodes[i]->key)))
+					  KEY_U64s(&new_nodes[i]->key)))
 			goto out_nocoalesce;
 
 		bch_btree_node_write(new_nodes[i], &cl);
@@ -1327,7 +1346,7 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 	}
 
 	for (i = 0; i < nodes; i++) {
-		if (__bch_keylist_realloc(keylist, bkey_u64s(&r[i].b->key)))
+		if (__bch_keylist_realloc(keylist, KEY_U64s(&r[i].b->key)))
 			goto out_nocoalesce;
 
 		make_btree_freeing_key(r[i].b, keylist->top);
@@ -1382,7 +1401,7 @@ static unsigned btree_gc_count_keys(struct btree *b)
 	unsigned ret = 0;
 
 	for_each_key_filter(&b->keys, k, &iter, bch_ptr_bad)
-		ret += bkey_u64s(k);
+		ret += KEY_U64s(k);
 
 	return ret;
 }
@@ -1565,11 +1584,11 @@ size_t bch_btree_gc_finish(struct cache_set *c)
 	c->need_gc	= 0;
 
 	if (c->root)
-		for (i = 0; i < KEY_PTRS(&c->root->key); i++)
+		for (i = 0; i < bch_extent_ptrs(&c->root->key); i++)
 			SET_GC_MARK(PTR_BUCKET(c, &c->root->key, i),
 				    GC_MARK_METADATA);
 
-	for (i = 0; i < KEY_PTRS(&c->uuid_bucket); i++)
+	for (i = 0; i < bch_extent_ptrs(&c->uuid_bucket); i++)
 		SET_GC_MARK(PTR_BUCKET(c, &c->uuid_bucket, i),
 			    GC_MARK_METADATA);
 
@@ -1588,7 +1607,7 @@ size_t bch_btree_gc_finish(struct cache_set *c)
 		spin_lock(&dc->writeback_keys.lock);
 		rbtree_postorder_for_each_entry_safe(w, n,
 					&dc->writeback_keys.keys, node)
-			for (j = 0; j < KEY_PTRS(&w->key); j++)
+			for (j = 0; j < bch_extent_ptrs(&w->key); j++)
 				SET_GC_MARK(PTR_BUCKET(c, &w->key, j),
 					    GC_MARK_DIRTY);
 		spin_unlock(&dc->writeback_keys.lock);
@@ -1718,7 +1737,7 @@ static int bch_btree_check_recurse(struct btree *b, struct btree_op *op,
 	struct btree_iter iter;
 
 	for_each_key_filter(&b->keys, k, &iter, bch_ptr_invalid) {
-		for (i = 0; i < KEY_PTRS(k); i++) {
+		for (i = 0; i < bch_extent_ptrs(k); i++) {
 			if (!ptr_available(b->c, k, i))
 				continue;
 
@@ -1829,7 +1848,7 @@ static bool bch_btree_insert_keys(struct btree *b, struct btree_op *op,
 	while (!bch_keylist_empty(insert_keys)) {
 		struct bkey *k = insert_keys->keys;
 
-		if (bkey_u64s(k) > insert_u64s_remaining(b))
+		if (KEY_U64s(k) > insert_u64s_remaining(b))
 			break;
 
 		if (bkey_cmp(k, &b->key) <= 0) {
@@ -1908,12 +1927,12 @@ static int btree_split(struct btree *b, struct btree_op *op,
 		 */
 
 		while (keys < (btree_bset_first(n1)->keys * 3) / 5)
-			keys += bkey_u64s(bset_bkey_idx(btree_bset_first(n1),
+			keys += KEY_U64s(bset_bkey_idx(btree_bset_first(n1),
 							keys));
 
 		bkey_copy_key(&n1->key,
 			      bset_bkey_idx(btree_bset_first(n1), keys));
-		keys += bkey_u64s(bset_bkey_idx(btree_bset_first(n1), keys));
+		keys += KEY_U64s(bset_bkey_idx(btree_bset_first(n1), keys));
 
 		btree_bset_first(n2)->keys = btree_bset_first(n1)->keys - keys;
 		btree_bset_first(n1)->keys = keys;
@@ -2044,10 +2063,11 @@ int bch_btree_insert_check_key(struct btree *b, struct btree_op *op,
 			goto out;
 	}
 
-	SET_KEY_PTRS(check_key, 1);
+	bch_set_extent_ptrs(check_key, 1);
 	get_random_bytes(&check_key->ptr[0], sizeof(uint64_t));
 
 	SET_PTR_DEV(check_key, 0, PTR_CHECK_DEV);
+	SET_KEY_CACHED(check_key, 1);
 
 	bch_keylist_add(&insert, check_key);
 
@@ -2125,7 +2145,7 @@ void bch_btree_set_root(struct btree *b)
 
 	BUG_ON(!b->written);
 
-	for (i = 0; i < KEY_PTRS(&b->key); i++)
+	for (i = 0; i < bch_extent_ptrs(&b->key); i++)
 		BUG_ON(PTR_BUCKET(b->c, &b->key, i)->prio != BTREE_PRIO);
 
 	mutex_lock(&b->c->bucket_lock);

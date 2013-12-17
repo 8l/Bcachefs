@@ -9,6 +9,7 @@
 #include "bcache.h"
 #include "btree.h"
 #include "debug.h"
+#include "extents.h"
 #include "request.h"
 #include "writeback.h"
 
@@ -208,7 +209,7 @@ static void bio_csum(struct bio *bio, struct bkey *k)
 		kunmap(bv.bv_page);
 	}
 
-	k->ptr[KEY_PTRS(k)] = csum & (~0ULL >> 1);
+	k->ptr[bch_extent_ptrs(k)] = csum & (~0ULL >> 1);
 }
 
 /* Insert data into cache */
@@ -319,7 +320,7 @@ static void bch_data_insert_error(struct closure *cl)
 	while (src != op->insert_keys.top) {
 		struct bkey *n = bkey_next(src);
 
-		SET_KEY_PTRS(src, 0);
+		bch_set_extent_ptrs(src, 0);
 		memmove(dst, src, bkey_bytes(src));
 
 		dst = bkey_next(dst);
@@ -338,7 +339,7 @@ static void bch_data_insert_endio(struct bio *bio, int error)
 
 	if (error) {
 		/* TODO: We could try to recover from this. */
-		if (op->writeback)
+		if (!op->cached)
 			op->error = error;
 		else if (!op->replace)
 			set_closure_fn(cl, bch_data_insert_error, bcache_wq);
@@ -386,7 +387,7 @@ static void bch_data_insert_start(struct closure *cl)
 
 		if (!bch_alloc_sectors(op->c, k, bio_sectors(bio),
 				       op->write_point, op->write_prio,
-				       op->writeback))
+				       !op->cached))
 			goto err;
 
 		n = bio_next_split(bio, KEY_SIZE(k), GFP_NOIO, split);
@@ -394,13 +395,12 @@ static void bch_data_insert_start(struct closure *cl)
 		n->bi_end_io	= bch_data_insert_endio;
 		n->bi_private	= cl;
 
-		if (op->writeback) {
-			SET_KEY_DIRTY(k, true);
-
-			for (i = 0; i < KEY_PTRS(k); i++)
+		if (op->cached)
+			SET_KEY_CACHED(k, true);
+		else
+			for (i = 0; i < bch_extent_ptrs(k); i++)
 				SET_GC_MARK(PTR_BUCKET(op->c, k, i),
 					    GC_MARK_DIRTY);
-		}
 
 		SET_KEY_CSUM(k, op->csum);
 		if (KEY_CSUM(k))
@@ -417,7 +417,7 @@ static void bch_data_insert_start(struct closure *cl)
 	continue_at(cl, bch_data_insert_keys, bcache_wq);
 err:
 	/* bch_alloc_sectors() blocks if s->writeback = true */
-	BUG_ON(op->writeback);
+	BUG_ON(!op->cached);
 
 	/*
 	 * But if it's not a writeback write we'd rather just bail out if
@@ -472,7 +472,7 @@ void bch_data_insert(struct closure *cl)
 {
 	struct data_insert_op *op = container_of(cl, struct data_insert_op, cl);
 
-	trace_bcache_write(op->bio, op->writeback, op->bypass);
+	trace_bcache_write(op->bio, !op->cached, op->bypass);
 
 	bch_keylist_init(&op->insert_keys);
 	bio_get(op->bio);
@@ -646,7 +646,7 @@ static void bch_cache_read_endio(struct bio *bio, int error)
 
 	if (error)
 		s->iop.error = error;
-	else if (!KEY_DIRTY(&b->key) &&
+	else if (KEY_CACHED(&b->key) &&
 		 ptr_stale(s->iop.c, &b->key, 0)) {
 		atomic_long_inc(&s->iop.c->cache_read_races);
 		s->iop.error = -EINTR;
@@ -693,7 +693,7 @@ static int cache_lookup_fn(struct btree_op *op, struct btree *b, struct bkey *k)
 
 	PTR_BUCKET(b->c, k, ptr)->prio = INITIAL_PRIO;
 
-	if (KEY_DIRTY(k))
+	if (!KEY_CACHED(k))
 		s->read_dirty_data = true;
 
 	n = bio_next_split(bio, min_t(uint64_t, INT_MAX,
@@ -1034,6 +1034,7 @@ static void cached_dev_write(struct cached_dev *dc, struct search *s)
 	struct bio *bio = &s->bio.bio;
 	struct bkey start = KEY(dc->disk.id, bio->bi_iter.bi_sector, 0);
 	struct bkey end = KEY(dc->disk.id, bio_end_sector(bio), 0);
+	bool writeback = false;
 
 	bch_keybuf_check_overlapping(&s->iop.c->moving_gc_keys, &start, &end);
 
@@ -1044,7 +1045,7 @@ static void cached_dev_write(struct cached_dev *dc, struct search *s)
 		 * writeback, force this write to writeback
 		 */
 		s->iop.bypass = false;
-		s->iop.writeback = true;
+		writeback = true;
 	}
 
 	/*
@@ -1061,7 +1062,7 @@ static void cached_dev_write(struct cached_dev *dc, struct search *s)
 			     cache_mode(dc, bio),
 			     s->iop.bypass)) {
 		s->iop.bypass = false;
-		s->iop.writeback = true;
+		writeback = true;
 	}
 
 	if (s->iop.bypass) {
@@ -1071,7 +1072,7 @@ static void cached_dev_write(struct cached_dev *dc, struct search *s)
 		if (!(bio->bi_rw & REQ_DISCARD) ||
 		    blk_queue_discard(bdev_get_queue(dc->bdev)))
 			closure_bio_submit(bio, cl, s->d);
-	} else if (s->iop.writeback) {
+	} else if (writeback) {
 		bch_writeback_add(dc);
 		s->iop.bio = bio;
 
@@ -1088,6 +1089,7 @@ static void cached_dev_write(struct cached_dev *dc, struct search *s)
 			closure_bio_submit(flush, cl, s->d);
 		}
 	} else {
+		s->iop.cached = true;
 		s->iop.bio = bio_clone_fast(bio, GFP_NOIO, dc->disk.bio_split);
 
 		closure_bio_submit(bio, cl, s->d);
@@ -1269,7 +1271,6 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 					&KEY(d->id, bio_end_sector(bio), 0));
 
 		s->iop.bypass		= (bio->bi_rw & REQ_DISCARD) != 0;
-		s->iop.writeback	= true;
 		s->iop.bio		= bio;
 
 		closure_call(&s->iop.cl, bch_data_insert, NULL, cl);

@@ -7,6 +7,7 @@
 #include "bcache.h"
 #include "btree.h"
 #include "debug.h"
+#include "extents.h"
 
 #include <trace/events/bcache.h>
 
@@ -288,7 +289,7 @@ void bch_journal_mark(struct cache_set *c, struct list_head *list)
 		     k = bkey_next(k)) {
 			unsigned j;
 
-			for (j = 0; j < KEY_PTRS(k); j++) {
+			for (j = 0; j < bch_extent_ptrs(k); j++) {
 				struct bucket *g = PTR_BUCKET(c, k, j);
 				atomic_inc(&g->pin);
 
@@ -511,7 +512,7 @@ static void journal_reclaim(struct cache_set *c)
 	}
 
 	bkey_init(k);
-	SET_KEY_PTRS(k, n);
+	bch_set_extent_ptrs(k, n);
 
 	if (n)
 		c->journal.blocks_free = c->sb.bucket_size >> c->block_bits;
@@ -611,7 +612,7 @@ static void journal_write_unlocked(struct closure *cl)
 	w->data->last_seq	= last_seq(&c->journal);
 	w->data->csum		= csum_set(w->data);
 
-	for (i = 0; i < KEY_PTRS(k); i++) {
+	for (i = 0; i < bch_extent_ptrs(k); i++) {
 		ca = PTR_CACHE(c, k, i);
 		bio = &ca->journal.bio;
 

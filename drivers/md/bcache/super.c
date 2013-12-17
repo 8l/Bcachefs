@@ -369,7 +369,7 @@ static void uuid_io(struct cache_set *c, unsigned long rw,
 	down(&c->uuid_write_mutex);
 	closure_init(cl, parent);
 
-	for (i = 0; i < KEY_PTRS(k); i++) {
+	for (i = 0; i < bch_extent_ptrs(k); i++) {
 		struct bio *bio = bch_bbio_alloc(c);
 
 		bio->bi_rw	= REQ_SYNC|REQ_META|rw;

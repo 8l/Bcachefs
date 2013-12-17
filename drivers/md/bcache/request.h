@@ -18,7 +18,7 @@ struct data_insert_op {
 
 	struct {
 		unsigned	bypass:1;
-		unsigned	writeback:1;
+		unsigned	cached:1;
 		unsigned	flush_journal:1;
 		unsigned	csum:1;
 

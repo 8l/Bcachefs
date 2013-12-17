@@ -38,45 +38,49 @@ static inline void SET_##name(struct bkey *k, unsigned i, __u64 v)	\
 	k->ptr[i] |= (v & ~(~0ULL << size)) << offset;			\
 }
 
+#define KEY_INODE_BITS		16
+#define KEY_OFFSET_BITS		(64 - KEY_INODE_BITS)
 #define KEY_SIZE_BITS		16
-#define KEY_MAX_U64S		8
+#define KEY_SIZE_MAX		((1U << KEY_SIZE_BITS) - 1)
 
-KEY_FIELD(KEY_PTRS,	high, 60, 3)
-KEY_FIELD(HEADER_SIZE,	high, 58, 2)
-KEY_FIELD(KEY_CSUM,	high, 56, 2)
-KEY_FIELD(KEY_PINNED,	high, 55, 1)
-KEY_FIELD(KEY_DIRTY,	high, 36, 1)
+#define KEY_MAX_U64S		64
 
-KEY_FIELD(KEY_SIZE,	high, 20, KEY_SIZE_BITS)
-KEY_FIELD(KEY_INODE,	high, 0,  20)
-
-/* Next time I change the on disk format, KEY_OFFSET() won't be 64 bits */
-
-static inline __u64 KEY_OFFSET(const struct bkey *k)
-{
-	return k->low;
-}
-
-static inline void SET_KEY_OFFSET(struct bkey *k, __u64 v)
-{
-	k->low = v;
-}
+KEY_FIELD(KEY_U64s,	high, 56, 8)
+KEY_FIELD(KEY_DELETED,	high, 55, 1)
+KEY_FIELD(KEY_CACHED,	high, 54, 1)
+KEY_FIELD(KEY_CSUM,	high, 52, 2)
 
 /*
- * The high bit being set is a relic from when we used it to do binary
- * searches - it told you where a key started. It's not used anymore,
- * and can probably be safely dropped.
+ * Desired amount of redundancy - we want one more bit for this. Does not
+ * indicate whether the data is just replicated or whether there's reed/solomon
+ * or whatever.
+ *
+ * Used for distributed redundancy, not local.
  */
+KEY_FIELD(KEY_REPLICAS,	high, 50, 2)
+/* KEY_FIELD(UNUSED,	high, 48, 2) */
+
+KEY_FIELD(KEY_SIZE,	high, 32, KEY_SIZE_BITS)
+
+/*
+ * Sequence number used to determine which extent is the newer one, when dealing
+ * with overlapping extents from different servers.
+ */
+KEY_FIELD(KEY_VERSION,	high, 0,  32)
+
+KEY_FIELD(KEY_INODE,	low,  KEY_OFFSET_BITS, KEY_INODE_BITS)
+KEY_FIELD(KEY_OFFSET,	low,  0, KEY_OFFSET_BITS)
+
 #define KEY(inode, offset, size)					\
 ((struct bkey) {							\
-	.high = (1ULL << 63) | ((__u64) (size) << 20) | (inode),	\
-	.low = (offset)							\
+	.high = (2ULL << 56)|((__u64) (size) << 32),			\
+	.low = (((__u64) inode) << KEY_OFFSET_BITS) | (offset),		\
 })
 
 #define ZERO_KEY			KEY(0, 0, 0)
 
-#define MAX_KEY_INODE			(~(~0 << 20))
-#define MAX_KEY_OFFSET			(~0ULL >> 1)
+#define MAX_KEY_INODE			(~(~0ULL << KEY_INODE_BITS))
+#define MAX_KEY_OFFSET			(~(~0ULL << KEY_OFFSET_BITS))
 #define MAX_KEY				KEY(MAX_KEY_INODE, MAX_KEY_OFFSET, 0)
 
 #define KEY_START(k)			(KEY_OFFSET(k) - KEY_SIZE(k))
@@ -95,14 +99,9 @@ PTR_FIELD(PTR_GEN,			0,  8)
 
 /* Bkey utility code */
 
-static inline unsigned long bkey_u64s(const struct bkey *k)
-{
-	return (sizeof(struct bkey) / sizeof(__u64)) + KEY_PTRS(k);
-}
-
 static inline unsigned long bkey_bytes(const struct bkey *k)
 {
-	return bkey_u64s(k) * sizeof(__u64);
+	return KEY_U64s(k) * sizeof(__u64);
 }
 
 #define bkey_copy(_dest, _src)	memcpy(_dest, _src, bkey_bytes(_src))
@@ -116,7 +115,7 @@ static inline void bkey_copy_key(struct bkey *dest, const struct bkey *src)
 static inline struct bkey *bkey_next(const struct bkey *k)
 {
 	__u64 *d = (void *) k;
-	return (struct bkey *) (d + bkey_u64s(k));
+	return (struct bkey *) (d + KEY_U64s(k));
 }
 
 static inline struct bkey *bkey_idx(const struct bkey *k, unsigned nr_keys)
@@ -339,7 +338,8 @@ BITMASK(UUID_FLASH_ONLY,	struct uuid_entry, flags, 0, 1);
 /* Version 1: Seed pointer into btree node checksum
  */
 #define BCACHE_BSET_CSUM		1
-#define BCACHE_BSET_VERSION		1
+#define BCACHE_BSET_KEY_v1		2
+#define BCACHE_BSET_VERSION		2
 
 /*
  * Btree nodes
@@ -361,6 +361,13 @@ struct bset {
 };
 
 /* OBSOLETE */
+
+KEY_FIELD(KEY0_PTRS,		high, 60, 3)
+KEY_FIELD(KEY0_CSUM,		high, 56, 2)
+KEY_FIELD(KEY0_DIRTY,		high, 36, 1)
+
+KEY_FIELD(KEY0_SIZE,		high, 20, 16)
+KEY_FIELD(KEY0_INODE,		high, 0,  20)
 
 /* UUIDS - per backing device/flash only volume metadata */
 

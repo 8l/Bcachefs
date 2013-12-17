@@ -186,6 +186,7 @@ struct bset_tree {
 };
 
 struct btree_keys_ops {
+	bool		(*cmp)(struct bkey *, struct bkey *);
 	bool		(*sort_cmp)(struct btree_iter_set,
 				    struct btree_iter_set);
 	void		(*sort_fixup)(struct btree_iter *);
@@ -246,6 +247,16 @@ static inline unsigned bset_byte_offset(struct btree_keys *b, struct bset *i)
 static inline unsigned bset_sector_offset(struct btree_keys *b, struct bset *i)
 {
 	return bset_byte_offset(b, i) >> 9;
+}
+
+static inline unsigned bch_val_u64s(const struct bkey *k)
+{
+	return KEY_U64s(k) - 2;
+}
+
+static inline void bch_set_val_u64s(struct bkey *k, unsigned i)
+{
+	SET_KEY_U64s(k, i + 2);
 }
 
 #define __set_bytes(i, k)	(sizeof(*(i)) + (k) * sizeof(uint64_t))
@@ -421,11 +432,8 @@ static inline bool bch_cut_back(const struct bkey *where, struct bkey *k)
 ({								\
 	struct bkey *_ret = NULL;				\
 								\
-	if (KEY_INODE(_k) || KEY_OFFSET(_k)) {			\
+	if ((_k)->low) {					\
 		_ret = &KEY(KEY_INODE(_k), KEY_OFFSET(_k), 0);	\
-								\
-		if (!_ret->low)					\
-			_ret->high--;				\
 		_ret->low--;					\
 	}							\
 								\
@@ -451,8 +459,10 @@ static inline void bch_bkey_to_text(struct btree_keys *b, char *buf,
 static inline bool bch_bkey_equal_header(const struct bkey *l,
 					 const struct bkey *r)
 {
-	return (KEY_DIRTY(l) == KEY_DIRTY(r) &&
-		KEY_PTRS(l) == KEY_PTRS(r) &&
+	return (KEY_CACHED(l) == KEY_CACHED(r) &&
+		KEY_DELETED(l) == KEY_DELETED(r) &&
+		KEY_VERSION(l) == KEY_VERSION(r) &&
+		KEY_U64s(l) == KEY_U64s(r) &&
 		KEY_CSUM(l) == KEY_CSUM(l));
 }
 

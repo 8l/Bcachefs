@@ -185,6 +185,17 @@ static inline unsigned bset_offset(struct btree *b, struct bset *i)
 	return (((size_t) i) - ((size_t) b->sets->data)) >> 9;
 }
 
+static inline unsigned bset_block(struct cache_set *c, struct bset *start,
+				  struct bset *i)
+{
+	return ((void *) i - (void *) start) / block_bytes(c);
+}
+
+static inline unsigned btree_block(struct btree *b, struct bset *i)
+{
+	return bset_block(b->c, b->sets->data, i);
+}
+
 static inline struct bset *write_block(struct btree *b)
 {
 	return ((void *) b->sets[0].data) + b->written * block_bytes(b->c);

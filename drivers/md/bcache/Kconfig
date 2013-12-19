@@ -15,12 +15,3 @@ config BCACHE_DEBUG
 
 	Enables extra debugging tools, allows expensive runtime checks to be
 	turned on.
-
-config BCACHE_CLOSURES_DEBUG
-	bool "Debug closures"
-	depends on BCACHE
-	select DEBUG_FS
-	---help---
-	Keeps all active closures in a linked list and provides a debugfs
-	interface to list them, which makes it possible to see asynchronous
-	operations that get stuck.

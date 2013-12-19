@@ -5,11 +5,9 @@
  * Copyright 2012 Google, Inc.
  */
 
+#include <linux/closure.h>
 #include <linux/debugfs.h>
-#include <linux/module.h>
 #include <linux/seq_file.h>
-
-#include "closure.h"
 
 static inline void closure_put_after_sub(struct closure *cl, int flags)
 {
@@ -134,7 +132,7 @@ void closure_sync(struct closure *cl)
 }
 EXPORT_SYMBOL(closure_sync);
 
-#ifdef CONFIG_BCACHE_CLOSURES_DEBUG
+#ifdef CONFIG_CLOSURE_DEBUG
 
 static LIST_HEAD(closure_list);
 static DEFINE_SPINLOCK(closure_list_lock);
@@ -205,18 +203,16 @@ static int debug_seq_open(struct inode *inode, struct file *file)
 }
 
 static const struct file_operations debug_ops = {
-	.owner		= THIS_MODULE,
 	.open		= debug_seq_open,
 	.read		= seq_read,
 	.release	= single_release
 };
 
-void __init closure_debug_init(void)
+static int __init closure_debug_init(void)
 {
 	debug = debugfs_create_file("closures", 0400, NULL, NULL, &debug_ops);
+	return 0;
 }
+late_initcall(closure_debug_init);
 
 #endif
-
-MODULE_AUTHOR("Kent Overstreet <koverstreet@google.com>");
-MODULE_LICENSE("GPL");

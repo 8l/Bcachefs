@@ -1717,6 +1717,26 @@ err:
 	return err;
 }
 
+struct cache_set *bch_cache_set_open_by_uuid(uuid_le *uuid)
+{
+	struct cache_set *c;
+
+	mutex_lock(&bch_register_lock);
+
+	list_for_each_entry(c, &bch_cache_sets, list)
+		if (!test_bit(CACHE_SET_UNREGISTERING, &c->flags) &&
+		    !memcmp(uuid, &c->sb.set_uuid, sizeof(*uuid))) {
+			closure_get(&c->cl);
+			goto out;
+		}
+
+	c = NULL;
+out:
+	mutex_unlock(&bch_register_lock);
+
+	return c;
+}
+
 /* Cache device */
 
 void bch_cache_release(struct kobject *kobj)

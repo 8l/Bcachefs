@@ -976,6 +976,8 @@ void bcache_device_stop(struct bcache_device *);
 void bch_cache_set_unregister(struct cache_set *);
 void bch_cache_set_stop(struct cache_set *);
 
+struct cache_set *bch_cache_set_open_by_uuid(uuid_le *);
+
 struct cache_set *bch_cache_set_alloc(struct cache_sb *);
 void bch_btree_cache_free(struct cache_set *);
 int bch_btree_cache_alloc(struct cache_set *);

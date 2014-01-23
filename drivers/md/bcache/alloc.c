@@ -61,6 +61,7 @@
  */
 
 #include "bcache.h"
+#include "alloc.h"
 #include "btree.h"
 
 #include <linux/blkdev.h>
@@ -71,7 +72,7 @@
 
 /* Bucket heap / gen */
 
-uint8_t bch_inc_gen(struct cache *ca, struct bucket *b)
+u8 bch_inc_gen(struct cache *ca, struct bucket *b)
 {
 	uint8_t ret = ++b->gen;
 

@@ -10,6 +10,4 @@ int bch_inode_find_by_inum(struct cache_set *, u64, struct bch_inode *);
 int bch_blockdev_inode_find_by_uuid(struct cache_set *, uuid_le *,
 				    struct bch_inode_blockdev *);
 
-char *bch_uuid_convert(struct cache_set *, struct jset *, struct closure *);
-
 #endif

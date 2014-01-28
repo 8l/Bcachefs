@@ -272,6 +272,17 @@ void bch_data_insert(struct closure *cl)
 	trace_bcache_write(op->c, KEY_INODE(&op->insert_key), op->bio,
 			   KEY_DIRTY(&op->insert_key), op->bypass);
 
+	if (!op->replace) {
+		/* XXX: discards may be for more sectors than max key size */
+
+		u64 inode = KEY_INODE(&op->insert_key);
+		struct bkey start = KEY(inode, op->bio->bi_iter.bi_sector, 0);
+		struct bkey end = KEY(inode, bio_end_sector(op->bio), 0);
+
+		bch_keybuf_check_overlapping(&op->c->moving_gc_keys,
+					     &start, &end);
+	}
+
 	if (op->write_prio)
 		bch_mark_gc_write(op->c, bio_sectors(op->bio));
 	else if (!op->bypass)
@@ -850,8 +861,6 @@ static void cached_dev_write(struct cached_dev *dc, struct search *s)
 	struct bkey insert_key = KEY(s->inode, 0, 0);
 	struct bio *insert_bio;
 
-	bch_keybuf_check_overlapping(&s->iop.c->moving_gc_keys, &start, &end);
-
 	down_read_non_owner(&dc->writeback_lock);
 	if (bch_keybuf_check_overlapping(&dc->writeback_keys, &start, &end)) {
 		/*
@@ -1073,10 +1082,6 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 		struct bkey insert = KEY(d->id, 0, 0);
 
 		SET_KEY_DIRTY(&insert, true);
-
-		bch_keybuf_check_overlapping(&s->iop.c->moving_gc_keys,
-					&KEY(d->id, bio->bi_iter.bi_sector, 0),
-					&KEY(d->id, bio_end_sector(bio), 0));
 
 		bch_data_insert_op_init(&s->iop, d->c, bcache_wq, bio,
 					hash_long((unsigned long) current, 16),

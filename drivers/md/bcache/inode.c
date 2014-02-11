@@ -116,6 +116,7 @@ static int inode_truncate_fn(struct btree_op *b_op, struct btree *b, struct bkey
 	op->new_size = max(op->new_size, KEY_START(k)) + KEY_SIZE_MAX;
 
 	erase_key = KEY(op->inode_nr, op->new_size, KEY_SIZE_MAX);
+	SET_KEY_DELETED(&erase_key, true);
 
 	if (bkey_cmp(&erase_key, &b->key) > 0)
 		bch_cut_back(&b->key, &erase_key);

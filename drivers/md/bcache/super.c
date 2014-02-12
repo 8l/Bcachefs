@@ -1445,6 +1445,8 @@ struct cache_set *bch_cache_set_alloc(struct cache_sb *sb)
 
 	c->meta_replicas = 1;
 	c->data_replicas = 1;
+	c->copy_gc_enabled = 1;
+	c->tiering_enabled = 1;
 
 	return c;
 err:

@@ -541,6 +541,12 @@ struct gc_stat {
 #define	CACHE_SET_STOPPING		1
 #define	CACHE_SET_RUNNING		2
 
+struct cache_tier {
+	unsigned		nr_devices;
+	struct cache		*devices[MAX_CACHES_PER_SET];
+	struct open_bucket	*data_buckets[6];
+};
+
 struct cache_set {
 	struct closure		cl;
 
@@ -550,7 +556,6 @@ struct cache_set {
 	unsigned long		flags;
 
 	struct cache		*cache[MAX_CACHES_PER_SET];
-	int			caches_loaded;
 
 	struct cache_sb		sb;
 	size_t			nbuckets;
@@ -610,7 +615,7 @@ struct cache_set {
 	struct workqueue_struct	*btree_insert_wq;
 
 	/* ALLOCATION */
-	struct cache		*cache_by_alloc[MAX_CACHES_PER_SET];
+	struct cache_tier	cache_by_alloc[CACHE_TIERS];
 	struct mutex		bucket_lock;
 	wait_queue_head_t	bucket_wait;
 
@@ -645,7 +650,6 @@ struct cache_set {
 	wait_queue_head_t	open_buckets_wait;
 	spinlock_t		open_buckets_lock;
 	struct open_bucket	open_buckets[64];
-	struct open_bucket	*data_buckets[6];
 
 	/* GARBAGE COLLECTION */
 	struct task_struct	*gc_thread;

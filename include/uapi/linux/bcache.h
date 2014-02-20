@@ -310,7 +310,8 @@ struct prio_set {
 	__u64			next_bucket;
 
 	struct bucket_disk {
-		__u16		prio;
+		__u16		read_prio;
+		__u16		write_prio;
 		__u8		gen;
 	} __attribute((packed)) data[];
 };

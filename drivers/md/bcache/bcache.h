@@ -471,6 +471,7 @@ struct cache {
 	 */
 	uint64_t		*prio_buckets;
 	uint64_t		*prio_last_buckets;
+	uint64_t		prio_journal_bucket;
 
 	/*
 	 * free: Buckets that are ready to be used

@@ -24,6 +24,7 @@
 #include "btree.h"
 #include "debug.h"
 #include "extents.h"
+#include "journal.h"
 
 #include <linux/slab.h>
 #include <linux/bitops.h>
@@ -331,7 +332,7 @@ static void btree_complete_write(struct btree *b, struct btree_write *w)
 
 	if (w->journal) {
 		atomic_dec_bug(w->journal);
-		__closure_wake_up(&b->c->journal.wait);
+		wake_up(&b->c->journal.wait);
 	}
 
 	w->prio_blocked	= 0;

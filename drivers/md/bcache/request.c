@@ -219,10 +219,12 @@ static void bch_data_insert_start(struct closure *cl)
 			bio_csum(n, k);
 
 		trace_bcache_cache_insert(k);
-		bch_keylist_push(&op->insert_keys);
 
 		n->bi_rw |= REQ_WRITE;
 		bch_submit_bbio(n, op->c, k, 0);
+
+		bch_extent_normalize(op->c, k);
+		bch_keylist_push(&op->insert_keys);
 	} while (n != bio);
 
 	op->insert_data_done = true;

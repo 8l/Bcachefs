@@ -1480,7 +1480,7 @@ static ssize_t shmem_file_aio_read(struct kiocb *iocb,
 	retval = generic_segment_checks(iov, &nr_segs, &count, VERIFY_WRITE);
 	if (retval)
 		return retval;
-	iov_iter_init(&iter, iov, nr_segs, count, 0);
+	iov_iter_init(&iter, iov, nr_segs, count);
 
 	/*
 	 * Might this read be for a stacking filesystem?  Then when reading

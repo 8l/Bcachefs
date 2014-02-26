@@ -580,7 +580,7 @@ ceph_sync_direct_write(struct kiocb *iocb, const struct iovec *iov,
 		CEPH_OSD_FLAG_ONDISK |
 		CEPH_OSD_FLAG_WRITE;
 
-	iov_iter_init(&i, iov, nr_segs, count, 0);
+	iov_iter_init(&i, iov, nr_segs, count);
 
 	while (iov_iter_count(&i) > 0) {
 		void __user *data = i.iov->iov_base + i.iov_offset;
@@ -701,7 +701,7 @@ static ssize_t ceph_sync_write(struct kiocb *iocb, const struct iovec *iov,
 		CEPH_OSD_FLAG_WRITE |
 		CEPH_OSD_FLAG_ACK;
 
-	iov_iter_init(&i, iov, nr_segs, count, 0);
+	iov_iter_init(&i, iov, nr_segs, count);
 
 	while ((len = iov_iter_count(&i)) > 0) {
 		size_t left;
@@ -834,7 +834,8 @@ again:
 				goto out;
 		}
 
-		iov_iter_init(&i, iov, nr_segs, len, read);
+		iov_iter_init(&i, iov, nr_segs, len);
+		iov_iter_advance(&i, read);
 
 		/* hmm, this isn't really async... */
 		ret = ceph_sync_read(iocb, &i, &checkeof);

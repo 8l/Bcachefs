@@ -2385,7 +2385,9 @@ generic_file_buffered_write(struct kiocb *iocb, const struct iovec *iov,
 	ssize_t status;
 	struct iov_iter i;
 
-	iov_iter_init(&i, iov, nr_segs, count, written);
+	iov_iter_init(&i, iov, nr_segs, count + written);
+	iov_iter_advance(&i, written);
+
 	status = generic_perform_write(file, &i, pos);
 
 	if (likely(status >= 0)) {

@@ -2424,7 +2424,7 @@ cifs_iovec_write(struct file *file, const struct iovec *iov,
 	else
 		pid = current->tgid;
 
-	iov_iter_init(&it, iov, nr_segs, len, 0);
+	iov_iter_init(&it, iov, nr_segs, len);
 	do {
 		size_t save_len;
 
@@ -2729,7 +2729,7 @@ cifs_readdata_to_iov(struct cifs_readdata *rdata, const struct iovec *iov,
 	unsigned int i;
 
 	/* set up iov_iter and advance to the correct offset */
-	iov_iter_init(&ii, iov, nr_segs, iov_length(iov, nr_segs), 0);
+	iov_iter_init(&ii, iov, nr_segs, iov_length(iov, nr_segs));
 	iov_iter_advance(&ii, pos);
 
 	*copied = 0;

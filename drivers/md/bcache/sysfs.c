@@ -103,6 +103,8 @@ rw_attribute(copy_gc_enabled);
 sysfs_pd_controller_attribute(copy_gc);
 
 rw_attribute(size);
+rw_attribute(meta_replicas);
+rw_attribute(data_replicas);
 
 SHOW(__bch_cached_dev)
 {
@@ -527,6 +529,9 @@ SHOW(__bch_cache_set)
 
 	sysfs_print(btree_scan_ratelimit,	c->btree_scan_ratelimit);
 
+	sysfs_printf(meta_replicas,		"%u", c->meta_replicas);
+	sysfs_printf(data_replicas,		"%u", c->data_replicas);
+
 	if (attr == &sysfs_bset_tree_stats)
 		return bch_bset_print_stats(c, buf);
 
@@ -612,6 +617,11 @@ STORE(__bch_cache_set)
 	sysfs_strtoul(btree_scan_ratelimit,	c->btree_scan_ratelimit);
 	sysfs_pd_controller_store(copy_gc,	&c->moving_gc_pd);
 
+	sysfs_strtoul_clamp(meta_replicas,
+			    c->meta_replicas, 1, BKEY_PAD_PTRS);
+	sysfs_strtoul_clamp(data_replicas,
+			    c->data_replicas, 1, BKEY_PAD_PTRS);
+
 	return size;
 }
 STORE_LOCKED(bch_cache_set)
@@ -655,6 +665,9 @@ static struct attribute *bch_cache_set_files[] = {
 	&sysfs_congested_read_threshold_us,
 	&sysfs_congested_write_threshold_us,
 	&sysfs_clear_stats,
+
+	&sysfs_meta_replicas,
+	&sysfs_data_replicas,
 	NULL
 };
 KTYPE(bch_cache_set);

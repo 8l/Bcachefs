@@ -461,6 +461,10 @@ struct jset {
 
 	__u64			last_seq; /* of the oldest dirty journal entry */
 
+	__u16			read_clock;
+	__u16			write_clock;
+	__u32			pad;
+
 	union {
 		struct jset_keys start[0];
 		__u64		d[0];

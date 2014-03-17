@@ -192,7 +192,6 @@
 #include "closure.h"
 
 struct bucket {
-	atomic_t	pin;
 	uint16_t	prio;
 	uint8_t		gen;
 	uint8_t		last_gc; /* Most out of date gen in the btree */

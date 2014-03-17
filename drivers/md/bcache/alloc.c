@@ -106,8 +106,7 @@ void bch_rescale_priorities(struct cache_set *c, int sectors)
 	for_each_cache(ca, c, i)
 		for_each_bucket(b, ca)
 			if (b->prio &&
-			    b->prio != BTREE_PRIO &&
-			    !atomic_read(&b->pin)) {
+			    b->prio != BTREE_PRIO) {
 				b->prio--;
 				c->min_prio = min(c->min_prio, b->prio);
 			}
@@ -133,7 +132,6 @@ bool bch_can_invalidate_bucket(struct cache *ca, struct bucket *b)
 
 	return (!GC_MARK(b) ||
 		GC_MARK(b) == GC_MARK_RECLAIMABLE) &&
-		!atomic_read(&b->pin) &&
 		can_inc_bucket_gen(b);
 }
 
@@ -147,7 +145,10 @@ void __bch_invalidate_one_bucket(struct cache *ca, struct bucket *b)
 
 	bch_inc_gen(ca, b);
 	b->prio = INITIAL_PRIO;
-	atomic_inc(&b->pin);
+	SET_GC_MARK(b, GC_MARK_DIRTY);
+	SET_GC_MOVE(b, 0);
+	SET_GC_SECTORS_USED(b, min_t(unsigned, ca->sb.bucket_size,
+				     MAX_GC_SECTORS_USED));
 }
 
 static void bch_invalidate_one_bucket(struct cache *ca, struct bucket *b)
@@ -322,9 +323,13 @@ static int bch_allocator_thread(void *arg)
 		 * the free list:
 		 */
 		while (!fifo_empty(&ca->free_inc)) {
-			long bucket;
+			long bucket = fifo_peek(&ca->free_inc);
 
-			fifo_pop(&ca->free_inc, bucket);
+			/*
+			 * Don't remove from free_inc/unused until after it's
+			 * added to freelist, so gc doesn't miss it while we've
+			 * dropped bucket lock
+			 */
 
 			if (ca->discard) {
 				mutex_unlock(&ca->set->bucket_lock);
@@ -335,6 +340,8 @@ static int bch_allocator_thread(void *arg)
 			}
 
 			allocator_wait(ca, bch_allocator_push(ca, bucket));
+			fifo_pop(&ca->free_inc, bucket);
+
 			wake_up(&ca->set->btree_cache_wait);
 			wake_up(&ca->set->bucket_wait);
 		}
@@ -426,17 +433,13 @@ out:
 
 	b = ca->buckets + r;
 
-	BUG_ON(atomic_read(&b->pin) != 1);
-
-	SET_GC_SECTORS_USED(b, ca->sb.bucket_size);
+	BUG_ON(ca->set->gc_mark_valid &&
+	       GC_MARK(b) != GC_MARK_DIRTY);
 
 	if (reserve <= RESERVE_PRIO) {
 		SET_GC_MARK(b, GC_MARK_METADATA);
-		SET_GC_MOVE(b, 0);
 		b->prio = BTREE_PRIO;
 	} else {
-		SET_GC_MARK(b, GC_MARK_RECLAIMABLE);
-		SET_GC_MOVE(b, 0);
 		b->prio = INITIAL_PRIO;
 	}
 
@@ -489,7 +492,6 @@ int bch_bucket_alloc_set(struct cache_set *c, unsigned reserve,
 err:
 	bch_bucket_free(c, k);
 	mutex_unlock(&c->bucket_lock);
-	bkey_put(c, k);
 	return -1;
 }
 
@@ -611,7 +613,6 @@ retry:
 		spin_unlock(&c->open_buckets_lock);
 
 		mutex_lock(&c->bucket_lock);
-		bkey_put(c, &b->key);
 		bch_bucket_free(c, &b->key);
 
 		spin_lock(&c->open_buckets_lock);
@@ -705,7 +706,6 @@ struct open_bucket *bch_alloc_sectors(struct cache_set *c, struct bkey *k,
 	 */
 
 	if (b->sectors_free) {
-		bkey_get(c, &b->key);
 		atomic_inc(&b->pin);
 	} else {
 		memmove(&c->data_buckets[0],

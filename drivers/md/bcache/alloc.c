@@ -139,6 +139,7 @@ void __bch_invalidate_one_bucket(struct cache *ca, struct bucket *b)
 {
 	lockdep_assert_held(&ca->set->bucket_lock);
 	BUG_ON(GC_MARK(b) && GC_MARK(b) != GC_MARK_RECLAIMABLE);
+	BUG_ON(!ca->buckets_free);
 
 	if (GC_SECTORS_USED(b))
 		trace_bcache_invalidate(ca, b - ca->buckets);
@@ -149,6 +150,8 @@ void __bch_invalidate_one_bucket(struct cache *ca, struct bucket *b)
 	SET_GC_MOVE(b, 0);
 	SET_GC_SECTORS_USED(b, min_t(unsigned, ca->sb.bucket_size,
 				     MAX_GC_SECTORS_USED));
+
+	ca->buckets_free--;
 }
 
 static void bch_invalidate_one_bucket(struct cache *ca, struct bucket *b)
@@ -448,6 +451,11 @@ out:
 
 void __bch_bucket_free(struct cache *ca, struct bucket *b)
 {
+	if ((GC_MARK(b) &&
+	     GC_MARK(b) != GC_MARK_RECLAIMABLE) ||
+	    !ca->set->gc_mark_valid)
+		ca->buckets_free++;
+
 	SET_GC_MARK(b, 0);
 	SET_GC_SECTORS_USED(b, 0);
 }

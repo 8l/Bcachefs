@@ -1596,9 +1596,8 @@ static void btree_gc_start(struct cache_set *c)
 	mutex_unlock(&c->bucket_lock);
 }
 
-static size_t bch_btree_gc_finish(struct cache_set *c)
+static void bch_btree_gc_finish(struct cache_set *c)
 {
-	size_t available = 0;
 	struct bucket *b;
 	struct cache *ca;
 	unsigned i;
@@ -1616,6 +1615,7 @@ static size_t bch_btree_gc_finish(struct cache_set *c)
 	bch_mark_writeback_keys(c);
 
 	for_each_cache(ca, c, i) {
+		size_t buckets_free = 0;
 		uint64_t *i;
 
 		ca->invalidate_needs_gc = 0;
@@ -1630,21 +1630,19 @@ static size_t bch_btree_gc_finish(struct cache_set *c)
 		for_each_bucket(b, ca) {
 			c->need_gc	= max(c->need_gc, bucket_gc_gen(b));
 
-			BUG_ON(!GC_MARK(b) && GC_SECTORS_USED(b));
-
 			if (!GC_MARK(b) || GC_MARK(b) == GC_MARK_RECLAIMABLE)
-				available++;
+				buckets_free++;
 		}
+
+		ca->buckets_free = buckets_free;
 	}
 
 	mutex_unlock(&c->bucket_lock);
-	return available;
 }
 
 static void bch_btree_gc(struct cache_set *c)
 {
 	int ret;
-	unsigned long available;
 	struct gc_stat stats;
 	struct btree_op op;
 	uint64_t start_time = local_clock();
@@ -1664,14 +1662,13 @@ static void bch_btree_gc(struct cache_set *c)
 			pr_warn("gc failed!");
 	} while (ret);
 
-	available = bch_btree_gc_finish(c);
+	bch_btree_gc_finish(c);
 	wake_up_allocators(c);
 
 	bch_time_stats_update(&c->btree_gc_time, start_time);
 
 	stats.key_bytes *= sizeof(uint64_t);
 	stats.data	<<= 9;
-	stats.in_use	= (c->nbuckets - available) * 100 / c->nbuckets;
 	memcpy(&c->gc_stats, &stats, sizeof(struct gc_stat));
 
 	trace_bcache_gc_end(c);

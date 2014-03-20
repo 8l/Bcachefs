@@ -927,6 +927,7 @@ static void cached_dev_detach_finish(struct work_struct *w)
 	list_move(&dc->list, &uncached_devices);
 
 	clear_bit(BCACHE_DEV_DETACHING, &dc->disk.flags);
+	clear_bit(BCACHE_DEV_UNLINK_DONE, &dc->disk.flags);
 
 	mutex_unlock(&bch_register_lock);
 

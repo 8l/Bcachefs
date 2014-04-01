@@ -209,3 +209,40 @@ int iov_iter_fault_in_readable(struct iov_iter *i, size_t bytes)
 	return fault_in_pages_readable(buf, bytes);
 }
 EXPORT_SYMBOL(iov_iter_fault_in_readable);
+
+/**
+ * Returns the offset of all of @iter's segments bitwise ored together; the
+ * caller can then bitwise and that with an alignment mask for checking required
+ * alignment.
+ */
+unsigned long iov_seg_start_alignment(const struct iov_iter *iter)
+{
+	struct iov_iter i;
+	struct iovec iov;
+	unsigned long ret = 0;
+
+	iov_for_each(iov, i, *iter)
+		ret |= (unsigned long) iov.iov_base;
+
+	return ret;
+}
+EXPORT_SYMBOL(iov_seg_start_alignment);
+
+/**
+ * Returns the number of pages @iter points to - rounding up when the start and
+ * end of the segments aren't page aligned.
+ */
+size_t iov_count_pages(const struct iov_iter *iter)
+{
+	struct iov_iter i;
+	struct iovec iov;
+	size_t nr_pages = 0;
+
+	iov_for_each(iov, i, *iter)
+		nr_pages += DIV_ROUND_UP(offset_in_page((unsigned long)
+							iov.iov_base) +
+					 iov.iov_len, PAGE_SIZE);
+
+	return nr_pages;
+}
+EXPORT_SYMBOL(iov_count_pages);

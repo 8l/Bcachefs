@@ -1114,27 +1114,11 @@ struct bio *bio_copy_user_iov(struct request_queue *q,
 	struct page *page;
 	struct bio *bio;
 	int i, ret;
-	int nr_pages = 0;
+	size_t nr_pages;
 	unsigned int len;
 	unsigned int offset = map_data ? map_data->offset & ~PAGE_MASK : 0;
 
-	for (i = 0; i < iter->nr_segs; i++) {
-		unsigned long uaddr;
-		unsigned long end;
-		unsigned long start;
-
-		uaddr = (unsigned long) iter->iov[i].iov_base;
-		end = (uaddr + iter->iov[i].iov_len + PAGE_SIZE - 1) >> PAGE_SHIFT;
-		start = uaddr >> PAGE_SHIFT;
-
-		/*
-		 * Overflow, abort
-		 */
-		if (end < start)
-			return ERR_PTR(-EINVAL);
-
-		nr_pages += end - start;
-	}
+	nr_pages = iov_count_pages(iter);
 
 	if (offset)
 		nr_pages++;
@@ -1256,7 +1240,7 @@ static struct bio *__bio_map_user_iov(struct request_queue *q,
 				      int write_to_vm, gfp_t gfp_mask)
 {
 	int j;
-	int nr_pages = 0;
+	size_t nr_pages;
 	struct page **pages;
 	struct bio *bio;
 	int cur_page = 0;
@@ -1264,26 +1248,10 @@ static struct bio *__bio_map_user_iov(struct request_queue *q,
 	struct iov_iter i;
 	struct iovec iov;
 
-	iov_for_each(iov, i, *iter) {
-		unsigned long uaddr = (unsigned long) iov.iov_base;
-		unsigned long len = iov.iov_len;
-		unsigned long end = (uaddr + len + PAGE_SIZE - 1) >> PAGE_SHIFT;
-		unsigned long start = uaddr >> PAGE_SHIFT;
+	if (iov_seg_start_alignment(iter) & queue_dma_alignment(q))
+		return ERR_PTR(-EINVAL);
 
-		/*
-		 * Overflow, abort
-		 */
-		if (end < start)
-			return ERR_PTR(-EINVAL);
-
-		nr_pages += end - start;
-		/*
-		 * buffer must be aligned to at least hardsector size for now
-		 */
-		if (uaddr & queue_dma_alignment(q))
-			return ERR_PTR(-EINVAL);
-	}
-
+	nr_pages = iov_count_pages(iter);
 	if (!nr_pages)
 		return ERR_PTR(-EINVAL);
 

@@ -692,11 +692,13 @@ ssize_t rw_copy_check_uvector(int type, const struct iovec __user * uvector,
 	ret = 0;
 	for (seg = 0; seg < nr_segs; seg++) {
 		void __user *buf = iov[seg].iov_base;
+		unsigned long uaddr = (unsigned long) buf;
 		ssize_t len = (ssize_t)iov[seg].iov_len;
 
 		/* see if we we're about to use an invalid len or if
 		 * it's about to overflow ssize_t */
-		if (len < 0) {
+		if (len < 0 ||
+		    uaddr + len < uaddr) {
 			ret = -EINVAL;
 			goto out;
 		}

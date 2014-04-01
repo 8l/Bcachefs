@@ -195,24 +195,12 @@ int blk_rq_map_user_iov(struct request_queue *q, struct request *rq,
 	struct bio *bio;
 	int read = rq_data_dir(rq) == READ;
 	int unaligned = 0;
-	struct iov_iter i;
-	struct iovec iov;
 
 	if (!iter || !iter->count)
 		return -EINVAL;
 
-	iov_for_each(iov, i, *iter) {
-		unsigned long uaddr = (unsigned long) iov.iov_base;
-
-		if (!iov.iov_len)
-			return -EINVAL;
-
-		/*
-		 * Keep going so we check length of all segments
-		 */
-		if (uaddr & queue_dma_alignment(q))
-			unaligned = 1;
-	}
+	if (iov_seg_start_alignment(iter) & queue_dma_alignment(q))
+		unaligned = 1;
 
 	if (unaligned || (q->dma_pad_mask & iter->count) || map_data)
 		bio = bio_copy_user_iov(q, map_data, iter, read, gfp_mask);

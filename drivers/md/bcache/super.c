@@ -1399,6 +1399,7 @@ struct cache_set *bch_cache_set_alloc(struct cache_sb *sb)
 	mutex_init(&c->bucket_lock);
 	init_waitqueue_head(&c->btree_cache_wait);
 	init_waitqueue_head(&c->bucket_wait);
+	init_waitqueue_head(&c->gc_wait);
 	spin_lock_init(&c->btree_root_lock);
 
 	spin_lock_init(&c->btree_gc_time.lock);
@@ -1796,6 +1797,8 @@ static int cache_alloc(struct cache_sb *sb, struct cache *ca)
 		return -ENOMEM;
 
 	ca->prio_last_buckets = ca->prio_buckets + prio_buckets(ca);
+
+	init_waitqueue_head(&ca->fifo_wait);
 
 	return 0;
 }

@@ -218,7 +218,7 @@ struct bch_inode {
 	__u32			i_nlink;
 
 	__u16			i_mode;
-	__u16			pad;
+	__u16			i_replicas;	/* target number of replicas */
 
 	__u32			i_dev;
 	__u32			pad2;

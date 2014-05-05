@@ -467,7 +467,7 @@ retry_invalidate:
 
 /* Allocation */
 
-long bch_bucket_alloc(struct cache *ca, unsigned reserve, bool wait)
+long bch_bucket_alloc(struct cache *ca, enum alloc_reserve reserve, bool wait)
 {
 	DEFINE_WAIT(w);
 	struct bucket *b;
@@ -558,7 +558,8 @@ void bch_bucket_free(struct cache_set *c, struct bkey *k)
 	mutex_unlock(&c->bucket_lock);
 }
 
-static struct cache *bch_next_cache(struct cache_set *c, unsigned reserve,
+static struct cache *bch_next_cache(struct cache_set *c,
+				    enum alloc_reserve reserve,
 				    int tier_idx, bool wait,
 				    long *cache_used)
 {
@@ -634,7 +635,7 @@ static struct cache *bch_next_cache(struct cache_set *c, unsigned reserve,
 	return NULL;
 }
 
-int bch_bucket_alloc_set(struct cache_set *c, unsigned reserve,
+int bch_bucket_alloc_set(struct cache_set *c, enum alloc_reserve reserve,
 			 struct bkey *k, int n,
 			 unsigned tier_idx, bool wait)
 {
@@ -716,8 +717,9 @@ static struct open_bucket *bch_open_bucket_get(struct cache_set *c)
 }
 
 static struct open_bucket *bch_open_bucket_alloc(struct cache_set *c,
-						 unsigned reserve, int n,
-						 unsigned tier, bool wait)
+						 enum alloc_reserve reserve,
+						 int n, unsigned tier,
+						 bool wait)
 {
 	int ret;
 	struct open_bucket *b;

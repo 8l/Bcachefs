@@ -88,6 +88,7 @@ struct btree_op {
 	short			lock;
 
 	unsigned		insert_collision:1;
+	unsigned		moving_gc:1;
 };
 
 struct data_insert_op {

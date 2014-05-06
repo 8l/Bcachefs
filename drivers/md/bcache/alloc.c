@@ -430,7 +430,7 @@ static int bch_allocator_thread(void *arg)
 			fifo_pop(&ca->free_inc, bucket);
 
 			wake_up(&c->btree_cache_wait);
-			wake_up(&c->bucket_wait);
+			closure_wake_up(&c->bucket_wait);
 		}
 
 		/*
@@ -470,9 +470,9 @@ retry_invalidate:
 
 /* Allocation */
 
-long bch_bucket_alloc(struct cache *ca, enum alloc_reserve reserve, bool wait)
+long bch_bucket_alloc(struct cache *ca, enum alloc_reserve reserve,
+		      struct closure *cl)
 {
-	DEFINE_WAIT(w);
 	struct bucket *b;
 	long r;
 
@@ -483,22 +483,14 @@ long bch_bucket_alloc(struct cache *ca, enum alloc_reserve reserve, bool wait)
 	    fifo_pop(&ca->free[reserve], r))
 		goto out;
 
-	if (!wait) {
-		trace_bcache_alloc_fail(ca, reserve);
-		return -1;
+	trace_bcache_alloc_fail(ca, reserve);
+
+	if (cl) {
+		closure_wait(&ca->set->bucket_wait, cl);
+		return -EAGAIN;
 	}
 
-	do {
-		prepare_to_wait(&ca->set->bucket_wait, &w,
-				TASK_UNINTERRUPTIBLE);
-
-		mutex_unlock(&ca->set->bucket_lock);
-		schedule();
-		mutex_lock(&ca->set->bucket_lock);
-	} while (!fifo_pop(&ca->free[RESERVE_NONE], r) &&
-		 !fifo_pop(&ca->free[reserve], r));
-
-	finish_wait(&ca->set->bucket_wait, &w);
+	return -ENOSPC;
 out:
 	wake_up(&ca->fifo_wait);
 
@@ -563,11 +555,9 @@ void bch_bucket_free(struct cache_set *c, struct bkey *k)
 
 static struct cache *bch_next_cache(struct cache_set *c,
 				    enum alloc_reserve reserve,
-				    int tier_idx, bool wait,
-				    long *cache_used)
+				    int tier_idx, long *cache_used,
+				    struct closure *cl)
 {
-	DEFINE_WAIT(w);
-
 	struct cache **devices;
 	size_t sectors_count = 0, rand;
 	int i, nr_devices;
@@ -586,29 +576,23 @@ static struct cache *bch_next_cache(struct cache_set *c,
 		nr_devices = tier->nr_devices;
 	}
 
-	do {
-		for (i = 0; i < nr_devices; i++) {
-			if (test_bit(devices[i]->sb.nr_this_dev, cache_used))
-				continue;
+	for (i = 0; i < nr_devices; i++) {
+		if (test_bit(devices[i]->sb.nr_this_dev, cache_used))
+			continue;
 
-			sectors_count += buckets_free_cache(devices[i], reserve);
+		sectors_count += buckets_free_cache(devices[i], reserve);
+	}
+
+	if (!sectors_count) {
+		/* XXX: trace alloc fail */
+
+		if (cl) {
+			closure_wait(&c->bucket_wait, cl);
+			return ERR_PTR(-EAGAIN);
 		}
 
-		/* fast path */
-		if (sectors_count)
-			break;
-
-		if (!wait)
-			return NULL;
-
-		prepare_to_wait(&c->bucket_wait, &w, TASK_UNINTERRUPTIBLE);
-		mutex_unlock(&c->bucket_lock);
-		schedule();
-		mutex_lock(&c->bucket_lock);
-
-	} while(true);
-
-	finish_wait(&c->bucket_wait, &w);
+		return ERR_PTR(-ENOSPC);
+	}
 
 	/*
 	 * We create a weighted selection by using the number of free buckets
@@ -639,11 +623,11 @@ static struct cache *bch_next_cache(struct cache_set *c,
 }
 
 int bch_bucket_alloc_set(struct cache_set *c, enum alloc_reserve reserve,
-			 struct bkey *k, int n,
-			 unsigned tier_idx, bool wait)
+			 struct bkey *k, int n, unsigned tier_idx,
+			 struct closure *cl)
 {
 	long caches_used[BITS_TO_LONGS(MAX_CACHES_PER_SET)];
-	int i;
+	int i, ret;
 
 	mutex_lock(&c->bucket_lock);
 	BUG_ON(!n || n > c->sb.nr_in_set || n > MAX_CACHES_PER_SET);
@@ -659,15 +643,19 @@ int bch_bucket_alloc_set(struct cache_set *c, enum alloc_reserve reserve,
 
 		/* first ptr goes to the specified tier, the rest to any */
 		ca = bch_next_cache(c, reserve, i == 0 ? tier_idx : -1,
-				    wait, caches_used);
+				    caches_used, cl);
 
-		if (!ca)
+		if (IS_ERR_OR_NULL(ca)) {
+			BUG_ON(!ca);
+			ret = PTR_ERR(ca);
 			goto err;
+		}
 
-		b = bch_bucket_alloc(ca, reserve, wait);
-
-		if (b == -1)
+		b = bch_bucket_alloc(ca, reserve, cl);
+		if (b < 0) {
+			ret = b;
 			goto err;
+		}
 
 		k->val[i] = PTR(ca->buckets[b].gen,
 				bucket_to_sector(c, b),
@@ -681,7 +669,7 @@ int bch_bucket_alloc_set(struct cache_set *c, enum alloc_reserve reserve,
 err:
 	mutex_unlock(&c->bucket_lock);
 	bch_bucket_free(c, k);
-	return -1;
+	return ret;
 }
 
 static void __bch_open_bucket_put(struct cache_set *c, struct open_bucket *b)
@@ -690,7 +678,7 @@ static void __bch_open_bucket_put(struct cache_set *c, struct open_bucket *b)
 
 	list_move(&b->list, &c->open_buckets_free);
 	c->open_buckets_nr_free++;
-	wake_up(&c->open_buckets_wait);
+	closure_wake_up(&c->open_buckets_wait);
 }
 
 void bch_open_bucket_put(struct cache_set *c, struct open_bucket *b)
@@ -702,9 +690,10 @@ void bch_open_bucket_put(struct cache_set *c, struct open_bucket *b)
 	}
 }
 
-static struct open_bucket *__bch_open_bucket_get(struct cache_set *c, bool moving_gc)
+static struct open_bucket *bch_open_bucket_get(struct cache_set *c, bool moving_gc,
+					       struct closure *cl)
 {
-	struct open_bucket *ret = NULL;
+	struct open_bucket *ret = ERR_PTR(-ENOSPC);
 	unsigned reserve = (moving_gc ? 0 : OPEN_BUCKETS_MOVING_GC_RESERVE);
 
 	spin_lock(&c->open_buckets_lock);
@@ -718,6 +707,13 @@ static struct open_bucket *__bch_open_bucket_get(struct cache_set *c, bool movin
 		ret->sectors_free = c->sb.bucket_size;
 		bkey_init(&ret->key);
 		c->open_buckets_nr_free--;
+	} else {
+		trace_bcache_open_bucket_wait(c, moving_gc);
+
+		if (cl) {
+			closure_wait(&c->open_buckets_wait, cl);
+			ret = ERR_PTR(-EAGAIN);
+		}
 	}
 
 	spin_unlock(&c->open_buckets_lock);
@@ -725,35 +721,23 @@ static struct open_bucket *__bch_open_bucket_get(struct cache_set *c, bool movin
 	return ret;
 }
 
-static struct open_bucket *bch_open_bucket_get(struct cache_set *c, bool moving_gc)
-{
-	struct open_bucket *ret;
-
-	ret = __bch_open_bucket_get(c, moving_gc);
-	if (!ret) {
-		trace_bcache_open_bucket_wait_start(c, moving_gc);
-		wait_event(c->open_buckets_wait,
-			(ret = __bch_open_bucket_get(c, moving_gc)));
-		trace_bcache_open_bucket_wait_end(c, moving_gc);
-	}
-
-	return ret;
-}
-
 static struct open_bucket *bch_open_bucket_alloc(struct cache_set *c,
 						 enum alloc_reserve reserve,
 						 int n, unsigned tier,
-						 bool wait)
+						 struct closure *cl)
 {
 	int ret;
 	struct open_bucket *b;
 
-	b = bch_open_bucket_get(c, false);
+	b = bch_open_bucket_get(c, false, cl);
+	if (IS_ERR_OR_NULL(b))
+		return b;
 
-	ret = bch_bucket_alloc_set(c, reserve, &b->key, n, tier, wait);
+	ret = bch_bucket_alloc_set(c, reserve, &b->key, n, tier, cl);
 	if (ret) {
+		BUG_ON(ret > 0);
 		bch_open_bucket_put(c, b);
-		b = NULL;
+		b = ERR_PTR(ret);
 	}
 
 	return b;
@@ -784,7 +768,7 @@ static struct open_bucket *pick_data_bucket(struct cache_set *c,
 					    const struct bkey *search,
 					    unsigned write_point,
 					    unsigned tier_idx,
-					    bool wait)
+					    struct closure *cl)
 	__releases(c->open_buckets_lock)
 	__acquires(c->open_buckets_lock)
 {
@@ -811,11 +795,11 @@ retry:
 
 	spin_unlock(&c->open_buckets_lock);
 	b = bch_open_bucket_alloc(c, RESERVE_NONE, c->data_replicas,
-				  tier_idx, wait);
+				  tier_idx, cl);
 	spin_lock(&c->open_buckets_lock);
 
-	if (!b)
-		return NULL;
+	if (IS_ERR_OR_NULL(b))
+		return b;
 
 	if (tier->data_buckets[i]) {
 		/* we raced - and we must unlock to call bch_bucket_free()... */
@@ -855,7 +839,9 @@ found:
  * May allocate fewer sectors than @sectors, KEY_SIZE(k) indicates how many
  * sectors were actually allocated.
  *
- * If s->writeback is true, will not fail
+ * Return codes:
+ * - -EAGAIN: closure was added to waitlist
+ * - -ENOSPC: out of space and no closure provided
  *
  * @write_point - opaque identifier of where this write came from.
  *		  bcache uses ptr address of the task struct
@@ -864,7 +850,8 @@ found:
  */
 struct open_bucket *bch_alloc_sectors(struct cache_set *c, struct bkey *k,
 				      unsigned write_point, unsigned tier_idx,
-				      bool wait, unsigned long *ptrs_to_write)
+				      unsigned long *ptrs_to_write,
+				      struct closure *cl)
 {
 	struct cache_tier *tier = &c->cache_by_alloc[tier_idx];
 	struct open_bucket *b;
@@ -872,11 +859,9 @@ struct open_bucket *bch_alloc_sectors(struct cache_set *c, struct bkey *k,
 
 	spin_lock(&c->open_buckets_lock);
 
-	b = pick_data_bucket(c, k, write_point, tier_idx, wait);
-	if (!b) {
-		spin_unlock(&c->open_buckets_lock);
-		return NULL;
-	}
+	b = pick_data_bucket(c, k, write_point, tier_idx, cl);
+	if (IS_ERR_OR_NULL(b))
+		goto out;
 
 	BUG_ON(b != tier->data_buckets[0]);
 
@@ -924,14 +909,15 @@ struct open_bucket *bch_alloc_sectors(struct cache_set *c, struct bkey *k,
 			(ARRAY_SIZE(tier->data_buckets) - 1));
 		tier->data_buckets[ARRAY_SIZE(tier->data_buckets) - 1] = NULL;
 	}
-
+out:
 	spin_unlock(&c->open_buckets_lock);
 
 	return b;
 }
 
 struct open_bucket *bch_gc_alloc_sectors(struct cache_set *c, struct bkey *k,
-					 unsigned long *ptrs_to_write)
+					 unsigned long *ptrs_to_write,
+					 struct closure *cl)
 {
 	unsigned i, gen, sectors = KEY_SIZE(k);
 	struct cache *ca;
@@ -955,11 +941,21 @@ found:
 	if (!b) {
 		mutex_unlock(&c->bucket_lock);
 
-		b = bch_open_bucket_get(c, true);
+		b = bch_open_bucket_get(c, true, cl);
+		if (IS_ERR_OR_NULL(b))
+			return b;
 
 		mutex_lock(&c->bucket_lock);
 
-		bucket = bch_bucket_alloc(ca, RESERVE_MOVINGGC, true);
+		bucket = bch_bucket_alloc(ca, RESERVE_MOVINGGC, NULL);
+		if (bucket < 0) {
+			WARN_ONCE(1,
+				  "bcache: movinggc bucket allocation failed "
+				  "with %ld", bucket);
+			mutex_unlock(&c->bucket_lock);
+			return ERR_PTR(-ENOSPC);
+		}
+
 		b->key.val[0] = PTR(ca->buckets[bucket].gen,
 				    bucket_to_sector(ca->set, bucket),
 				    ca->sb.nr_this_dev);
@@ -1053,7 +1049,6 @@ void bch_open_buckets_init(struct cache_set *c)
 
 	INIT_LIST_HEAD(&c->open_buckets_open);
 	INIT_LIST_HEAD(&c->open_buckets_free);
-	init_waitqueue_head(&c->open_buckets_wait);
 	spin_lock_init(&c->open_buckets_lock);
 
 	for (i = 0; i < ARRAY_SIZE(c->open_buckets); i++) {

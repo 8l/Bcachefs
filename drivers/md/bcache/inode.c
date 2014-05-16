@@ -125,13 +125,8 @@ static int inode_truncate_fn(struct btree_op *b_op, struct btree *b, struct bkey
 	bch_keylist_init_single(&keys, &erase_key);
 
 	ret = bch_btree_insert_node(b, b_op, &keys, NULL, NULL);
-	BUG_ON(!ret && !bch_keylist_empty(&keys));
 
-	/*
-	 * this could be more efficient, this way we're always redoing the
-	 * lookup from the start
-	 */
-	return -EINTR;
+	return ret ?: MAP_CONTINUE;
 }
 
 int bch_inode_truncate(struct cache_set *c, u64 inode_nr, u64 new_size)

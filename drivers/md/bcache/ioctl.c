@@ -251,8 +251,7 @@ static int __bch_list_keys(struct cache_set *c,
 		return -EINVAL;
 
 	bch_btree_op_init(&op->op, -1);
-	ret = bch_btree_map_keys(&op->op, c, op->i.btree_id,
-				 PRECEDING_KEY(&op->i.start),
+	ret = bch_btree_map_keys(&op->op, c, op->i.btree_id, &op->i.start,
 				 bch_ioctl_list_keys_fn, 0);
 
 	return ret < 0 ? ret : 0;

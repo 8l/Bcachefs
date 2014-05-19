@@ -177,8 +177,7 @@ static int __bch_dirent_create(struct cache_set *c, u64 dir_inum,
 
 	bch_keylist_push(&op.keys);
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS,
-				 PRECEDING_KEY(k),
+	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS, k,
 				 bch_dirent_create_fn, MAP_END_KEY);
 
 	if (!ret)
@@ -245,8 +244,7 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 		 KEY_OFFSET(&op.search),
 		 name->name);
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS,
-				 PRECEDING_KEY(&op.search),
+	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS, &op.search,
 				 bch_dirent_delete_fn, 0);
 
 	pr_debug("%s %sfound", name->name, ret ? "not " : "");
@@ -293,8 +291,7 @@ u64 bch_dirent_lookup(struct cache_set *c, u64 dir_inum,
 		 KEY_OFFSET(&op.search),
 		 name->name);
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS,
-				 PRECEDING_KEY(&op.search),
+	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS, &op.search,
 				 bch_dirent_lookup_fn, 0);
 
 	pr_debug("%s %sfound", name->name, ret ? "not " : "");
@@ -338,7 +335,7 @@ int bch_empty_dir(struct cache_set *c, u64 dir_inum)
 	op.dir_inum = dir_inum;
 
 	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS,
-				 PRECEDING_KEY(&KEY(dir_inum, 0, 0)),
+				 &KEY(dir_inum, 0, 0),
 				 bch_empty_dir_fn, 0);
 
 	return ret == -ENOTEMPTY ? ret : 0;
@@ -398,7 +395,7 @@ int bch_readdir(struct file *file, struct dir_context *ctx)
 	pr_debug("listing for %llu from %llu", op.inum, ctx->pos);
 
 	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS,
-				 PRECEDING_KEY(&KEY(op.inum, ctx->pos, 0)),
+				 &KEY(op.inum, ctx->pos, 0),
 				 bch_readdir_fn, 0);
 	return ret < 0 ? ret : 0;
 }

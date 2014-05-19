@@ -162,6 +162,9 @@ struct bbio {
 int bch_read(struct cache_set *, struct bio *, u64);
 void bch_data_insert(struct closure *);
 
+int bch_list_keys(struct cache_set *, unsigned, struct bkey *, struct bkey *,
+		  struct bkey *, size_t, unsigned, unsigned *);
+
 void bch_cache_set_close(struct cache_set *);
 struct cache_set *bch_cache_set_open(unsigned);
 struct cache_set *bch_cache_set_open_by_uuid(uuid_le *);

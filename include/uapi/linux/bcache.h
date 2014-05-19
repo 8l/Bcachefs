@@ -274,10 +274,11 @@ struct bch_dirent {
 	__u8			d_name[];
 };
 
-#define BKEY_PAD_PTRS		4
+#define __BKEY_PADDED(key, pad)					\
+	struct { struct bkey key; __u64 key ## _pad[pad]; }
 
-#define BKEY_PADDED(key)					\
-	struct { struct bkey key; __u64 key ## _pad[BKEY_PAD_PTRS]; }
+#define BKEY_PAD_PTRS		4
+#define BKEY_PADDED(key)	__BKEY_PADDED(key, BKEY_PAD_PTRS)
 
 /* Superblock */
 

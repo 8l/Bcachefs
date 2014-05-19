@@ -1,0 +1,655 @@
+
+#include "bcache.h"
+#include "btree.h"
+#include "extents.h"
+#include "inode.h"
+#include "request.h"
+
+#include <linux/aio.h>
+#include <linux/bcache-ioctl.h>
+#include <linux/bio.h>
+#include <linux/device.h>
+#include <linux/export.h>
+#include <linux/hash.h>
+#include <linux/idr.h>
+#include <linux/ioctl.h>
+
+static struct class *bch_extent_class;
+static int bch_extent_major;
+static DEFINE_IDR(bch_extent_minor);
+
+static void bch_cache_read_endio(struct bio *bio, int error)
+{
+	struct kiocb *req = bio->bi_private;
+	atomic_t *ref = (atomic_t *) &req->ki_nbytes;
+	struct bio_vec *bv;
+	int i;
+
+	if (error)
+		req->ki_pos = error;
+
+	if (atomic_dec_and_test(ref))
+		aio_complete(req, req->ki_pos, 0);
+
+	bio_for_each_segment_all(bv, bio, i)
+		page_cache_release(bv->bv_page);
+	bio_put(bio);
+}
+
+static void bch_ioctl_read(struct kiocb *req, struct cache_set *c,
+			   unsigned long arg)
+{
+	atomic_t *ref = (atomic_t *) &req->ki_nbytes;
+	struct bch_ioctl_read i, __user *user_read = (void __user *) arg;
+	struct bio *bio;
+	size_t bytes, pages;
+	ssize_t ret = 0;
+
+	if (copy_from_user(&i, user_read, sizeof(i))) {
+		aio_complete(req, -EFAULT, 0);
+		return;
+	}
+
+	/*
+	 * Hack: may need multiple bios, so I'm using spare fields in the kiocb
+	 * for refcount/return code
+	 */
+	atomic_set(ref, 1);
+	req->ki_pos = 0;
+
+	while (i.sectors && !ret) {
+		bytes = i.sectors << 9;
+		pages = min_t(size_t, BIO_MAX_PAGES,
+			      DIV_ROUND_UP(bytes, PAGE_SIZE));
+
+		bio = bio_alloc(GFP_NOIO, pages);
+		bio->bi_iter.bi_sector	= i.offset;
+		bio->bi_end_io		= bch_cache_read_endio;
+		bio->bi_private		= req;
+		atomic_inc(ref);
+
+		ret = bio_get_user_pages(bio, i.buf, bytes, 1);
+		if (ret < 0) {
+			bio_endio(bio, ret);
+			break;
+		}
+
+		i.offset += bio_sectors(bio);
+		i.buf += bio_sectors(bio) << 9;
+		i.sectors -= bio_sectors(bio);
+
+		ret = bch_read(c, bio, i.inode);
+		bio_endio(bio, ret);
+	}
+
+	if (atomic_dec_and_test(ref))
+		aio_complete(req, req->ki_pos, 0);
+}
+
+struct bch_ioctl_write_op {
+	struct closure		cl;
+	struct kiocb		*req;
+	struct data_insert_op	iop;
+	struct bbio		bio;
+};
+
+static void bch_ioctl_write_done(struct closure *cl)
+{
+	struct bch_ioctl_write_op *op = container_of(cl,
+					struct bch_ioctl_write_op, cl);
+	atomic_t *ref = (atomic_t *) &op->req->ki_nbytes;
+	struct bio_vec *bv;
+	int i;
+
+	if (op->iop.error)
+		op->req->ki_pos = op->iop.error;
+
+	if (atomic_dec_and_test(ref))
+		aio_complete(op->req, op->req->ki_pos, 0);
+
+	bio_for_each_segment_all(bv, &op->bio.bio, i)
+		page_cache_release(bv->bv_page);
+	kfree(op);
+}
+
+static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
+			    unsigned long arg)
+{
+	atomic_t *ref = (atomic_t *) &req->ki_nbytes;
+	struct bch_ioctl_write __user *user_write = (void __user *) arg;
+	struct bch_ioctl_write i;
+	struct bch_ioctl_write_op *op;
+	struct bio *bio;
+	size_t bytes, pages;
+	ssize_t ret;
+
+	if (copy_from_user(&i, user_write, sizeof(i))) {
+		aio_complete(req, -EFAULT, 0);
+		return;
+	}
+
+	bch_set_extent_ptrs(&i.extent, 0);
+	SET_KEY_DELETED(&i.extent, 0);
+	SET_KEY_CSUM(&i.extent, 0);
+
+	/*
+	 * Hack: may need multiple bios, so I'm using spare fields in the kiocb
+	 * for refcount/return code
+	 */
+	atomic_set(ref, 1);
+	req->ki_pos = 0;
+
+	while (KEY_SIZE(&i.extent)) {
+		bytes = KEY_SIZE(&i.extent) << 9;
+		pages = DIV_ROUND_UP(bytes, PAGE_SIZE);
+
+		op = kmalloc(sizeof(*op) + sizeof(struct bio_vec) * pages,
+			     GFP_NOIO);
+		if (!op) {
+			aio_complete(req, -ENOMEM, 0);
+			return;
+		}
+
+		closure_init(&op->cl, NULL);
+		op->req = req;
+		atomic_inc(ref);
+
+		bio = &op->bio.bio;
+		bio_init(bio);
+		bio->bi_iter.bi_sector	= KEY_START(&i.extent);
+		bio->bi_max_vecs	= pages;
+		bio->bi_io_vec		= bio->bi_inline_vecs;
+
+		bch_data_insert_op_init(&op->iop, c,
+					bcache_wq,
+					bio,
+					hash_long((unsigned long) current, 16),
+					true,
+					false,
+					false,
+					&i.extent,
+					NULL);
+
+		ret = bio_get_user_pages(bio, i.buf,
+					 KEY_SIZE(&i.extent) << 9, 0);
+		if (ret < 0) {
+			op->iop.error = ret;
+			closure_return_with_destructor_noreturn(&op->cl,
+						bch_ioctl_write_done);
+			break;
+		}
+
+		SET_KEY_SIZE(&i.extent,
+			     KEY_SIZE(&i.extent) - bio_sectors(bio));
+		i.buf += bio_sectors(bio) << 9;
+
+		closure_call(&op->iop.cl, bch_data_insert, NULL, &op->cl);
+		closure_return_with_destructor_noreturn(&op->cl,
+							bch_ioctl_write_done);
+	}
+
+	if (atomic_dec_and_test(ref))
+		aio_complete(req, req->ki_pos, 0);
+}
+
+struct bch_ioctl_list_keys_op {
+	struct bch_ioctl_list_keys	i;
+	struct btree_op			op;
+};
+
+static int bch_ioctl_list_keys_fn(struct btree_op *b_op, struct btree *b,
+				  struct bkey *k)
+{
+	struct bch_ioctl_list_keys_op *op = container_of(b_op,
+				struct bch_ioctl_list_keys_op, op);
+	BKEY_PADDED(k) tmp;
+
+	if (bkey_cmp(&START_KEY(k), &op->i.end) >= 0)
+		return MAP_DONE;
+
+	if (!(op->i.flags & BCH_IOCTL_LIST_VALUES)) {
+		tmp.k = *k;
+		k = &tmp.k;
+		bch_set_val_u64s(k, 0);
+	}
+
+	if (b->keys.ops->is_extents) {
+		if (k != &tmp.k) {
+			bkey_copy(&tmp.k, k);
+			k = &tmp.k;
+		}
+
+		if (bkey_cmp(&op->i.start, &START_KEY(k)) > 0)
+			bch_cut_front(&op->i.start, k);
+
+		if (bkey_cmp(&op->i.end, k) <= 0)
+			bch_cut_back(&op->i.end, k);
+
+		if (!KEY_SIZE(k))
+			return MAP_CONTINUE;
+	}
+
+	if (op->i.keys_found + KEY_U64s(k) >
+	    op->i.buf_size / sizeof(u64))
+		return -ENOSPC;
+
+	if (copy_to_user((u64 * __user) op->i.buf + op->i.keys_found,
+			 k, bkey_bytes(k)))
+		return -EFAULT;
+
+	op->i.keys_found += KEY_U64s(k);
+	return MAP_CONTINUE;
+}
+
+static int __bch_list_keys(struct cache_set *c,
+			   struct bch_ioctl_list_keys_op *op)
+{
+	int ret;
+
+	if (op->i.btree_id != BTREE_ID_EXTENTS &&
+	    op->i.btree_id != BTREE_ID_INODES)
+		return -EINVAL;
+
+	bch_btree_op_init(&op->op, -1);
+	ret = bch_btree_map_keys(&op->op, c, op->i.btree_id,
+				 PRECEDING_KEY(&op->i.start),
+				 bch_ioctl_list_keys_fn, 0);
+
+	return ret < 0 ? ret : 0;
+}
+
+int bch_list_keys(struct cache_set *c, unsigned btree_id,
+		  struct bkey *start, struct bkey *end,
+		  struct bkey *buf, size_t buf_size,
+		  unsigned flags, unsigned *keys_found)
+{
+	struct bch_ioctl_list_keys_op op;
+	mm_segment_t fs;
+	int ret;
+
+	fs = get_fs();
+	set_fs(KERNEL_DS);
+
+	memset(&op, 0, sizeof(op));
+
+	op.i.btree_id	= btree_id;
+	op.i.flags	= flags;
+	op.i.start	= *start;
+	op.i.end	= *end;
+	op.i.buf	= (unsigned long) buf;
+	op.i.buf_size	= buf_size;
+
+	ret = __bch_list_keys(c, &op);
+	*keys_found = op.i.keys_found;
+
+	set_fs(fs);
+
+	return ret;
+}
+EXPORT_SYMBOL(bch_list_keys);
+
+static long bch_ioctl_list_keys(struct cache_set *c, unsigned long arg)
+{
+	struct bch_ioctl_list_keys __user *user_i = (void __user *) arg;
+	struct bch_ioctl_list_keys_op op;
+	int ret;
+
+	memset(&op, 0, sizeof(op));
+
+	if (copy_from_user(&op.i, user_i, sizeof(op.i)))
+		return -EFAULT;
+
+	op.i.keys_found = 0;
+
+	ret = __bch_list_keys(c, &op);
+	if (put_user(op.i.keys_found, &user_i->keys_found))
+		return -EFAULT;
+
+	return ret;
+}
+
+/* Inodes */
+
+static long bch_ioctl_inode_update(struct cache_set *c, unsigned long arg)
+{
+	struct bch_ioctl_inode_update __user *user_i =
+		(void __user *) arg;
+	struct bch_ioctl_inode_update i;
+
+	if (copy_from_user(&i, user_i, sizeof(i)))
+		return -EFAULT;
+
+	bch_inode_update(c, &i.inode.i_inode);
+
+	return 0;
+}
+
+static long bch_ioctl_inode_create(struct cache_set *c, unsigned long arg)
+{
+	struct bch_ioctl_inode_create __user *user_i =
+		(void __user *) arg;
+	struct bch_ioctl_inode_create i;
+	int ret;
+
+	if (copy_from_user(&i, user_i, sizeof(i)))
+		return -EFAULT;
+
+	ret = bch_inode_create(c, &i.inode.i_inode, 0, BLOCKDEV_INODE_MAX,
+			       &c->unused_inode_hint);
+	if (ret)
+		return ret;
+
+	if (copy_to_user(&user_i->inode, &i.inode, sizeof(i.inode))) {
+		bch_inode_rm(c, KEY_INODE(&i.inode.i_inode.i_key));
+		return -EFAULT;
+	}
+
+	return 0;
+}
+
+struct inode_delete_work {
+	struct work_struct	work;
+	struct kiocb		*req;
+	struct cache_set	*c;
+	u64			inum;
+};
+
+static void bch_ioctl_inode_delete_work(struct work_struct *work)
+{
+	struct inode_delete_work *w =
+		container_of(work, struct inode_delete_work, work);
+
+	bch_inode_rm(w->c, w->inum);
+	aio_complete(w->req, 0, 0);
+	kfree(w);
+}
+
+/* XXX: doesn't return errors */
+static void bch_ioctl_inode_delete(struct kiocb *req, struct cache_set *c,
+				   unsigned long arg)
+{
+	struct bch_ioctl_inode_delete __user *user_i =
+		(void __user *) arg;
+	struct bch_ioctl_inode_delete i;
+	struct inode_delete_work *w;
+
+	if (copy_from_user(&i, user_i, sizeof(i))) {
+		aio_complete(req, -EFAULT, 0);
+		return;
+	}
+
+	w = kzalloc(sizeof(w), GFP_NOIO);
+	if (!w) {
+		aio_complete(req, -ENOMEM, 0);
+		return;
+	}
+
+	INIT_WORK(&w->work, bch_ioctl_inode_delete_work);
+	w->req = req;
+	w->c = c;
+	w->inum = i.inum;
+	queue_work(system_long_wq, &w->work);
+}
+
+static long bch_ioctl_blockdev_find_by_uuid(struct cache_set *c, unsigned long arg)
+{
+	struct bch_ioctl_blockdev_find_by_uuid __user *user_i =
+		(void __user *) arg;
+	uuid_le uuid;
+	struct bch_inode_blockdev inode;
+
+	if (copy_from_user(&uuid, user_i->uuid, sizeof(user_i->uuid)))
+		return -EFAULT;
+
+	if (bch_blockdev_inode_find_by_uuid(c, &uuid, &inode))
+		return -ENOENT;
+
+	if (copy_to_user(&user_i->inode, &inode, sizeof(inode)))
+		return -EFAULT;
+
+	return 0;
+}
+
+struct bch_ioctl_copy_op {
+	struct bch_ioctl_copy	i;
+	struct btree_op		op;
+	struct keylist		keys;
+	u64			copied;
+};
+
+static int bch_ioctl_copy_fn(struct btree_op *b_op, struct btree *b,
+			     struct bkey *k)
+{
+	struct bch_ioctl_copy_op *op = container_of(b_op,
+					struct bch_ioctl_copy_op, op);
+
+	/* XXX: on hole, do what bch_data_invalidate() does */
+
+	if (bkey_cmp(&START_KEY(k),
+		     &KEY(op->i.src_inode,
+			  op->i.src_offset + op->i.sectors, 0)) >= 0)
+		return MAP_DONE;
+
+	if (bkey_cmp(k, &KEY(op->i.src_inode,
+			     op->i.src_offset + op->copied, 0)) <= 0)
+		return MAP_CONTINUE;
+
+	/* If memory alloc fails, just insert what we've slurped up so far */
+	if (bch_keylist_realloc(&op->keys, KEY_U64s(k)))
+		return MAP_DONE;
+
+	bkey_copy(op->keys.top, k);
+	k = op->keys.top;
+
+	bch_cut_front(&KEY(op->i.src_inode, op->i.src_offset + op->copied, 0), k);
+	bch_cut_back(&KEY(op->i.src_inode, op->i.src_offset + op->i.sectors, 0), k);
+
+	op->copied = KEY_OFFSET(k) - op->i.src_offset;
+
+	SET_KEY_INODE(k, op->i.dst_inode);
+	SET_KEY_OFFSET(k, op->i.dst_offset + op->copied);
+
+	bch_keylist_push(&op->keys);
+
+	if (op->copied == op->i.sectors)
+		return MAP_DONE;
+
+	return MAP_CONTINUE;
+}
+
+static long bch_copy(struct cache_set *c, unsigned long arg)
+{
+	struct bch_ioctl_copy __user *user_i = (void __user *) arg;
+	struct bch_ioctl_copy_op op;
+
+	bch_btree_op_init(&op.op, -1);
+	bch_keylist_init(&op.keys);
+	op.copied = 0;
+
+	if (copy_from_user(&op.i, user_i, sizeof(op.i)))
+		return -EFAULT;
+
+	if (op.i.sectors + op.i.src_offset < op.i.sectors ||
+	    op.i.sectors + op.i.dst_offset < op.i.sectors)
+		return -EINVAL;
+
+	while (op.copied < op.i.sectors) {
+		int ret;
+
+		ret = bch_btree_map_keys(&op.op, c, BTREE_ID_EXTENTS,
+					 &KEY(op.i.src_inode,
+					      op.i.src_offset + op.copied, 0),
+					 bch_ioctl_copy_fn, 0);
+		if (ret < 0)
+			return ret;
+
+		ret = bch_btree_insert(c, BTREE_ID_EXTENTS, &op.keys,
+				       NULL, NULL, false);
+		if (ret < 0)
+			return ret;
+
+		BUG_ON(!bch_keylist_empty(&op.keys));
+	}
+
+	return 0;
+}
+
+static long bch_query_uuid(struct cache_set *c, unsigned long arg)
+{
+	struct bch_ioctl_query_uuid __user *user_i = (void __user *) arg;
+
+	if (copy_to_user(&user_i->uuid,
+			 &c->sb.set_uuid,
+			 sizeof(user_i->uuid)))
+		return -EFAULT;
+
+	return 0;
+}
+
+static long bch_aio_ioctl(struct kiocb *req, unsigned int cmd,
+			  unsigned long arg)
+{
+	struct cache_set *c = req->ki_filp->private_data;
+
+	switch (cmd) {
+	case BCH_IOCTL_READ:
+		bch_ioctl_read(req, c, arg);
+		return -EIOCBQUEUED;
+	case BCH_IOCTL_WRITE:
+		bch_ioctl_write(req, c, arg);
+		return -EIOCBQUEUED;
+	case BCH_IOCTL_LIST_KEYS:
+		return bch_ioctl_list_keys(c, arg);
+	case BCH_IOCTL_INODE_UPDATE:
+		return bch_ioctl_inode_update(c, arg);
+	case BCH_IOCTL_INODE_CREATE:
+		return bch_ioctl_inode_create(c, arg);
+	case BCH_IOCTL_INODE_DELETE:
+		bch_ioctl_inode_delete(req, c, arg);
+		return -EIOCBQUEUED;
+	case BCH_IOCTL_BLOCKDEV_FIND_BY_UUID:
+		return bch_ioctl_blockdev_find_by_uuid(c, arg);
+	case BCH_IOCTL_COPY:
+		return bch_copy(c, arg);
+	case BCH_IOCTL_QUERY_UUID:
+		return bch_query_uuid(c, arg);
+	}
+
+	return -ENOSYS;
+}
+
+static long bch_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	struct kiocb req;
+	long ret;
+
+	init_sync_kiocb(&req, file);
+
+	ret = bch_aio_ioctl(&req, cmd, arg);
+	if (ret == -EIOCBQUEUED)
+		ret = wait_on_sync_kiocb(&req);
+
+	return ret;
+}
+
+/* Char device */
+
+void bch_cache_set_close(struct cache_set *c)
+{
+	closure_put(&c->cl);
+}
+EXPORT_SYMBOL(bch_cache_set_close);
+
+struct cache_set *bch_cache_set_open(unsigned minor)
+{
+	struct cache_set *c;
+
+	mutex_lock(&bch_register_lock);
+
+	c = idr_find(&bch_extent_minor, minor);
+	if (!c || test_bit(CACHE_SET_UNREGISTERING, &c->flags)) {
+		c = NULL;
+		goto out;
+	}
+
+	closure_get(&c->cl);
+out:
+	mutex_unlock(&bch_register_lock);
+
+	return c;
+}
+EXPORT_SYMBOL(bch_cache_set_open);
+
+static int bch_extent_release(struct inode *inode, struct file *file)
+{
+	struct cache_set *c = file->private_data;
+	bch_cache_set_close(c);
+	return 0;
+}
+
+static int bch_extent_open(struct inode *inode, struct file *file)
+{
+	struct cache_set *c;
+
+	c = bch_cache_set_open(iminor(inode));
+	if (!c)
+		return -ENXIO;
+
+	file->private_data = c;
+	return 0;
+}
+
+static struct file_operations bch_extent_store = {
+	.owner		= THIS_MODULE,
+	.aio_ioctl	= bch_aio_ioctl,
+	.unlocked_ioctl = bch_ioctl,
+	.open		= bch_extent_open,
+	.release	= bch_extent_release,
+};
+
+int bch_extent_store_init_cache_set(struct cache_set *c)
+{
+	c->minor = idr_alloc(&bch_extent_minor, c, 0, 0, GFP_KERNEL);
+	if (c->minor < 0)
+		return c->minor;
+
+	pr_info("creating dev %u", c->minor);
+
+	c->extent_device = device_create(
+			bch_extent_class, NULL,
+			MKDEV(bch_extent_major, c->minor), NULL,
+			"bcache_extent%d", c->minor);
+	if (IS_ERR(c->extent_device))
+		return PTR_ERR(c->extent_device);
+	return 0;
+}
+
+void bch_extent_store_exit_cache_set(struct cache_set *c)
+{
+	if (!IS_ERR_OR_NULL(c->extent_device))
+		device_unregister(c->extent_device);
+	if (c->minor >= 0)
+		idr_remove(&bch_extent_minor, c->minor);
+}
+
+void bch_extent_store_exit(void)
+{
+	if (bch_extent_major)
+		unregister_chrdev(bch_extent_major, "bcache_extent_store");
+}
+
+int bch_extent_store_init(void)
+{
+	bch_extent_major = register_chrdev(0, "bcache_extent_store",
+					   &bch_extent_store);
+	if (bch_extent_major < 0)
+		return bch_extent_major;
+
+	bch_extent_class = class_create(THIS_MODULE, "bcache_extent_store");
+	if (IS_ERR(bch_extent_class)) {
+		unregister_chrdev(bch_extent_major, "bcache_extent_store");
+		return PTR_ERR(bch_extent_class);
+	}
+
+	return 0;
+}

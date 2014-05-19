@@ -1290,6 +1290,8 @@ static void cache_set_flush(struct closure *cl)
 	if (!IS_ERR_OR_NULL(c->gc_thread))
 		kthread_stop(c->gc_thread);
 
+	bch_extent_store_exit_cache_set(c);
+
 	for (i = 0; i < BTREE_ID_NR; i++)
 		if (c->btree_roots[i])
 			list_add(&c->btree_roots[i]->list, &c->btree_cache);
@@ -1380,6 +1382,7 @@ struct cache_set *bch_cache_set_alloc(struct cache_sb *sb)
 
 	bch_cache_accounting_init(&c->accounting, &c->cl);
 
+	c->minor		= -1;
 	c->sb.set_uuid		= sb->set_uuid;
 	c->sb.block_size	= sb->block_size;
 	c->sb.bucket_size	= sb->bucket_size;
@@ -1645,6 +1648,10 @@ static void run_cache_set(struct cache_set *c)
 		bch_cached_dev_attach(dc, c);
 
 	flash_devs_run(c);
+
+	err = "error creating character device";
+	if (bch_extent_store_init_cache_set(c))
+		goto err;
 
 	bch_pd_controller_start(&c->moving_gc_pd);
 
@@ -2059,6 +2066,7 @@ kobj_attribute_write(reboot,		reboot_test);
 static void bcache_exit(void)
 {
 	bch_debug_exit();
+	bch_extent_store_exit();
 	bch_fs_exit();
 	bch_request_exit();
 	if (bcache_kobj)
@@ -2095,6 +2103,7 @@ static int __init bcache_init(void)
 	    sysfs_create_files(bcache_kobj, files) ||
 	    bch_request_init() ||
 	    bch_fs_init() ||
+	    bch_extent_store_init() ||
 	    bch_debug_init(bcache_kobj))
 		goto err;
 

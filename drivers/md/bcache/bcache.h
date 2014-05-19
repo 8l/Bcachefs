@@ -568,6 +568,7 @@ struct prio_clock {
 
 struct cache_set {
 	struct closure		cl;
+	int			minor;
 
 	struct list_head	list;
 	struct kobject		kobj;
@@ -750,6 +751,9 @@ struct cache_set {
 	unsigned		copy_gc_enabled:1;
 	unsigned		tiering_enabled:1;
 	unsigned		btree_scan_ratelimit;
+
+	/* device for ioctl interface */
+	struct device		*extent_device;
 
 	/* number of caches to replicate data on */
 	unsigned short		meta_replicas;
@@ -979,6 +983,8 @@ void bch_cache_set_stop(struct cache_set *);
 
 struct cache_set *bch_cache_set_open_by_uuid(uuid_le *);
 
+int bch_extent_store_init_cache_set(struct cache_set *);
+void bch_extent_store_exit_cache_set(struct cache_set *);
 struct cache_set *bch_cache_set_alloc(struct cache_sb *);
 void bch_btree_cache_free(struct cache_set *);
 int bch_btree_cache_alloc(struct cache_set *);
@@ -988,6 +994,8 @@ int bch_tiering_thread_start(struct cache_set *c);
 
 void bch_debug_exit(void);
 int bch_debug_init(struct kobject *);
+void bch_extent_store_exit(void);
+int bch_extent_store_init(void);
 void bch_fs_exit(void);
 int bch_fs_init(void);
 void bch_request_exit(void);

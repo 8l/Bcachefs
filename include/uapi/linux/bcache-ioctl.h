@@ -1,0 +1,92 @@
+#ifndef _LINUX_BCACHE_IOCTL_H
+#define _LINUX_BCACHE_IOCTL_H
+
+#include <linux/bcache.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
+/* Ioctl interface */
+
+enum BCH_IOCTL {
+	BCH_IOCTL_READ			= 3200,
+	BCH_IOCTL_WRITE			= 3201,
+	BCH_IOCTL_LIST_KEYS		= 3202,
+
+	BCH_IOCTL_INODE_UPDATE		= 3203,
+	BCH_IOCTL_INODE_CREATE		= 3204,
+	BCH_IOCTL_INODE_DELETE		= 3205,
+	BCH_IOCTL_BLOCKDEV_FIND_BY_UUID	= 3206,
+
+	BCH_IOCTL_COPY			= 3207,
+
+	BCH_IOCTL_QUERY_UUID		= 3208,
+};
+
+struct bch_ioctl_read {
+	__u64			inode;
+	__u64			offset;		/* sectors */
+	__u64			sectors;
+
+	__u64			buf;
+};
+
+struct bch_ioctl_write {
+	struct bkey		extent;
+	__u64			buf;
+};
+
+struct bch_ioctl_copy {
+	__u64			src_inode;
+	__u64			src_offset;		/* sectors */
+
+	__u64			dst_inode;
+	__u64			dst_offset;		/* sectors */
+
+	__u64			sectors;
+};
+
+struct bch_ioctl_list_keys {
+	__u32			btree_id;
+	__u32			flags;
+#define BCH_IOCTL_LIST_VALUES		(1 << 0)
+
+	struct bkey		start;
+	struct bkey		end;
+
+	__u64			buf;
+	__u32			buf_size;	/* bytes */
+	__u32			keys_found;	/* u64s */
+};
+
+/* XXX: should not be blockdev inode specific */
+
+struct bch_ioctl_inode_update {
+	struct bch_inode_blockdev inode;
+};
+
+struct bch_ioctl_inode_create {
+	struct bch_inode_blockdev inode;
+};
+
+struct bch_ioctl_inode_delete {
+	__u64			inum;
+};
+
+struct bch_ioctl_blockdev_find_by_uuid {
+	__u8			uuid[16];
+	struct bch_inode_blockdev inode;
+};
+
+/* Returns cache set uuid */
+struct bch_ioctl_query_uuid {
+	uuid_le			uuid;
+};
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _LINUX_BCACHE_IOCTL_H */

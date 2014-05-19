@@ -338,6 +338,7 @@ start:		bv->bv_len	= min_t(size_t, PAGE_SIZE - bv->bv_offset,
 		size -= bv->bv_len;
 	}
 }
+EXPORT_SYMBOL(bch_bio_map);
 
 /*
  * Portions Copyright (c) 1996-2001, PostgreSQL Global Development Group (Any

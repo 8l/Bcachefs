@@ -333,6 +333,7 @@ void bch_data_insert(struct closure *cl)
 	bio_get(op->bio);
 	bch_data_insert_start(cl);
 }
+EXPORT_SYMBOL(bch_data_insert);
 
 /* Cache promotion */
 

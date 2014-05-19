@@ -196,16 +196,6 @@ static inline void set_gc_sectors(struct cache_set *c)
 
 /* Recursing down the btree */
 
-struct btree_op {
-	/* for waiting on btree reserve in btree_split() */
-	wait_queue_t		wait;
-
-	/* Btree level at which we start taking write locks */
-	short			lock;
-
-	unsigned		insert_collision:1;
-};
-
 static inline void bch_btree_op_init(struct btree_op *op, int write_lock_level)
 {
 	memset(op, 0, sizeof(struct btree_op));

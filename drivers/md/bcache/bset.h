@@ -1,6 +1,7 @@
 #ifndef _BCACHE_BSET_H
 #define _BCACHE_BSET_H
 
+#include <linux/bcache-kernel.h>
 #include <linux/bcache.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
@@ -476,75 +477,6 @@ static inline bool bch_bkey_equal_header(const struct bkey *l,
 		KEY_U64s(l) == KEY_U64s(r) &&
 		KEY_CSUM(l) == KEY_CSUM(r));
 }
-
-/* Keylists */
-
-struct keylist {
-	union {
-		struct bkey		*keys;
-		uint64_t		*keys_p;
-	};
-	union {
-		struct bkey		*top;
-		uint64_t		*top_p;
-	};
-
-	/* Enough room for btree_split's keys without realloc */
-#define KEYLIST_INLINE		16
-	uint64_t		inline_keys[KEYLIST_INLINE];
-};
-
-static inline void bch_keylist_init(struct keylist *l)
-{
-	l->top_p = l->keys_p = l->inline_keys;
-}
-
-static inline void bch_keylist_init_single(struct keylist *l, struct bkey *k)
-{
-	l->keys = k;
-	l->top = bkey_next(k);
-}
-
-static inline void bch_keylist_push(struct keylist *l)
-{
-	l->top = bkey_next(l->top);
-}
-
-static inline void bch_keylist_add(struct keylist *l, struct bkey *k)
-{
-	bkey_copy(l->top, k);
-	bch_keylist_push(l);
-}
-
-static inline bool bch_keylist_empty(struct keylist *l)
-{
-	return l->top == l->keys;
-}
-
-static inline void bch_keylist_reset(struct keylist *l)
-{
-	l->top = l->keys;
-}
-
-static inline void bch_keylist_free(struct keylist *l)
-{
-	if (l->keys_p != l->inline_keys)
-		kfree(l->keys_p);
-}
-
-static inline size_t bch_keylist_nkeys(struct keylist *l)
-{
-	return l->top_p - l->keys_p;
-}
-
-static inline size_t bch_keylist_bytes(struct keylist *l)
-{
-	return bch_keylist_nkeys(l) * sizeof(uint64_t);
-}
-
-struct bkey *bch_keylist_pop(struct keylist *);
-void bch_keylist_pop_front(struct keylist *);
-int bch_keylist_realloc(struct keylist *, unsigned);
 
 /* Debug stuff */
 

@@ -59,6 +59,7 @@ static int bcache_major;
 static DEFINE_IDA(bcache_minor);
 static wait_queue_head_t unregister_wait;
 struct workqueue_struct *bcache_wq, *bcache_io_wq;
+EXPORT_SYMBOL(bcache_wq);
 
 #define BTREE_MAX_PAGES		(256 * 1024 / PAGE_SIZE)
 
@@ -1753,6 +1754,7 @@ out:
 
 	return c;
 }
+EXPORT_SYMBOL(bch_cache_set_open_by_uuid);
 
 /* Cache device */
 

@@ -10,70 +10,7 @@ struct cachedd_dev;
 struct bcache_device;
 struct kmem_cache;
 
-struct data_insert_op {
-	struct closure		cl;
-	struct cache_set	*c;
-	struct workqueue_struct *wq;
-	struct bio		*bio;
-
-	uint16_t		write_point;
-	short			error;
-
-	union {
-		uint16_t	flags;
-
-	struct {
-		unsigned	wait:1;
-		unsigned	bypass:1;
-		unsigned	flush:1;
-		unsigned	replace:1;
-
-		unsigned	tier:2;
-		unsigned	moving_gc:1;
-
-		unsigned	replace_collision:1;
-		unsigned	insert_data_done:1;
-	};
-	};
-
-	struct open_bucket	*open_buckets[2];
-
-	struct keylist		insert_keys;
-	BKEY_PADDED(insert_key);
-	BKEY_PADDED(replace_key);
-};
-
-static inline void bch_data_insert_op_init(struct data_insert_op *op,
-					   struct cache_set *c,
-					   struct workqueue_struct *wq,
-					   struct bio *bio,
-					   unsigned write_point,
-					   bool wait, bool bypass, bool flush,
-					   struct bkey *insert_key,
-					   struct bkey *replace_key)
-{
-	op->c		= c;
-	op->wq		= wq;
-	op->bio		= bio;
-	op->write_point	= write_point;
-	op->error	= 0;
-	op->flags	= 0;
-	op->wait	= wait;
-	op->bypass	= bypass;
-	op->flush	= flush;
-
-	bch_keylist_init(&op->insert_keys);
-	bkey_copy(&op->insert_key, insert_key);
-
-	if (replace_key) {
-		op->replace = true;
-		bkey_copy(&op->replace_key, replace_key);
-	}
-}
-
 unsigned bch_get_congested(struct cache_set *);
-int bch_read(struct cache_set *, struct bio *, u64);
-void bch_data_insert(struct closure *cl);
 
 void bch_cached_dev_request_init(struct cached_dev *dc);
 void bch_flash_dev_request_init(struct bcache_device *d);

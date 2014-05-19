@@ -178,6 +178,7 @@
 #define pr_fmt(fmt) "bcache: %s() " fmt "\n", __func__
 
 #include <linux/bcache.h>
+#include <linux/bcache-kernel.h>
 #include <linux/bio.h>
 #include <linux/closure.h>
 #include <linux/kobject.h>
@@ -758,14 +759,6 @@ struct cache_set {
 	struct hlist_head	bucket_hash[1 << BUCKET_HASH_BITS];
 };
 
-struct bbio {
-	unsigned		submit_time_us;
-	struct bkey		key;
-	uint64_t		pad;
-	/* Only ever have a single pointer (the one we're doing io to/from) */
-	struct bio		bio;
-};
-
 #define INITIAL_PRIO		USHRT_MAX
 
 #define btree_bytes(c)		((c)->btree_pages * PAGE_SIZE)
@@ -956,7 +949,7 @@ void bch_write_bdev_super(struct cached_dev *, struct closure *);
 
 struct bcache_device *bch_dev_get_by_inode(struct cache_set *c, uint64_t inode);
 
-extern struct workqueue_struct *bcache_wq, *bcache_io_wq;
+extern struct workqueue_struct *bcache_io_wq;
 extern const char * const bch_cache_modes[];
 extern struct mutex bch_register_lock;
 extern struct list_head bch_cache_sets;

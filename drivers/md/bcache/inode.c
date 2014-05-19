@@ -89,6 +89,7 @@ int bch_inode_update(struct cache_set *c, struct bch_inode *inode)
 	bch_keylist_init_single(&keys, &inode->i_key);
 	return bch_btree_insert(c, BTREE_ID_INODES, &keys, NULL, NULL);
 }
+EXPORT_SYMBOL(bch_inode_update);
 
 struct inode_rm_op {
 	struct btree_op		op;

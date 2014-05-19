@@ -224,6 +224,14 @@ do {								\
 		_i->i_inode_format = BCH_INODE_BLOCKDEV;	\
 } while (0)
 
+/* Dirents */
+
+struct bch_dirent {
+	struct bkey		d_key;
+	__u64			d_inum;
+	__u8			d_name[];
+};
+
 #define BKEY_PAD_PTRS		4
 
 #define BKEY_PADDED(key)					\
@@ -379,7 +387,7 @@ static inline __u64 bset_magic(struct cache_sb *sb)
 enum btree_id {
 	BTREE_ID_EXTENTS		= 0,
 	BTREE_ID_INODES			= 1,
-	BTREE_ID_DIRS			= 2,
+	BTREE_ID_DIRENTS		= 2,
 	BTREE_ID_NR			= 3,
 
 	BTREE_ID_UUIDS			= 255,

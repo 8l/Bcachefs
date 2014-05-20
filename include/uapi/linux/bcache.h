@@ -276,6 +276,22 @@ struct bch_dirent {
 	__u8			d_name[];
 };
 
+/* Xattrs */
+
+#define BCH_XATTR_INDEX_USER			0
+#define BCH_XATTR_INDEX_POSIX_ACL_ACCESS	1
+#define BCH_XATTR_INDEX_POSIX_ACL_DEFAULT	2
+#define BCH_XATTR_INDEX_TRUSTED			3
+#define BCH_XATTR_INDEX_SECURITY	        4
+
+struct bch_xattr {
+	struct bkey		x_key;
+	__u8			x_type;
+	__u8			x_name_len;
+	__u16			x_val_len;
+	__u8			x_name[];
+};
+
 #define __BKEY_PADDED(key, pad)					\
 	struct { struct bkey key; __u64 key ## _pad[pad]; }
 
@@ -435,7 +451,8 @@ enum btree_id {
 	BTREE_ID_EXTENTS		= 0,
 	BTREE_ID_INODES			= 1,
 	BTREE_ID_DIRENTS		= 2,
-	BTREE_ID_NR			= 3,
+	BTREE_ID_XATTRS			= 3,
+	BTREE_ID_NR			= 4,
 };
 
 struct jset_keys {

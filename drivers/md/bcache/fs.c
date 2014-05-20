@@ -6,9 +6,11 @@
 #include "extents.h"
 #include "inode.h"
 #include "request.h"
+#include "xattr.h"
 
 #include "linux/buffer_head.h"
 #include "linux/statfs.h"
+#include "linux/xattr.h"
 
 struct bch_inode_info {
 	struct bch_inode	inode;
@@ -481,10 +483,16 @@ const struct file_operations bch_file_operations = {
 
 const struct inode_operations bch_file_inode_operations = {
 	.setattr	= bch_setattr,
-//	.get_acl	= bch_get_acl,
 	.fiemap		= bch_fiemap,
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
+	.listxattr	= bch_xattr_list,
+	.removexattr	= generic_removexattr,
+#if 0
+	.get_acl	= bch_get_acl,
+	.set_acl	= bch_set_acl,
+#endif
 };
-
 static const struct inode_operations bch_dir_inode_operations = {
 	.lookup		= bch_lookup,
 	.create		= bch_create,
@@ -496,8 +504,15 @@ static const struct inode_operations bch_dir_inode_operations = {
 	.mknod		= bch_mknod,
 	.rename		= bch_rename,
 	.setattr	= bch_setattr,
-//	.get_acl	= bch_get_acl,
 	.tmpfile	= bch_tmpfile,
+	.setxattr	= generic_setxattr,
+	.getxattr	= generic_getxattr,
+	.listxattr	= bch_xattr_list,
+	.removexattr	= generic_removexattr,
+#if 0
+	.get_acl	= bch_get_acl,
+	.set_acl	= bch_set_acl,
+#endif
 };
 
 static const struct file_operations bch_dir_file_operations = {
@@ -1086,6 +1101,7 @@ static struct dentry *bch_mount(struct file_system_type *fs_type,
 	sb->s_blocksize_bits	= ilog2(sb->s_blocksize);
 	sb->s_maxbytes		= MAX_LFS_FILESIZE;
 	sb->s_op		= &bch_super_operations;
+	sb->s_xattr		= bch_xattr_handlers;
 	sb->s_magic		= BCACHE_SB_MAGIC;
 	sb->s_time_gran		= 1;
 	sb->s_fs_info		= c;

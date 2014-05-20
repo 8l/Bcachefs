@@ -337,6 +337,9 @@ static int bch_readdir_fn(struct btree_op *b_op, struct btree *b,
 
 	pr_debug("emitting %s", dirent->d_name);
 
+	/*
+	 * XXX: dir_emit() can fault and block, while we're holding locks
+	 */
 	if (!dir_emit(op->ctx, dirent->d_name, len,
 		      dirent->d_inum, DT_UNKNOWN))
 		return MAP_DONE;

@@ -9,7 +9,6 @@ struct create_op {
 	struct btree_op		op;
 	struct bch_inode	 *inode;
 	u64			max;
-	u64			search;
 };
 
 static int bch_inode_create_fn(struct btree_op *b_op, struct btree *b,
@@ -19,20 +18,16 @@ static int bch_inode_create_fn(struct btree_op *b_op, struct btree *b,
 	struct keylist keys;
 	int ret;
 
-	if (k ? op->search < KEY_INODE(k)
-	      : op->search <= KEY_INODE(&b->key))
-		goto insert;
+	/* slot used? */
+	if (bch_val_u64s(k))
+		return MAP_CONTINUE;
 
-	op->search = (k ? KEY_INODE(k) : KEY_INODE(&b->key)) + 1;
+	/* hole: */
 
-	return MAP_CONTINUE;
-insert:
-	/* Found a gap */
-
-	if (op->max && op->search >= op->max)
+	if (op->max && KEY_INODE(k) >= op->max)
 		return -ENOSPC;
 
-	SET_KEY_INODE(&op->inode->i_key, op->search);
+	bkey_copy_key(&op->inode->i_key, k);
 
 	pr_debug("inserting inode %llu (size %llu)",
 		 KEY_INODE(&op->inode->i_key), KEY_U64s(&op->inode->i_key));
@@ -61,17 +56,16 @@ int bch_inode_create(struct cache_set *c, struct bch_inode *inode,
 	bch_btree_op_init(&op.op, 0);
 	op.inode	= inode;
 	op.max		= max;
-	op.search	= *hint;
 again:
 	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_INODES,
-				 &KEY(op.search, 0, 0),
-				 bch_inode_create_fn, MAP_END_KEY);
+				 &KEY(*hint, 0, 0),
+				 bch_inode_create_fn, MAP_HOLES);
 	if (ret == MAP_CONTINUE)
 		ret = -ENOSPC;
 
 	if (ret == -ENOSPC && !searched_from_start) {
 		/* Retry from start */
-		op.search = min;
+		*hint = min;
 		searched_from_start = true;
 		goto again;
 	}
@@ -165,7 +159,6 @@ int bch_inode_rm(struct cache_set *c, u64 inode_nr)
 
 struct find_by_inum_op {
 	struct btree_op		op;
-	u64			inode_nr;
 	struct bch_inode	*ret;
 };
 
@@ -175,34 +168,25 @@ static int find_by_inum_fn(struct btree_op *b_op, struct btree *b,
 	struct find_by_inum_op *op = container_of(b_op,
 			struct find_by_inum_op, op);
 
-	if (KEY_INODE(k) == op->inode_nr) {
-		bkey_copy(op->ret, k);
-		return MAP_DONE;
-	} else {
+	/* hole, not found */
+	if (!bch_val_u64s(k))
 		return -ENOENT;
-	}
+
+	bkey_copy(op->ret, k);
+	return MAP_DONE;
 }
 
 int bch_inode_find_by_inum(struct cache_set *c, u64 inode_nr,
 			   struct bch_inode *ret)
 {
 	struct find_by_inum_op op;
-	int rc;
 
 	bch_btree_op_init(&op.op, 0);
-	op.inode_nr = inode_nr;
 	op.ret = ret;
 
-	rc = bch_btree_map_keys(&op.op, c, BTREE_ID_INODES,
-				 &KEY(inode_nr, 0, 0),
-				 find_by_inum_fn, 0);
-
-	pr_debug("inode %llu %sfound", inode_nr,
-		 rc == MAP_DONE ? "" : "not ");
-
-	if (rc == MAP_DONE)
-		return 0;
-	return -ENOENT;
+	return bch_btree_map_keys(&op.op, c, BTREE_ID_INODES,
+				  &KEY(inode_nr, 0, 0),
+				  find_by_inum_fn, MAP_HOLES);
 }
 
 struct find_op {

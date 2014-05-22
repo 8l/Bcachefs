@@ -53,42 +53,6 @@ static int dirent_cmp(const struct bch_dirent *d, const struct qstr *q)
 	return len - q->len ?: memcmp(d->d_name, q->name, len);
 }
 
-static int __dirent_lookup(struct bkey *k, struct bkey *search,
-			   const struct qstr *name)
-{
-	struct bch_dirent *dirent = key_to_dirent(k);
-
-	pr_debug("saw %llu:%llu (%s) -> %llu, next is %llu:%llu",
-		 KEY_INODE(k), KEY_OFFSET(k),
-		 dirent->d_name, dirent->d_inum,
-		 KEY_INODE(search), KEY_OFFSET(search));
-
-	if (bkey_cmp(k, search) < 0) {
-		pr_debug("k < search");
-		return MAP_CONTINUE;
-	}
-
-	if (bkey_cmp(k, search) > 0) {
-		pr_debug("k > search");
-		return -ENOENT;
-	}
-
-	if (dirent_cmp(dirent, name)) {
-		pr_debug("collision (%s != %s len %u, %u)",
-			 dirent->d_name, name->name,
-			 dirent_name_bytes(dirent), name->len);
-
-		SET_KEY_OFFSET(search, KEY_OFFSET(search) + 1);
-
-		if (!KEY_OFFSET(search))
-			return -ENOSPC;
-
-		return MAP_CONTINUE;
-	}
-
-	return MAP_DONE;
-}
-
 struct create_op {
 	struct btree_op		op;
 	struct keylist		keys;
@@ -106,30 +70,23 @@ static int bch_dirent_create_fn(struct btree_op *b_op, struct btree *b,
 
 	BUG_ON(bch_keylist_empty(&op->keys));
 
-	if (!k) {
-		if (bkey_cmp(new_key, &b->key) <= 0) {
-			if (!op->update)
-				goto insert;
-			return -ENOENT;
-		}
-		return MAP_CONTINUE;
-	}
-
-	ret = __dirent_lookup(k, new_key, op->name);
-	if (ret == MAP_DONE) {
-		if (op->update)
-			goto insert;
-		return -EEXIST;
-	}
-
-	if (ret == -ENOENT) {
+	/* hole? */
+	if (!bch_val_u64s(k)) {
 		if (!op->update)
 			goto insert;
 		return -ENOENT;
 	}
 
-	return ret;
+	/* collision? */
+	if (dirent_cmp(key_to_dirent(k), op->name))
+		return MAP_CONTINUE;
+
+	/* found: */
+	if (!op->update)
+		return -EEXIST;
 insert:
+	bkey_copy_key(new_key, k);
+
 	ret = bch_btree_insert_node(b, b_op, &op->keys, NULL, NULL);
 	BUG_ON(!ret && !bch_keylist_empty(&op->keys));
 
@@ -178,7 +135,7 @@ static int __bch_dirent_create(struct cache_set *c, u64 dir_inum,
 	bch_keylist_push(&op.keys);
 
 	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS, k,
-				 bch_dirent_create_fn, MAP_END_KEY);
+				 bch_dirent_create_fn, MAP_HOLES);
 
 	if (!ret)
 		pr_debug("added %llu:%s parent %llu",
@@ -204,7 +161,6 @@ int bch_dirent_update(struct cache_set *c, u64 dir_inum,
 
 struct delete_op {
 	struct btree_op		op;
-	struct bkey		search;
 	const struct qstr	*name;
 };
 
@@ -212,18 +168,33 @@ static int bch_dirent_delete_fn(struct btree_op *b_op, struct btree *b,
 				struct bkey *k)
 {
 	struct delete_op *op = container_of(b_op, struct delete_op, op);
+	struct keylist keys;
 	int ret;
 
-	ret = __dirent_lookup(k, &op->search, op->name);
-	if (ret == MAP_DONE) {
-		struct keylist keys;
+	/* hole, not found */
+	if (!bch_val_u64s(k))
+		return -ENOENT;
 
-		SET_KEY_DELETED(&op->search, true);
-		bch_keylist_init_single(&keys, &op->search);
+	/* collision? */
+	if (dirent_cmp(key_to_dirent(k), op->name))
+		return MAP_CONTINUE;
 
-		ret = bch_btree_insert_node(b, b_op, &keys, NULL, NULL);
-		BUG_ON(!ret && !bch_keylist_empty(&keys));
-	}
+	/*
+	 * XXX
+	 * XXX
+	 * XXX
+	 *
+	 * may need to insert a whiteout (this is a hash table with linear
+	 * probing)
+	 */
+
+	bch_keylist_init(&keys);
+	bkey_copy(keys.top, k);
+	SET_KEY_DELETED(keys.top, true);
+	bch_keylist_push(&keys);
+
+	ret = bch_btree_insert_node(b, b_op, &keys, NULL, NULL);
+	BUG_ON(!ret && !bch_keylist_empty(&keys));
 
 	return ret;
 }
@@ -232,20 +203,18 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 		      const struct qstr *name)
 {
 	struct delete_op op;
+	u64 hash = bch_dirent_hash(name);
 	int ret;
 
 	bch_btree_op_init(&op.op, 0);
-
-	op.search = KEY(dir_inum, bch_dirent_hash(name), 0);
 	op.name = name;
 
 	pr_debug("deleting %llu:%llu (%s)",
-		 KEY_INODE(&op.search),
-		 KEY_OFFSET(&op.search),
-		 name->name);
+		 dir_inum, hash, name->name);
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS, &op.search,
-				 bch_dirent_delete_fn, 0);
+	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS,
+				 &KEY(dir_inum, bch_dirent_hash(name), 0),
+				 bch_dirent_delete_fn, MAP_HOLES);
 
 	pr_debug("%s %sfound", name->name, ret ? "not " : "");
 
@@ -254,7 +223,6 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 
 struct lookup_op {
 	struct btree_op		op;
-	struct bkey		search;
 	const struct qstr	*name;
 	u64			inum;
 };
@@ -264,35 +232,36 @@ static int bch_dirent_lookup_fn(struct btree_op *b_op, struct btree *b,
 {
 	struct lookup_op *op = container_of(b_op, struct lookup_op, op);
 	struct bch_dirent *dirent = key_to_dirent(k);
-	int ret;
 
-	ret = __dirent_lookup(k, &op->search, op->name);
-	if (ret == MAP_DONE) {
-		pr_debug("found (%s == %s)",
-			 dirent->d_name, op->name->name);
-		op->inum = dirent->d_inum;
-	}
+	/* hole, not found */
+	if (!bch_val_u64s(k))
+		return -ENOENT;
 
-	return ret;
+	/* collision? */
+	if (dirent_cmp(dirent, op->name))
+		return MAP_CONTINUE;
+
+	op->inum = dirent->d_inum;
+
+	return MAP_DONE;
 }
 
 u64 bch_dirent_lookup(struct cache_set *c, u64 dir_inum,
 		      const struct qstr *name)
 {
 	struct lookup_op op;
+	u64 hash = bch_dirent_hash(name);
 	int ret;
 
 	bch_btree_op_init(&op.op, -1);
-	op.search = KEY(dir_inum, bch_dirent_hash(name), 0);
 	op.name = name;
 
 	pr_debug("searching for %llu:%llu (%s)",
-		 KEY_INODE(&op.search),
-		 KEY_OFFSET(&op.search),
-		 name->name);
+		 dir_inum, hash, name->name);
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS, &op.search,
-				 bch_dirent_lookup_fn, 0);
+	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS,
+				 &KEY(dir_inum, bch_dirent_hash(name), 0),
+				 bch_dirent_lookup_fn, MAP_HOLES);
 
 	pr_debug("%s %sfound", name->name, ret ? "not " : "");
 

@@ -2279,6 +2279,30 @@ int bch_btree_insert_node(struct btree *b, struct btree_op *op,
 	}
 }
 
+/**
+ * bch_btree_insert_node_sync - like bch_btree_insert_sync but blocks on
+ * allocation
+ */
+int bch_btree_insert_node_sync(struct btree *b, struct btree_op *op,
+			       struct keylist *insert_keys,
+			       struct bkey *replace_key)
+{
+	struct closure cl;
+	int ret;
+
+	closure_init_stack(&cl);
+
+	while (1) {
+		ret = bch_btree_insert_node(b, op, insert_keys,
+					    replace_key, &cl,
+					    false);
+		if (ret == -EAGAIN)
+			closure_sync(&cl);
+		else
+			return ret;
+	}
+}
+
 /* Returns -EAGAIN if closure was put on a waitlist waiting for
  * btree node allocation */
 int bch_btree_insert_check_key(struct btree *b, struct btree_op *op,

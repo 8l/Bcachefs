@@ -81,7 +81,7 @@ void bch_keylist_pop_front(struct keylist *);
 int bch_keylist_realloc(struct keylist *, unsigned);
 
 struct btree_op {
-	/* for waiting on btree reserve in btree_split() */
+	/* for waiting on mca_lock in mca_cannibalize_lock() */
 	wait_queue_t		wait;
 
 	/* Btree level at which we start taking write locks */

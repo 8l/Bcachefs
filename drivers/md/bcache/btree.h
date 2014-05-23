@@ -228,17 +228,21 @@ void bch_btree_set_root(struct btree *);
 struct btree *bch_btree_node_alloc(struct cache_set *, struct btree_op *,
 				   int, enum btree_id, struct btree *);
 int __btree_check_reserve(struct cache_set *, struct btree_op *,
-			  enum btree_id, unsigned);
+			  enum btree_id, unsigned,
+			  struct closure *);
 struct btree *bch_btree_node_get(struct cache_set *, struct btree_op *,
 				 struct bkey *, int, enum btree_id, bool,
 				 struct btree *);
 
 int bch_btree_insert_check_key(struct btree *, struct btree_op *,
-			       struct bkey *);
+			       struct bkey *, struct closure *);
 int bch_btree_insert(struct cache_set *, enum btree_id,
-		     struct keylist *, struct bkey *, struct closure *, bool);
+		     struct keylist *, struct bkey *, struct closure *, bool,
+		     bool);
+int bch_btree_insert_sync(struct cache_set *, enum btree_id,
+			  struct keylist *, struct bkey *);
 int bch_btree_insert_node(struct btree *, struct btree_op *, struct keylist *,
-			  struct bkey *, struct closure *);
+			  struct bkey *, struct closure *, bool);
 
 int bch_gc_thread_start(struct cache_set *);
 void bch_initial_gc_finish(struct cache_set *);

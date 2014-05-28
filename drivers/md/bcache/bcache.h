@@ -981,7 +981,7 @@ bool bch_cache_set_error(struct cache_set *, const char *, ...);
 void bch_prio_write(struct cache *);
 void bch_write_bdev_super(struct cached_dev *, struct closure *);
 
-struct bcache_device *bch_dev_get_by_inode(struct cache_set *c, uint64_t inode);
+struct bcache_device *bch_dev_get_by_inode(struct cache_set *, uint64_t);
 
 extern struct workqueue_struct *bcache_io_wq;
 extern const char * const bch_cache_modes[];
@@ -1001,7 +1001,7 @@ void bch_cache_release(struct kobject *);
 
 void bcache_write_super(struct cache_set *);
 
-int bch_flash_dev_create(struct cache_set *c, uint64_t size);
+int bch_flash_dev_create(struct cache_set *, uint64_t);
 
 int bch_cached_dev_attach(struct cached_dev *, struct cache_set *);
 void bch_cached_dev_detach(struct cached_dev *);

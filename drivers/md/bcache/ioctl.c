@@ -195,6 +195,8 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 struct bch_ioctl_list_keys_op {
 	struct bch_ioctl_list_keys	i;
 	struct btree_op			op;
+
+	BKEY_PADDED(prev_key);
 };
 
 static int bch_ioctl_list_keys_fn(struct btree_op *b_op, struct btree *b,
@@ -227,6 +229,14 @@ static int bch_ioctl_list_keys_fn(struct btree_op *b_op, struct btree *b,
 
 		if (!KEY_SIZE(k))
 			return MAP_CONTINUE;
+
+		if (op->i.keys_found &&
+		    bch_bkey_try_merge(&b->keys, &op->prev_key, k)) {
+			op->i.keys_found -= KEY_U64s(&op->prev_key);
+			k = &op->prev_key;
+		} else {
+			bkey_copy(&op->prev_key, k);
+		}
 	}
 
 	if (op->i.keys_found + KEY_U64s(k) >

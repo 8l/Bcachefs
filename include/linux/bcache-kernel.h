@@ -80,19 +80,6 @@ struct bkey *bch_keylist_pop(struct keylist *);
 void bch_keylist_pop_front(struct keylist *);
 int bch_keylist_realloc(struct keylist *, unsigned);
 
-struct btree_op {
-	/* for waiting on mca_lock in mca_cannibalize_lock() */
-	wait_queue_t		wait;
-
-	/* Btree level at which we start taking write locks */
-	short			lock;
-
-	u8			iterator_invalidated;
-
-	unsigned		insert_collision:1;
-	unsigned		moving_gc:1;
-};
-
 struct data_insert_op {
 	struct closure		cl;
 	struct cache_set	*c;

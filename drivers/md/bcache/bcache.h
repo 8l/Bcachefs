@@ -198,6 +198,8 @@
 #define cache_set_init_fault(id)	named_fault(cache_set_init_##id)
 
 struct bucket {
+	/* Anyone other than the GC thread must take bucket_lock and check
+	 * c->gc_mark_valid. GC thread can modify without a lock. */
 	uint16_t	read_prio;
 	uint16_t	write_prio;
 	uint8_t		gen;
@@ -460,6 +462,7 @@ struct open_bucket {
 
 struct cache {
 	struct cache_set	*set;
+	/* Cache tier is protected by bucket_lock */
 	struct cache_sb		sb;
 	struct bio		sb_bio;
 	struct bio_vec		sb_bv[1];
@@ -493,6 +496,8 @@ struct cache {
 	 * their new gen to disk. After prio_write() finishes writing the new
 	 * gens/prios, they'll be moved to the free list (and possibly discarded
 	 * in the process)
+	 *
+	 * Protected by bucket_lock.
 	 */
 	DECLARE_FIFO(long, free)[RESERVE_NR];
 	DECLARE_FIFO(long, free_inc);
@@ -509,7 +514,11 @@ struct cache {
 	u16			min_read_prio;
 	u16			min_write_prio;
 
-	/* count of currently available buckets */
+	/*
+	 * Count of currently available buckets.
+	 *
+	 * Protected by bucket_lock.
+	 */
 	size_t			buckets_free;
 
 	DECLARE_HEAP(struct bucket *, heap);
@@ -524,6 +533,8 @@ struct cache {
 	 * open buckets used in moving garbage collection
 	 * NOTE: GC_GEN == 0 signifies no moving gc, so accessing the
 	 * gc_buckets array is always GC_GEN-1.
+	 *
+	 * Protected by bucket_lock.
 	 */
 #define NUM_GC_GENS 7
 	struct open_bucket	*gc_buckets[NUM_GC_GENS];
@@ -580,6 +591,7 @@ struct cache_tier {
 };
 
 struct prio_clock {
+	/* All fields protected by bucket_lock */
 	u16		hand;
 	u16		min_prio;
 	atomic_long_t	rescale;
@@ -658,6 +670,7 @@ struct cache_set {
 	/* ALLOCATION */
 	struct cache_tier	cache_by_alloc[CACHE_TIERS];
 	struct mutex		bucket_lock;
+	/* Protected by bucket_lock */
 	struct closure_waitlist	bucket_wait;
 
 
@@ -684,7 +697,11 @@ struct cache_set {
 	/* Counts how many sectors bch_data_insert has added to the cache */
 	atomic_t		sectors_until_gc;
 
-	/* Where in the btree gc currently is */
+	/*
+	 * Where in the btree gc currently is.
+	 *
+	 * Only accessed from the GC thread, so no lock.
+	 */
 	enum btree_id		gc_cur_btree;
 	struct bkey		gc_cur_key;
 

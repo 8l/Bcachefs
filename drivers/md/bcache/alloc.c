@@ -952,10 +952,8 @@ found:
 		b = bch_open_bucket_get(c, true, NULL);
 		if (WARN_ONCE(IS_ERR(b),
 			      "bcache: movinggc bucket allocation failed with %ld",
-			      PTR_ERR(b))) {
-			mutex_unlock(&c->bucket_lock);
+			      PTR_ERR(b)))
 			return ERR_PTR(-ENOSPC);
-		}
 
 		mutex_lock(&c->bucket_lock);
 
@@ -964,6 +962,7 @@ found:
 			      "bcache: movinggc bucket allocation failed with %ld",
 			      bucket)) {
 			mutex_unlock(&c->bucket_lock);
+			bch_open_bucket_put(c, b);
 			return ERR_PTR(-ENOSPC);
 		}
 

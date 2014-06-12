@@ -57,6 +57,18 @@ int dfault_remove_module(char *mod_name);
 	__dynamic_fault_enabled(descriptor);				\
 })
 
+#define named_fault(name)						\
+({									\
+	static struct _dfault descriptor				\
+	__used __attribute__((section("__faults"), aligned(8))) = {	\
+		.modname	= KBUILD_MODNAME,			\
+		.function	= #name,				\
+		.filename	= __FILE__,				\
+		.lineno		= __LINE__,				\
+	};								\
+	__dynamic_fault_enabled(descriptor);				\
+})
+
 #define kmalloc(...)							\
 	(dynamic_fault() ? NULL		: kmalloc(__VA_ARGS__))
 #define kzalloc(...)							\
@@ -95,6 +107,7 @@ int dfault_remove_module(char *mod_name);
 #define dfault_add_module(tab, n, modname)	0
 #define dfault_remove_module(mod)		0
 #define dynamic_fault()				0
+#define named_fault(name)			0
 
 #endif /* CONFIG_DYNAMIC_FAULT */
 

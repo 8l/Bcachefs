@@ -195,6 +195,8 @@
 
 #include <linux/dynamic_fault.h>
 
+#define cache_set_init_fault(id)	named_fault(cache_set_init_##id)
+
 struct bucket {
 	uint16_t	read_prio;
 	uint16_t	write_prio;

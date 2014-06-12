@@ -120,6 +120,9 @@ static const char *read_super(struct cache_sb *sb, struct block_device *bdev,
 	if (sb->offset != SB_SECTOR)
 		goto err;
 
+	if (cache_set_init_fault(0))
+		goto err;
+
 	if (memcmp(sb->magic, bcache_magic, 16))
 		goto err;
 
@@ -472,6 +475,9 @@ static void prio_read(struct cache *ca, uint64_t bucket)
 	struct bucket_disk *d = p->data + prios_per_bucket(ca), *end = d;
 	struct bucket *b;
 	unsigned bucket_nr = 0;
+
+	if (cache_set_init_fault(2))
+		bch_cache_set_error(ca->set, "reading prios");
 
 	ca->prio_journal_bucket = bucket;
 
@@ -1669,6 +1675,10 @@ static void run_cache_set(struct cache_set *c)
 
 	err = "error creating character device";
 	if (bch_extent_store_init_cache_set(c))
+		goto err;
+
+	err = "dynamic fault";
+	if (cache_set_init_fault(3))
 		goto err;
 
 	set_bit(CACHE_SET_RUNNING, &c->flags);

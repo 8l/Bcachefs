@@ -5,7 +5,7 @@
 #include <linux/module.h>
 #include <linux/bio.h>
 #include <linux/blkdev.h>
-#include <scsi/sg.h>		/* for struct sg_iovec */
+#include <linux/uio.h>
 
 #include "blk.h"
 
@@ -187,20 +187,22 @@ EXPORT_SYMBOL(blk_rq_map_user);
  *    unmapping.
  */
 int blk_rq_map_user_iov(struct request_queue *q, struct request *rq,
-			struct rq_map_data *map_data, const struct sg_iovec *iov,
-			int iov_count, unsigned int len, gfp_t gfp_mask)
+			struct rq_map_data *map_data,
+			const struct iov_iter *iter, gfp_t gfp_mask)
 {
 	struct bio *bio;
-	int i, read = rq_data_dir(rq) == READ;
+	int read = rq_data_dir(rq) == READ;
 	int unaligned = 0;
+	struct iov_iter i;
+	struct iovec iov;
 
-	if (!iov || iov_count <= 0)
+	if (!iter || !iter->count)
 		return -EINVAL;
 
-	for (i = 0; i < iov_count; i++) {
-		unsigned long uaddr = (unsigned long)iov[i].iov_base;
+	iov_for_each(iov, i, *iter) {
+		unsigned long uaddr = (unsigned long) iov.iov_base;
 
-		if (!iov[i].iov_len)
+		if (!iov.iov_len)
 			return -EINVAL;
 
 		/*
@@ -210,16 +212,15 @@ int blk_rq_map_user_iov(struct request_queue *q, struct request *rq,
 			unaligned = 1;
 	}
 
-	if (unaligned || (q->dma_pad_mask & len) || map_data)
-		bio = bio_copy_user_iov(q, map_data, iov, iov_count, read,
-					gfp_mask);
+	if (unaligned || (q->dma_pad_mask & iter->count) || map_data)
+		bio = bio_copy_user_iov(q, map_data, iter, read, gfp_mask);
 	else
-		bio = bio_map_user_iov(q, NULL, iov, iov_count, read, gfp_mask);
+		bio = bio_map_user_iov(q, NULL, iter, read, gfp_mask);
 
 	if (IS_ERR(bio))
 		return PTR_ERR(bio);
 
-	if (bio->bi_iter.bi_size != len) {
+	if (bio->bi_iter.bi_size != iter->count) {
 		/*
 		 * Grab an extra reference to this bio, as bio_unmap_user()
 		 * expects to be able to drop it twice as it happens on the

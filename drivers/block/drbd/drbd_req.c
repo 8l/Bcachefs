@@ -1308,6 +1308,8 @@ void drbd_make_request(struct request_queue *q, struct bio *bio)
 	struct drbd_device *device = (struct drbd_device *) q->queuedata;
 	unsigned long start_time;
 
+	blk_queue_split(q, &bio, q->bio_split);
+
 	start_time = jiffies;
 
 	/*

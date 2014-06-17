@@ -3716,6 +3716,8 @@ static int mtip_submit_request(struct blk_mq_hw_ctx *hctx, struct request *rq)
 	struct mtip_cmd *cmd = blk_mq_rq_to_pdu(rq);
 	unsigned int nents;
 
+	blk_queue_split(queue, &bio, queue->bio_split);
+
 	if (unlikely(dd->dd_flag & MTIP_DDF_STOP_IO)) {
 		if (unlikely(test_bit(MTIP_DDF_REMOVE_PENDING_BIT,
 							&dd->dd_flag))) {

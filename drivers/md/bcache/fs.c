@@ -458,11 +458,11 @@ static int bch_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	if (start + len < start)
 		return -EINVAL;
 
-	bch_btree_op_init(&op.op, -1);
+	bch_btree_op_init(&op.op, BTREE_ID_EXTENTS, -1);
 	op.fieinfo = fieinfo;
 	op.end = KEY(inode->i_ino, start + len, 0);
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_EXTENTS,
+	ret = bch_btree_map_keys(&op.op, c,
 				 &KEY(inode->i_ino, start, 0),
 				 bch_fiemap_fn, 0);
 
@@ -1022,11 +1022,10 @@ static u64 bch_count_inodes(struct cache_set *c)
 {
 	struct count_inodes_op op;
 
-	bch_btree_op_init(&op.op, -1);
+	bch_btree_op_init(&op.op, BTREE_ID_INODES, -1);
 	op.inodes = 0;
 
-	bch_btree_map_keys(&op.op, c, BTREE_ID_INODES, NULL,
-			   bch_count_inodes_fn, 0);
+	bch_btree_map_keys(&op.op, c, NULL, bch_count_inodes_fn, 0);
 
 	return op.inodes;
 }

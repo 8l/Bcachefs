@@ -110,7 +110,7 @@ static int __bch_dirent_create(struct cache_set *c, u64 dir_inum,
 				     name->len, sizeof(u64));
 	int ret;
 
-	bch_btree_op_init(&op.op, 0);
+	bch_btree_op_init(&op.op, BTREE_ID_DIRENTS, 0);
 	bch_keylist_init(&op.keys);
 	op.name = name;
 	op.update = update;
@@ -134,8 +134,7 @@ static int __bch_dirent_create(struct cache_set *c, u64 dir_inum,
 
 	bch_keylist_push(&op.keys);
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS, k,
-				 bch_dirent_create_fn, MAP_HOLES);
+	ret = bch_btree_map_keys(&op.op, c, k, bch_dirent_create_fn, MAP_HOLES);
 
 	if (!ret)
 		pr_debug("added %llu:%s parent %llu",
@@ -206,13 +205,13 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 	u64 hash = bch_dirent_hash(name);
 	int ret;
 
-	bch_btree_op_init(&op.op, 0);
+	bch_btree_op_init(&op.op, BTREE_ID_DIRENTS, 0);
 	op.name = name;
 
 	pr_debug("deleting %llu:%llu (%s)",
 		 dir_inum, hash, name->name);
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS,
+	ret = bch_btree_map_keys(&op.op, c,
 				 &KEY(dir_inum, bch_dirent_hash(name), 0),
 				 bch_dirent_delete_fn, MAP_HOLES);
 
@@ -253,13 +252,13 @@ u64 bch_dirent_lookup(struct cache_set *c, u64 dir_inum,
 	u64 hash = bch_dirent_hash(name);
 	int ret;
 
-	bch_btree_op_init(&op.op, -1);
+	bch_btree_op_init(&op.op, BTREE_ID_DIRENTS, -1);
 	op.name = name;
 
 	pr_debug("searching for %llu:%llu (%s)",
 		 dir_inum, hash, name->name);
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS,
+	ret = bch_btree_map_keys(&op.op, c,
 				 &KEY(dir_inum, bch_dirent_hash(name), 0),
 				 bch_dirent_lookup_fn, MAP_HOLES);
 
@@ -300,10 +299,10 @@ int bch_empty_dir(struct cache_set *c, u64 dir_inum)
 	struct empty_dir_op op;
 	int ret;
 
-	bch_btree_op_init(&op.op, -1);
+	bch_btree_op_init(&op.op, BTREE_ID_DIRENTS, -1);
 	op.dir_inum = dir_inum;
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS,
+	ret = bch_btree_map_keys(&op.op, c,
 				 &KEY(dir_inum, 0, 0),
 				 bch_empty_dir_fn, 0);
 
@@ -360,13 +359,13 @@ int bch_readdir(struct file *file, struct dir_context *ctx)
 	if (!dir_emit_dots(file, ctx))
 		return 0;
 
-	bch_btree_op_init(&op.op, -1);
+	bch_btree_op_init(&op.op, BTREE_ID_DIRENTS, -1);
 	op.ctx = ctx;
 	op.inum = inode->i_ino;
 
 	pr_debug("listing for %llu from %llu", op.inum, ctx->pos);
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_DIRENTS,
+	ret = bch_btree_map_keys(&op.op, c,
 				 &KEY(op.inum, ctx->pos, 0),
 				 bch_readdir_fn, 0);
 	return ret < 0 ? ret : 0;

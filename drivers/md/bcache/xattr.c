@@ -88,13 +88,13 @@ static int bch_xattr_get(struct dentry *dentry, const char *name,
 	if (strcmp(name, "") == 0)
 		return -EINVAL;
 
-	bch_btree_op_init(&op.op, -1);
+	bch_btree_op_init(&op.op, BTREE_ID_XATTRS, -1);
 	op.type		= type;
 	op.name		= (struct qstr) QSTR_INIT(name, strlen(name));
 	op.buffer	= buffer;
 	op.size		= size;
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_XATTRS,
+	ret = bch_btree_map_keys(&op.op, c,
 				 &KEY(dentry->d_inode->i_ino,
 				      bch_xattr_hash(&op.name), 0),
 				 bch_xattr_get_fn, MAP_HOLES);
@@ -181,14 +181,14 @@ static int bch_xattr_set(struct dentry *dentry, const char *name,
 	struct xattr_set_op op;
 	int ret;
 
-	bch_btree_op_init(&op.op, 0);
+	bch_btree_op_init(&op.op, BTREE_ID_XATTRS, 0);
 	op.type		= type;
 	op.name		= (struct qstr) QSTR_INIT((char *) name, strlen(name));
 	op.buffer	= value;
 	op.size		= size;
 	op.flags	= flags;
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_XATTRS,
+	ret = bch_btree_map_keys(&op.op, c,
 				 &KEY(dentry->d_inode->i_ino,
 				      bch_xattr_hash(&op.name), 0),
 				 bch_xattr_set_fn, MAP_HOLES);
@@ -247,7 +247,7 @@ ssize_t bch_xattr_list(struct dentry *dentry, char *buffer, size_t buffer_size)
 	struct xattr_list_op op;
 	int ret;
 
-	bch_btree_op_init(&op.op, -1);
+	bch_btree_op_init(&op.op, BTREE_ID_XATTRS, -1);
 	op.dentry	= dentry;
 	op.inum		= dentry->d_inode->i_ino;
 	op.buffer	= buffer;
@@ -255,7 +255,7 @@ ssize_t bch_xattr_list(struct dentry *dentry, char *buffer, size_t buffer_size)
 
 	pr_debug("listing for %llu", op.inum);
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_XATTRS,
+	ret = bch_btree_map_keys(&op.op, c,
 				 &KEY(op.inum, 0, 0),
 				 bch_xattr_list_fn, 0);
 	return ret < 0 ? ret : buffer_size - op.buffer_size;

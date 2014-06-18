@@ -53,11 +53,11 @@ int bch_inode_create(struct cache_set *c, struct bch_inode *inode,
 	if (*hint == min)
 		searched_from_start = true;
 
-	bch_btree_op_init(&op.op, 0);
+	bch_btree_op_init(&op.op, BTREE_ID_INODES, 0);
 	op.inode	= inode;
 	op.max		= max;
 again:
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_INODES,
+	ret = bch_btree_map_keys(&op.op, c,
 				 &KEY(*hint, 0, 0),
 				 bch_inode_create_fn, MAP_HOLES);
 	if (ret == MAP_CONTINUE)
@@ -128,11 +128,11 @@ int bch_inode_truncate(struct cache_set *c, u64 inode_nr, u64 new_size)
 	struct inode_rm_op op;
 	int ret;
 
-	bch_btree_op_init(&op.op, 0);
+	bch_btree_op_init(&op.op, BTREE_ID_EXTENTS, 0);
 	op.inode_nr	= inode_nr;
 	op.new_size	= new_size;
 
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_EXTENTS,
+	ret = bch_btree_map_keys(&op.op, c,
 				 &KEY(inode_nr, new_size, 0),
 				 inode_truncate_fn, 0);
 	if (ret < 0)
@@ -181,10 +181,10 @@ int bch_inode_find_by_inum(struct cache_set *c, u64 inode_nr,
 {
 	struct find_by_inum_op op;
 
-	bch_btree_op_init(&op.op, 0);
+	bch_btree_op_init(&op.op, BTREE_ID_INODES, 0);
 	op.ret = ret;
 
-	return bch_btree_map_keys(&op.op, c, BTREE_ID_INODES,
+	return bch_btree_map_keys(&op.op, c,
 				  &KEY(inode_nr, 0, 0),
 				  find_by_inum_fn, MAP_HOLES);
 }
@@ -224,11 +224,11 @@ int bch_blockdev_inode_find_by_uuid(struct cache_set *c, uuid_le *uuid,
 {
 	struct find_op op;
 
-	bch_btree_op_init(&op.op, -1);
+	bch_btree_op_init(&op.op, BTREE_ID_INODES, -1);
 	op.uuid = uuid;
 	op.ret = ret;
 
-	return bch_btree_map_keys(&op.op, c, BTREE_ID_INODES, NULL,
+	return bch_btree_map_keys(&op.op, c, NULL,
 				  blockdev_inode_find_fn, 0) == MAP_DONE
 		? 0 : -ENOENT;
 }

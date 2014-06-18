@@ -260,8 +260,8 @@ static int __bch_list_keys(struct cache_set *c,
 	    op->i.btree_id != BTREE_ID_INODES)
 		return -EINVAL;
 
-	bch_btree_op_init(&op->op, -1);
-	ret = bch_btree_map_keys(&op->op, c, op->i.btree_id, &op->i.start,
+	bch_btree_op_init(&op->op, op->i.btree_id, -1);
+	ret = bch_btree_map_keys(&op->op, c, &op->i.start,
 				 bch_ioctl_list_keys_fn, 0);
 
 	return ret < 0 ? ret : 0;
@@ -471,7 +471,7 @@ static long bch_copy(struct cache_set *c, unsigned long arg)
 	struct bch_ioctl_copy __user *user_i = (void __user *) arg;
 	struct bch_ioctl_copy_op op;
 
-	bch_btree_op_init(&op.op, -1);
+	bch_btree_op_init(&op.op, BTREE_ID_EXTENTS, -1);
 	bch_keylist_init(&op.keys);
 	op.copied = 0;
 
@@ -485,7 +485,7 @@ static long bch_copy(struct cache_set *c, unsigned long arg)
 	while (op.copied < op.i.sectors) {
 		int ret;
 
-		ret = bch_btree_map_keys(&op.op, c, BTREE_ID_EXTENTS,
+		ret = bch_btree_map_keys(&op.op, c,
 					 &KEY(op.i.src_inode,
 					      op.i.src_offset + op.copied, 0),
 					 bch_ioctl_copy_fn, 0);

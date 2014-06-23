@@ -88,9 +88,6 @@ struct btree_op {
 	/* For allocating new nodes */
 	unsigned		reserve;
 
-	/* For waiting on mca_lock in mca_cannibalize_lock() */
-	wait_queue_t		wait;
-
 	/* Btree level at which we start taking write locks */
 	short			lock;
 

@@ -81,6 +81,8 @@ void bch_keylist_pop_front(struct keylist *);
 int bch_keylist_realloc(struct keylist *, unsigned);
 
 struct btree_op {
+	struct closure		cl;
+
 	enum btree_id		id;
 
 	/* For allocating new nodes */
@@ -104,6 +106,7 @@ struct data_insert_op {
 	struct workqueue_struct *wq;
 	struct bio		*bio;
 
+	/* Used internally, do not touch */
 	struct btree_op		op;
 
 	uint16_t		write_point;

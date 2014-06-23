@@ -492,8 +492,7 @@ static long bch_copy(struct cache_set *c, unsigned long arg)
 		if (ret < 0)
 			return ret;
 
-		ret = bch_btree_insert_sync(c, BTREE_ID_EXTENTS, &op.keys,
-					NULL);
+		ret = bch_btree_insert(c, BTREE_ID_EXTENTS, &op.keys, NULL);
 		if (ret < 0)
 			return ret;
 

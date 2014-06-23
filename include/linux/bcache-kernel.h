@@ -80,11 +80,31 @@ struct bkey *bch_keylist_pop(struct keylist *);
 void bch_keylist_pop_front(struct keylist *);
 int bch_keylist_realloc(struct keylist *, unsigned);
 
+struct btree_op {
+	enum btree_id		id;
+
+	/* For allocating new nodes */
+	unsigned		reserve;
+
+	/* For waiting on mca_lock in mca_cannibalize_lock() */
+	wait_queue_t		wait;
+
+	/* Btree level at which we start taking write locks */
+	short			lock;
+
+	/* State used by btree insertion is also stored here for convenience */
+	u8			iterator_invalidated;
+
+	unsigned		insert_collision:1;
+};
+
 struct data_insert_op {
 	struct closure		cl;
 	struct cache_set	*c;
 	struct workqueue_struct *wq;
 	struct bio		*bio;
+
+	struct btree_op		op;
 
 	uint16_t		write_point;
 	short			error;

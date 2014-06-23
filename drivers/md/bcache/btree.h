@@ -196,24 +196,6 @@ static inline void set_gc_sectors(struct cache_set *c)
 
 /* Recursing down the btree */
 
-struct btree_op {
-	enum btree_id		id;
-
-	/* For allocating new nodes */
-	enum alloc_reserve	reserve;
-
-	/* For waiting on mca_lock in mca_cannibalize_lock() */
-	wait_queue_t		wait;
-
-	/* Btree level at which we start taking write locks */
-	short			lock;
-
-	/* State used by btree insertion is also stored here for convenience */
-	u8			iterator_invalidated;
-
-	unsigned		insert_collision:1;
-};
-
 /**
  * @write_lock_level: -1 for read locks only
  *                    0 for write lock on leaf
@@ -265,11 +247,8 @@ struct btree *bch_btree_node_get(struct cache_set *, struct btree_op *,
 
 int bch_btree_insert_check_key(struct btree *, struct btree_op *,
 			       struct bkey *, struct closure *);
-int bch_btree_insert(struct cache_set *, enum btree_id,
-		     enum alloc_reserve, struct keylist *, struct bkey *,
-		     struct closure *, bool);
-int bch_btree_insert_sync(struct cache_set *, enum btree_id,
-			  struct keylist *, struct bkey *);
+int bch_btree_insert(struct cache_set *, enum btree_id, struct keylist *,
+		     struct bkey *);
 int bch_btree_insert_node(struct btree *, struct btree_op *, struct keylist *,
 			  struct bkey *, struct closure *, bool);
 int bch_btree_insert_node_sync(struct btree *, struct btree_op *,

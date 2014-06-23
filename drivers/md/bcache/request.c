@@ -828,7 +828,7 @@ static int cache_lookup_fn(struct btree_op *op, struct btree *b, struct bkey *k)
 
 	BUG_ON(bkey_cmp(k, &KEY(s->inode, bio->bi_iter.bi_sector, 0)) <= 0);
 
-	sectors = KEY_OFFSET(k) - bio->bi_iter.bi_sector;;
+	sectors = KEY_OFFSET(k) - bio->bi_iter.bi_sector;
 
 	ptr = bch_extent_pick_ptr(b->c, k);
 	if (ptr < 0) /* no pointers (hole), or all stale */

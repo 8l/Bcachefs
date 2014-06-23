@@ -33,7 +33,7 @@ static int bch_inode_create_fn(struct btree_op *b_op, struct btree *b,
 		 KEY_INODE(&op->inode->i_key), KEY_U64s(&op->inode->i_key));
 
 	bch_keylist_init_single(&keys, &op->inode->i_key);
-	ret = bch_btree_insert_node_sync(b, b_op, &keys, NULL);
+	ret = bch_btree_insert_node(b, b_op, &keys, NULL, false);
 
 	BUG_ON(!ret && !bch_keylist_empty(&keys));
 
@@ -118,7 +118,7 @@ static int inode_truncate_fn(struct btree_op *b_op, struct btree *b, struct bkey
 
 	bch_keylist_init_single(&keys, &erase_key);
 
-	ret = bch_btree_insert_node_sync(b, b_op, &keys, NULL);
+	ret = bch_btree_insert_node(b, b_op, &keys, NULL, false);
 
 	return ret ?: MAP_CONTINUE;
 }

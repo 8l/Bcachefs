@@ -666,22 +666,29 @@ static int bcache_device_init(struct bcache_device *d, unsigned block_size,
 	d->stripe_sectors_dirty = n < PAGE_SIZE << 6
 		? kzalloc(n, GFP_KERNEL)
 		: vzalloc(n);
-	if (!d->stripe_sectors_dirty)
+	if (!d->stripe_sectors_dirty) {
+		pr_err("cannot allocate stripe_sectors_dirty");
 		return -ENOMEM;
+	}
 
 	n = BITS_TO_LONGS(d->nr_stripes) * sizeof(unsigned long);
 	d->full_dirty_stripes = n < PAGE_SIZE << 6
 		? kzalloc(n, GFP_KERNEL)
 		: vzalloc(n);
-	if (!d->full_dirty_stripes)
+	if (!d->full_dirty_stripes) {
+		pr_err("cannot allocate full_dirty_stripes");
 		return -ENOMEM;
+	}
 
 	minor = ida_simple_get(&bcache_minor, 0, MINORMASK + 1, GFP_KERNEL);
-	if (minor < 0)
+	if (minor < 0) {
+		pr_err("cannot allocate minor");
 		return minor;
+	}
 
 	if (!(d->bio_split = bioset_create(4, offsetof(struct bbio, bio))) ||
 	    !(d->disk = alloc_disk(1))) {
+		pr_err("cannot allocate disk");
 		ida_simple_remove(&bcache_minor, minor);
 		return -ENOMEM;
 	}
@@ -695,8 +702,10 @@ static int bcache_device_init(struct bcache_device *d, unsigned block_size,
 	d->disk->private_data	= d;
 
 	q = blk_alloc_queue(GFP_KERNEL);
-	if (!q)
+	if (!q) {
+		pr_err("cannot allocate queue");
 		return -ENOMEM;
+	}
 
 	blk_queue_make_request(q, NULL);
 	d->disk->queue			= q;
@@ -835,6 +844,7 @@ int bch_cached_dev_attach(struct cached_dev *dc, struct cache_set *c)
 	s64 rtime = timekeeping_clocktai_ns();
 	char buf[BDEVNAME_SIZE];
 	bool found;
+	int ret;
 
 	bdevname(dc->bdev, buf);
 
@@ -906,8 +916,9 @@ int bch_cached_dev_attach(struct cached_dev *dc, struct cache_set *c)
 		bch_inode_update(c, &dc->disk.inode.i_inode);
 	}
 
-	if (bcache_device_attach(&dc->disk, c))
-		return -ENOMEM;
+	ret = bcache_device_attach(&dc->disk, c);
+	if (ret)
+		return ret;
 
 	list_move(&dc->list, &c->cached_devs);
 	calc_cached_dev_sectors(c);
@@ -1112,8 +1123,10 @@ static int flash_dev_run(struct cache_set *c, struct bch_inode_blockdev *inode)
 {
 	struct bcache_device *d = kzalloc(sizeof(struct bcache_device),
 					  GFP_KERNEL);
+	int ret = -ENOMEM;
+
 	if (!d)
-		return -ENOMEM;
+		return ret;
 
 	d->inode = *inode;
 
@@ -1122,10 +1135,12 @@ static int flash_dev_run(struct cache_set *c, struct bch_inode_blockdev *inode)
 
 	kobject_init(&d->kobj, &bch_flash_dev_ktype);
 
-	if (bcache_device_init(d, block_bytes(c), inode->i_inode.i_size >> 9))
+	ret = bcache_device_init(d, block_bytes(c), inode->i_inode.i_size >> 9);
+	if (ret)
 		goto err;
 
-	if (bcache_device_attach(d, c))
+	ret = bcache_device_attach(d, c);
+	if (ret)
 		goto err;
 
 	bch_flash_dev_request_init(d);
@@ -1139,7 +1154,7 @@ static int flash_dev_run(struct cache_set *c, struct bch_inode_blockdev *inode)
 	return 0;
 err:
 	kobject_put(&d->kobj);
-	return -ENOMEM;
+	return ret;
 }
 
 static int flash_dev_map_fn(struct btree_op *op, struct btree *b,
@@ -1160,11 +1175,13 @@ static int flash_dev_map_fn(struct btree_op *op, struct btree *b,
 static int flash_devs_run(struct cache_set *c)
 {
 	struct btree_op op;
+	int ret;
 
 	bch_btree_op_init(&op, BTREE_ID_INODES, -1);
 
-	if (bch_btree_map_keys(&op, c, NULL, flash_dev_map_fn, 0) < 0)
-		bch_cache_set_error(c, "can't bring up flash only volumes");
+	ret = bch_btree_map_keys(&op, c, NULL, flash_dev_map_fn, 0);
+	if (ret < 0)
+		bch_cache_set_error(c, "can't bring up flash volumes: %i", ret);
 
 	return 0;
 }

@@ -61,8 +61,7 @@ static LIST_HEAD(uncached_devices);
 static int bcache_major;
 static DEFINE_IDA(bcache_minor);
 static wait_queue_head_t unregister_wait;
-struct workqueue_struct *bcache_wq, *bcache_io_wq;
-EXPORT_SYMBOL(bcache_wq);
+struct workqueue_struct *bcache_io_wq;
 
 #define BTREE_MAX_PAGES		(256 * 1024 / PAGE_SIZE)
 
@@ -1270,10 +1269,8 @@ static void cache_set_free(struct closure *cl)
 
 	bch_bset_sort_state_free(&c->sort);
 
-	if (c->tiering_wq)
-		destroy_workqueue(c->tiering_wq);
-	if (c->btree_insert_wq)
-		destroy_workqueue(c->btree_insert_wq);
+	if (c->wq)
+		destroy_workqueue(c->wq);
 	if (c->bio_split)
 		bioset_free(c->bio_split);
 	if (c->fill_iter)
@@ -1467,8 +1464,7 @@ struct cache_set *bch_cache_set_alloc(struct cache_sb *sb)
 				bucket_pages(c))) ||
 	    !(c->fill_iter = mempool_create_kmalloc_pool(1, iter_size)) ||
 	    !(c->bio_split = bioset_create(4, offsetof(struct bbio, bio))) ||
-	    !(c->btree_insert_wq = create_workqueue("bcache_btree")) ||
-	    !(c->tiering_wq = create_workqueue("bcache_tier")) ||
+	    !(c->wq = create_workqueue("bcache")) ||
 	    bch_journal_alloc(c) ||
 	    bch_btree_cache_alloc(c) ||
 	    bch_bset_sort_state_init(&c->sort, ilog2(c->btree_pages)))
@@ -1828,9 +1824,6 @@ void bch_cache_release(struct kobject *kobj)
 		ca->set->cache[ca->sb.nr_this_dev] = NULL;
 	}
 
-	if (ca->moving_gc_wq)
-		destroy_workqueue(ca->moving_gc_wq);
-
 	if (ca->replica_set)
 		bioset_free(ca->replica_set);
 
@@ -1891,8 +1884,7 @@ static int cache_alloc(struct cache_sb *sb, struct cache *ca)
 	    !(ca->prio_buckets	= kzalloc(sizeof(uint64_t) * prio_buckets(ca) *
 					  2, GFP_KERNEL)) ||
 	    !(ca->disk_buckets	= alloc_bucket_pages(GFP_KERNEL, ca)) ||
-	    !(ca->replica_set = bioset_create(4, offsetof(struct bbio, bio))) ||
-	    !(ca->moving_gc_wq = create_workqueue("bcache_move")))
+	    !(ca->replica_set = bioset_create(4, offsetof(struct bbio, bio))))
 		return -ENOMEM;
 
 	ca->prio_last_buckets = ca->prio_buckets + prio_buckets(ca);
@@ -2148,8 +2140,6 @@ static void bcache_exit(void)
 		kobject_put(bcache_kobj);
 	if (bcache_io_wq)
 		destroy_workqueue(bcache_io_wq);
-	if (bcache_wq)
-		destroy_workqueue(bcache_wq);
 	if (bcache_major)
 		unregister_blkdev(bcache_major, "bcache");
 	unregister_reboot_notifier(&reboot);
@@ -2172,8 +2162,7 @@ static int __init bcache_init(void)
 	if (bcache_major < 0)
 		return bcache_major;
 
-	if (!(bcache_wq = create_workqueue("bcache")) ||
-	    !(bcache_io_wq = create_workqueue("bcache_io")) ||
+	if (!(bcache_io_wq = create_workqueue("bcache_io")) ||
 	    !(bcache_kobj = kobject_create_and_add("bcache", fs_kobj)) ||
 	    sysfs_create_files(bcache_kobj, files) ||
 	    bch_request_init() ||

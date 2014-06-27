@@ -530,7 +530,6 @@ struct cache {
 
 	/* Moving GC: */
 	struct task_struct	*moving_gc_thread;
-	struct workqueue_struct	*moving_gc_wq;
 	struct keybuf		moving_gc_keys;
 	struct bch_pd_controller moving_gc_pd;
 
@@ -672,7 +671,7 @@ struct cache_set {
 	struct closure_waitlist	mca_wait;
 	struct task_struct	*btree_cache_alloc_lock;
 
-	struct workqueue_struct	*btree_insert_wq;
+	struct workqueue_struct	*wq;
 
 	/* ALLOCATION */
 	struct cache_tier	cache_by_alloc[CACHE_TIERS];
@@ -737,7 +736,6 @@ struct cache_set {
 
 	/* TIERING */
 	struct task_struct	*tiering_thread;
-	struct workqueue_struct	*tiering_wq;
 	struct keybuf		tiering_keys;
 	struct bch_pd_controller tiering_pd;
 

@@ -100,7 +100,6 @@ struct btree_op {
 struct data_insert_op {
 	struct closure		cl;
 	struct cache_set	*c;
-	struct workqueue_struct *wq;
 	struct bio		*bio;
 
 	/* Used internally, do not touch */
@@ -145,7 +144,6 @@ struct data_insert_op {
 
 static inline void bch_data_insert_op_init(struct data_insert_op *op,
 					   struct cache_set *c,
-					   struct workqueue_struct *wq,
 					   struct bio *bio,
 					   unsigned write_point,
 					   bool wait, bool discard, bool flush,
@@ -153,7 +151,6 @@ static inline void bch_data_insert_op_init(struct data_insert_op *op,
 					   struct bkey *replace_key)
 {
 	op->c		= c;
-	op->wq		= wq;
 	op->bio		= bio;
 	op->write_point	= write_point;
 	op->error	= 0;
@@ -191,7 +188,5 @@ struct cache_set *bch_cache_set_open_by_uuid(uuid_le *);
 
 int bch_blockdev_inode_find_by_uuid(struct cache_set *, uuid_le *,
 				    struct bch_inode_blockdev *);
-
-extern struct workqueue_struct *bcache_wq;
 
 #endif /* _LINUX_BCACHE_OPEN_H */

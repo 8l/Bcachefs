@@ -724,7 +724,7 @@ again:
 		bio->bi_io_vec = bio->bi_inline_vecs;
 		bio->bi_max_vecs = BIO_MAX_PAGES;
 
-		bch_data_insert_op_init(&w->io->op, w->c, bcache_wq, bio,
+		bch_data_insert_op_init(&w->io->op, w->c, bio,
 					hash_long((unsigned long) current, 16),
 					true, false, false,
 					&KEY(w->inum, 0, 0), NULL);
@@ -782,7 +782,7 @@ static int bch_writepage(struct page *page, struct writeback_control *wbc)
 	bio->bi_io_vec = bio->bi_inline_vecs;
 	bio->bi_max_vecs = 1;
 
-	bch_data_insert_op_init(&io->op, c, bcache_wq, bio,
+	bch_data_insert_op_init(&io->op, c, bio,
 				hash_long((unsigned long) current, 16),
 				true, false, false,
 				&KEY(inode->i_ino, 0, 0), NULL);

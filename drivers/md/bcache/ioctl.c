@@ -161,7 +161,6 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 		bio->bi_io_vec		= bio->bi_inline_vecs;
 
 		bch_data_insert_op_init(&op->iop, c,
-					bcache_wq,
 					bio,
 					hash_long((unsigned long) current, 16),
 					true,

@@ -415,12 +415,19 @@ void bch_data_insert(struct closure *cl)
 	continue_at_nobarrier(cl, bch_data_insert_start, NULL);
 }
 
+/* Reads that race with invalidation are retried */
+static bool bch_bbio_stale(struct cache_set *c, struct bbio *b)
+{
+	return race_fault() || ptr_stale(c, &b->key, 0);
+}
+
 /* Cache promotion on read */
 
 struct cache_promote_op {
 	struct closure		cl;
 	struct bio		*orig_bio;
 	struct data_insert_op	iop;
+	bool			stale; /* was the ptr stale after the read? */
 	struct bbio		bio; /* must be last */
 };
 
@@ -432,8 +439,10 @@ static void cache_promote_done(struct closure *cl)
 	int i;
 	struct bio_vec *bv;
 
-	if (op->iop.replace_collision)
+	if (op->iop.replace_collision) {
+		trace_bcache_cache_miss_collision(c);
 		atomic_inc(&c->accounting.collector.cache_miss_collisions);
+	}
 
 	bio_for_each_segment_all(bv, op->iop.bio, i)
 		__free_page(bv->bv_page);
@@ -456,7 +465,8 @@ static void cache_promote_write(struct closure *cl)
 	bio_copy_data(op->orig_bio, bio);
 	bio_endio(op->orig_bio, op->iop.error);
 
-	if (!op->iop.error &&
+	if (!op->stale &&
+	    !op->iop.error &&
 	    !test_bit(CACHE_SET_STOPPING, &op->iop.c->flags))
 		closure_call(&op->iop.cl, bch_data_insert, NULL, cl);
 
@@ -478,14 +488,17 @@ static void cache_promote_endio(struct bio *bio, int error)
 
 	if (error)
 		op->iop.error = error;
-	else if (ptr_stale(op->iop.c, &b->key, 0)) {
-		atomic_long_inc(&op->iop.c->cache_read_races);
-		op->iop.error = -EINTR;
-	}
+	else if (bch_bbio_stale(op->iop.c, b))
+		op->stale = 1;
 
 	bch_bbio_endio(op->iop.c, bio, error, "reading from cache");
 }
 
+/**
+ * __cache_promote -- insert result of read bio into cache
+ *
+ * @orig_bio must actually be a bbio with a valid key.
+ */
 static void __cache_promote(struct cache_set *c, struct bio *orig_bio,
 			    struct bkey *replace_key, bio_end_io_t *bi_end_io)
 {
@@ -517,7 +530,8 @@ static void __cache_promote(struct cache_set *c, struct bio *orig_bio,
 		goto out_free;
 
 	closure_init(&op->cl, &c->cl);
-	op->orig_bio	= orig_bio;
+	op->orig_bio		= orig_bio;
+	op->stale		= 0;
 
 	bch_data_insert_op_init(&op->iop, c,
 				bio,
@@ -533,6 +547,8 @@ static void __cache_promote(struct cache_set *c, struct bio *orig_bio,
 	bbio = container_of(bio, struct bbio, bio);
 	bkey_copy(&bbio->key, &container_of(orig_bio, struct bbio, bio)->key);
 
+	trace_bcache_cache_promote(orig_bio);
+
 	bbio->submit_time_us = local_clock_us();
 	closure_bio_submit(bio, &op->cl);
 
@@ -545,22 +561,22 @@ out_submit:
 
 /**
  * cache_promote - promote data stored in higher tiers
+ *
+ * @bio must actually be a bbio with valid key.
  */
-static void cache_promote(struct cache_set *c, struct bio *bio,
-			  struct bkey *k)
+static bool cache_promote(struct cache_set *c, struct bio *bio,
+			  struct bkey *k, unsigned ptr)
 {
-	unsigned i;
+	struct cache *ca = PTR_CACHE(c, k, ptr);
 
-	for (i = 0; i < bch_extent_ptrs(k); i++) {
-		struct cache *ca = PTR_CACHE(c, k, i);
-
-		if (!CACHE_TIER(&ca->sb)) {
-			generic_make_request(bio);
-			return;
-		}
+	if (!CACHE_TIER(&ca->sb)) {
+		generic_make_request(bio);
+		return 0;
 	}
 
 	__cache_promote(c, bio, k, cache_promote_endio);
+	return 1;
+
 }
 
 /* Congested? */
@@ -703,6 +719,7 @@ struct bch_read_op {
 	u64			inode;
 };
 
+/* XXX: this looks a lot like cache_lookup_fn() */
 static int bch_read_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 {
 	struct bch_read_op *op = container_of(b_op,
@@ -739,15 +756,15 @@ static int bch_read_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 				      KEY_OFFSET(k) - bio->bi_iter.bi_sector),
 			   GFP_NOIO, b->c->bio_split);
 
-	bch_bkey_copy_single_ptr(&tmp.k, k, ptr);
+	bkey_copy(&tmp.k, k);
 	k = &tmp.k;
 
 	/* Trim the key to match what we're actually reading */
 	bch_cut_front(&KEY(op->inode, n->bi_iter.bi_sector, 0), k);
 	bch_cut_back(&KEY(op->inode, bio_end_sector(n), 0), k);
 
-	n->bi_iter.bi_sector	= PTR_OFFSET(k, 0);
-	n->bi_bdev		= PTR_CACHE(b->c, k, 0)->bdev;
+	n->bi_iter.bi_sector	= PTR_OFFSET(k, ptr);
+	n->bi_bdev		= PTR_CACHE(b->c, k, ptr)->bdev;
 
 	if (n != bio)
 		bio_chain(n, bio);
@@ -756,7 +773,7 @@ static int bch_read_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 
 	BUG_ON(!n->bi_end_io);
 
-	cache_promote(b->c, n, k);
+	cache_promote(b->c, n, k, ptr);
 
 	return n == bio ? MAP_DONE : MAP_CONTINUE;
 }
@@ -789,6 +806,7 @@ struct search {
 	struct closure		cl;
 
 	struct bbio		bio;
+	/* Not modified */
 	struct bio		*orig_bio;
 	struct bcache_device	*d;
 
@@ -816,7 +834,6 @@ struct search {
 	 * Mostly only used for writes. For reads, we still make use of
 	 * some trivial fields:
 	 * - c
-	 * - cl
 	 * - error
 	 */
 	struct data_insert_op	iop;
@@ -831,13 +848,12 @@ static void bch_cache_read_endio(struct bio *bio, int error)
 	/*
 	 * If the bucket was reused while our bio was in flight, we might have
 	 * read the wrong data. Set s->error but not error so it doesn't get
-	 * counted against the cache device, but we'll still reread the data
-	 * from the backing device.
+	 * counted against the cache device, but we'll still reread the data.
 	 */
 
 	if (error)
 		s->iop.error = error;
-	else if (ptr_stale(s->iop.c, &b->key, 0)) {
+	else if (bch_bbio_stale(s->iop.c, b)) {
 		atomic_long_inc(&s->iop.c->cache_read_races);
 		s->iop.error = -EINTR;
 	}
@@ -854,6 +870,7 @@ static int cache_lookup_fn(struct btree_op *op, struct btree *b, struct bkey *k)
 	struct search *s = container_of(op, struct search, op);
 	struct bio *n, *bio = &s->bio.bio;
 	struct bkey *bio_key;
+	BKEY_PADDED(k) tmp;
 	unsigned sectors;
 	int ptr;
 
@@ -875,17 +892,21 @@ static int cache_lookup_fn(struct btree_op *op, struct btree *b, struct bkey *k)
 
 	n = bio_next_split(bio, sectors, GFP_NOIO, s->d->bio_split);
 
-	bio_key = &container_of(n, struct bbio, bio)->key;
-	bch_bkey_copy_single_ptr(bio_key, k, ptr);
+	bkey_copy(&tmp.k, k);
+	k = &tmp.k;
 
-	bch_cut_front(&KEY(s->inode, n->bi_iter.bi_sector, 0), bio_key);
-	bch_cut_back(&KEY(s->inode, bio_end_sector(n), 0), bio_key);
+	/* Trim the key to match what we're actually reading */
+	bch_cut_front(&KEY(s->inode, n->bi_iter.bi_sector, 0), k);
+	bch_cut_back(&KEY(s->inode, bio_end_sector(n), 0), k);
 
-	n->bi_iter.bi_sector	= PTR_OFFSET(bio_key, 0);
-	n->bi_bdev		= PTR_CACHE(b->c, bio_key, 0)->bdev;
+	n->bi_iter.bi_sector	= PTR_OFFSET(k, ptr);
+	n->bi_bdev		= PTR_CACHE(b->c, k, ptr)->bdev;
 
 	n->bi_end_io		= bch_cache_read_endio;
 	n->bi_private		= &s->cl;
+
+	bio_key = &container_of(n, struct bbio, bio)->key;
+	bch_bkey_copy_single_ptr(bio_key, k, ptr);
 
 	/*
 	 * The bucket we're reading from might be reused while our bio
@@ -898,9 +919,10 @@ static int cache_lookup_fn(struct btree_op *op, struct btree *b, struct bkey *k)
 	 * error up anywhere).
 	 */
 	closure_get(&s->cl);
-	if (!s->bypass)
-		cache_promote(b->c, n, bio_key);
-	else
+	if (!s->bypass) {
+		if (cache_promote(b->c, n, k, ptr))
+			s->cache_miss = 1;
+	} else
 		submit_bio(0, n);
 
 	return n == bio ? MAP_DONE : MAP_CONTINUE;
@@ -995,6 +1017,7 @@ static inline struct search *search_alloc(struct bio *bio,
 	s->orig_bio		= bio;
 	s->d			= d;
 	s->recoverable		= 1;
+	s->bypass		= 0;
 	s->write		= (bio->bi_rw & REQ_WRITE) != 0;
 	s->read_dirty_data	= 0;
 	s->cache_miss		= 0;
@@ -1033,7 +1056,7 @@ static void cached_dev_read_error(struct closure *cl)
 		s->iop.error = 0;
 		do_bio_hook(s, s->orig_bio);
 
-		/* XXX: invalidate cache */
+		/* XXX: invalidate cache, don't count twice */
 
 		closure_bio_submit(bio, cl);
 	}
@@ -1109,6 +1132,8 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	ret = bch_btree_insert_check_key(b, &s->op, &replace.key);
 	if (ret)
 		return ret;
+
+	s->cache_miss = 1;
 
 	miss = bio_next_split(bio, sectors, GFP_NOIO, s->d->bio_split);
 
@@ -1358,6 +1383,40 @@ static void flash_dev_nodata(struct closure *cl)
 	continue_at(cl, search_free, NULL);
 }
 
+static void flash_dev_read_error(struct closure *cl)
+{
+	struct search *s = container_of(cl, struct search, cl);
+	struct bio *bio = &s->bio.bio;
+
+	if (s->recoverable) {
+		trace_bcache_read_retry(s->orig_bio);
+
+		s->iop.error = 0;
+		do_bio_hook(s, s->orig_bio);
+
+		/* XXX: invalidate cache, don't count twice */
+
+		closure_bio_submit(bio, cl);
+	}
+
+	continue_at(cl, search_free, NULL);
+}
+
+/* XXX: this looks a lot like cached_dev_read_done_bh() */
+static void flash_dev_read_done_bh(struct closure *cl)
+{
+	struct search *s = container_of(cl, struct search, cl);
+
+	if (s->iop.error)
+		continue_at_nobarrier(cl, flash_dev_read_error, s->iop.c->wq);
+	else if (!s->cache_miss)
+		atomic_inc(&s->iop.c->accounting.collector.cache_hits);
+	else
+		atomic_inc(&s->iop.c->accounting.collector.cache_misses);
+
+	continue_at_nobarrier(cl, search_free, NULL);
+}
+
 static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct search *s;
@@ -1392,12 +1451,12 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 					&KEY(s->inode, 0, 0), NULL);
 
 		closure_call(&s->iop.cl, bch_data_insert, NULL, cl);
+		continue_at(cl, search_free, NULL);
 	} else {
 		bch_increment_clock(d->c, bio_sectors(bio), READ);
 		closure_call(&s->op.cl, cache_lookup, NULL, cl);
+		continue_at(cl, flash_dev_read_done_bh, NULL);
 	}
-
-	continue_at(cl, search_free, NULL);
 }
 
 static int flash_dev_ioctl(struct bcache_device *d, fmode_t mode,

@@ -23,8 +23,11 @@
 #include "bcache.h"
 #include "btree.h"
 #include "debug.h"
+#include "dirent.h"
 #include "extents.h"
+#include "inode.h"
 #include "writeback.h"
+#include "xattr.h"
 
 static void sort_key_next(struct btree_iter *iter,
 			  struct btree_iter_set *i)
@@ -35,22 +38,22 @@ static void sort_key_next(struct btree_iter *iter,
 		*i = iter->data[--iter->used];
 }
 
-static bool bch_key_sort_cmp(struct btree_iter_set l,
-			     struct btree_iter_set r)
+bool bch_generic_sort_cmp(struct btree_iter_set l,
+			  struct btree_iter_set r)
 {
 	int64_t c = bkey_cmp(l.k, r.k);
 
 	return c ? c > 0 : l.k < r.k;
 }
 
-static struct bkey *bch_key_sort_fixup(struct btree_iter *iter,
-				       struct bkey *tmp)
+struct bkey *bch_generic_sort_fixup(struct btree_iter *iter,
+				    struct bkey *tmp)
 {
 	while (iter->used > 1) {
 		struct btree_iter_set *top = iter->data, *i = top + 1;
 
 		if (iter->used > 2 &&
-		    bch_key_sort_cmp(i[0], i[1]))
+		    bch_generic_sort_cmp(i[0], i[1]))
 			i++;
 
 		/*
@@ -64,9 +67,9 @@ static struct bkey *bch_key_sort_fixup(struct btree_iter *iter,
 		 * If they do compare equal, the newer key overwrote the older
 		 * key and we need to drop the older key.
 		 *
-		 * bch_key_sort_cmp() ensures that when keys compare equal the
-		 * newer key comes first; so i->k is older than top->k and we
-		 * drop i->k.
+		 * bch_generic_sort_cmp() ensures that when keys compare equal
+		 * the newer key comes first; so i->k is older than top->k and
+		 * we drop i->k.
 		 */
 
 		i->k = bkey_next(i->k);
@@ -74,16 +77,14 @@ static struct bkey *bch_key_sort_fixup(struct btree_iter *iter,
 		if (i->k == i->end)
 			*i = iter->data[--iter->used];
 
-		heap_sift(iter, i - top, bch_key_sort_cmp);
+		heap_sift(iter, i - top, bch_generic_sort_cmp);
 	}
 
 	return NULL;
 }
 
-static bool bch_key_insert_fixup(struct btree_keys *b,
-				 struct bkey *insert,
-				 struct btree_iter *iter,
-				 struct bkey *replace_key)
+bool bch_generic_insert_fixup(struct btree_keys *b, struct bkey *insert,
+			      struct btree_iter *iter, struct bkey *replace_key)
 {
 	BUG_ON(replace_key);
 
@@ -100,12 +101,6 @@ static bool bch_key_insert_fixup(struct btree_keys *b,
 
 	return false;
 }
-
-const struct btree_keys_ops bch_generic_keys_ops = {
-	.sort_cmp	= bch_key_sort_cmp,
-	.sort_fixup	= bch_key_sort_fixup,
-	.insert_fixup	= bch_key_insert_fixup,
-};
 
 /* Common among btree and extent ptrs */
 
@@ -343,10 +338,11 @@ int bch_btree_pick_ptr(struct cache_set *c, const struct bkey *k)
 	return -1;
 }
 
-const struct btree_keys_ops bch_btree_keys_ops = {
-	.sort_cmp	= bch_key_sort_cmp,
-	.sort_fixup	= bch_key_sort_fixup,
-	.insert_fixup	= bch_key_insert_fixup,
+const struct btree_keys_ops bch_btree_interior_node_ops = {
+	.sort_cmp	= bch_generic_sort_cmp,
+	.sort_fixup	= bch_generic_sort_fixup,
+	.insert_fixup	= bch_generic_insert_fixup,
+
 	.key_invalid	= bch_btree_ptr_invalid,
 	.key_bad	= bch_btree_ptr_bad,
 	.key_to_text	= bch_extent_to_text,
@@ -795,7 +791,7 @@ static bool bch_extent_merge(struct btree_keys *bk, struct bkey *l, struct bkey 
 	return true;
 }
 
-const struct btree_keys_ops bch_extent_keys_ops = {
+static const struct btree_keys_ops bch_extent_ops = {
 	.sort_cmp	= bch_extent_sort_cmp,
 	.sort_fixup	= bch_extent_sort_fixup,
 	.insert_fixup	= bch_extent_insert_fixup,
@@ -806,4 +802,11 @@ const struct btree_keys_ops bch_extent_keys_ops = {
 	.key_to_text	= bch_extent_to_text,
 	.key_dump	= bch_bkey_dump,
 	.is_extents	= true,
+};
+
+const struct btree_keys_ops *bch_btree_ops[] = {
+	[BTREE_ID_EXTENTS]	= &bch_extent_ops,
+	[BTREE_ID_INODES]	= &bch_inode_ops,
+	[BTREE_ID_DIRENTS]	= &bch_dirent_ops,
+	[BTREE_ID_XATTRS]	= &bch_xattr_ops,
 };

@@ -1,6 +1,7 @@
 
 #include "bcache.h"
 #include "btree.h"
+#include "extents.h"
 
 #include "linux/cryptohash.h"
 
@@ -52,6 +53,54 @@ static int dirent_cmp(const struct bch_dirent *d, const struct qstr *q)
 
 	return len - q->len ?: memcmp(d->d_name, q->name, len);
 }
+
+static bool bch_dirent_invalid(struct btree_keys *bk, const struct bkey *k)
+{
+	if (bkey_bytes(k) < sizeof(struct bch_dirent))
+		return true;
+
+	if (KEY_SIZE(k))
+		return true;
+
+	return false;
+}
+
+static bool bch_dirent_bad(struct btree_keys *bk, const struct bkey *k)
+{
+	return KEY_DELETED(k);
+}
+
+static void bch_dirent_to_text(char *buf, size_t size, const struct bkey *k)
+{
+	struct bch_dirent *d = key_to_dirent(k);
+	char *out = buf, *end = buf + size;
+
+#define p(...)	(out += scnprintf(out, end - out, __VA_ARGS__))
+
+	// XXX: d->d_name might not be null terminated...
+	p("%llu:%llu ver %llu: %s -> %llu",
+	  KEY_INODE(k), KEY_OFFSET(k), KEY_VERSION(k),
+	  d->d_name, d->d_inum);
+}
+
+static void bch_dirent_dump(struct btree_keys *keys, const struct bkey *k)
+{
+	char buf[80];
+
+	bch_dirent_to_text(buf, sizeof(buf), k);
+	printk(" %s\n", buf);
+}
+
+const struct btree_keys_ops bch_dirent_ops = {
+	.sort_cmp	= bch_generic_sort_cmp,
+	.sort_fixup	= bch_generic_sort_fixup,
+	.insert_fixup	= bch_generic_insert_fixup,
+
+	.key_invalid	= bch_dirent_invalid,
+	.key_bad	= bch_dirent_bad,
+	.key_to_text	= bch_dirent_to_text,
+	.key_dump	= bch_dirent_dump,
+};
 
 struct create_op {
 	struct btree_op		op;

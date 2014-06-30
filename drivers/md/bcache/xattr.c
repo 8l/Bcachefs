@@ -1,6 +1,7 @@
 
 #include "bcache.h"
 #include "btree.h"
+#include "extents.h"
 #include "xattr.h"
 
 #include "linux/cryptohash.h"
@@ -47,6 +48,50 @@ static int xattr_cmp(const struct bch_xattr *xattr, const struct qstr *q)
 
 	return len - q->len ?: memcmp(xattr->x_name, q->name, len);
 }
+
+static bool bch_xattr_invalid(struct btree_keys *bk, const struct bkey *k)
+{
+	if (bkey_bytes(k) < sizeof(struct bch_xattr))
+		return true;
+
+	if (KEY_SIZE(k))
+		return true;
+
+	return false;
+}
+
+static bool bch_xattr_bad(struct btree_keys *bk, const struct bkey *k)
+{
+	return KEY_DELETED(k);
+}
+
+static void bch_xattr_to_text(char *buf, size_t size, const struct bkey *k)
+{
+	char *out = buf, *end = buf + size;
+
+#define p(...)	(out += scnprintf(out, end - out, __VA_ARGS__))
+
+	p("%llu ver %llu", KEY_INODE(k), KEY_VERSION(k));
+}
+
+static void bch_xattr_dump(struct btree_keys *keys, const struct bkey *k)
+{
+	char buf[80];
+
+	bch_xattr_to_text(buf, sizeof(buf), k);
+	printk(" %s\n", buf);
+}
+
+const struct btree_keys_ops bch_xattr_ops = {
+	.sort_cmp	= bch_generic_sort_cmp,
+	.sort_fixup	= bch_generic_sort_fixup,
+	.insert_fixup	= bch_generic_insert_fixup,
+
+	.key_invalid	= bch_xattr_invalid,
+	.key_bad	= bch_xattr_bad,
+	.key_to_text	= bch_xattr_to_text,
+	.key_dump	= bch_xattr_dump,
+};
 
 struct xattr_get_op {
 	struct btree_op		op;

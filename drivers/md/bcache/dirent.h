@@ -1,6 +1,8 @@
 #ifndef _BCACHE_DIRENT_H
 #define _BCACHE_DIRENT_H
 
+extern const struct btree_keys_ops bch_dirent_ops;
+
 struct qstr;
 struct file;
 struct dir_context;

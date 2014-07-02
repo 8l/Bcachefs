@@ -1489,6 +1489,10 @@ struct cache_set *bch_cache_set_alloc(struct cache_sb *sb)
 	c->write_clock.hand = 1;
 	c->write_clock.min_prio = 0;
 
+	bio_list_init(&c->read_race_list);
+	spin_lock_init(&c->read_race_lock);
+	INIT_WORK(&c->read_race_work, bch_read_race_work);
+
 	return c;
 err:
 	bch_cache_set_unregister(c);

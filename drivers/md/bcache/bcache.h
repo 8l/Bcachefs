@@ -810,6 +810,12 @@ struct cache_set {
 
 #define BUCKET_HASH_BITS	14
 	struct hlist_head	bucket_hash[1 << BUCKET_HASH_BITS];
+
+	/* List of bios that are being resubmitted because they hit an
+	 * invalidated bucket */
+	struct bio_list		read_race_list;
+	struct work_struct	read_race_work;
+	spinlock_t		read_race_lock;
 };
 
 #define INITIAL_PRIO		USHRT_MAX

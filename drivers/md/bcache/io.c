@@ -114,15 +114,15 @@ void bch_submit_bbio_replicas(struct bio *bio_src, struct cache_set *c,
 	bch_submit_bbio(to_bbio(bio_src), c, k, first, punt);
 }
 
-void bch_bbio_reset(struct bbio *bio)
+void bch_bbio_reset(struct bbio *b)
 {
-	struct bvec_iter *iter = &bbio->bio.bi_iter;
+	struct bvec_iter *iter = &b->bio.bi_iter;
 
-	bio_reset(&bbio->bio);
-	iter->bi_sector		= KEY_START(&bbio->key);
-	iter->bi_size		= KEY_SIZE(&bbio->key) << 9;
-	iter->bi_idx		= bbio->bi_idx;
-	iter->bi_bvec_done	= bbio->bi_bvec_done;
+	bio_reset(&b->bio);
+	iter->bi_sector		= KEY_START(&b->key);
+	iter->bi_size		= KEY_SIZE(&b->key) << 9;
+	iter->bi_idx		= b->bi_idx;
+	iter->bi_bvec_done	= b->bi_bvec_done;
 }
 
 /* IO errors */

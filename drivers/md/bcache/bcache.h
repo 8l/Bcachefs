@@ -1004,6 +1004,7 @@ void bch_submit_bbio(struct bbio *, struct cache_set *, struct bkey *,
 		     unsigned, bool);
 void bch_submit_bbio_replicas(struct bio *, struct cache_set *,
 			      struct bkey *, unsigned long *, bool);
+void bch_bbio_reset(struct bbio *bio);
 
 __printf(2, 3)
 bool bch_cache_set_error(struct cache_set *, const char *, ...);

@@ -178,6 +178,12 @@ static inline void bch_data_insert_op_init(struct data_insert_op *op,
 }
 
 struct bbio {
+	struct cache_set	*c;
+
+	unsigned int		bi_idx;		/* current index into bvl_vec */
+
+	unsigned int            bi_bvec_done;	/* number of bytes completed in
+						   current bvec */
 	unsigned		submit_time_us;
 	struct bkey		key;
 	uint64_t		pad;

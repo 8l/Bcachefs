@@ -725,7 +725,9 @@ static int bch_read_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 	struct bch_read_op *op = container_of(b_op,
 			struct bch_read_op, op);
 	struct bio *n, *bio = op->bio;
+	struct bkey *bio_key;
 	BKEY_PADDED(k) tmp;
+	int sectors, ret;
 	int ptr = 0;
 
 	if (bkey_cmp(k, &KEY(op->inode, bio->bi_iter.bi_sector, 0)) <= 0)
@@ -752,9 +754,18 @@ static int bch_read_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 	if (ptr < 0) /* all stale? */
 		return MAP_CONTINUE;
 
-	n = bio_next_split(bio, min_t(u64, INT_MAX,
-				      KEY_OFFSET(k) - bio->bi_iter.bi_sector),
-			   GFP_NOIO, b->c->bio_split);
+	sectors = min_t(u64, INT_MAX,
+			KEY_OFFSET(k) - bio->bi_iter.bi_sector);
+
+	if (sectors >= bio_sectors(bio)) {
+		n = bio_clone_fast(bio, GFP_NOIO, b->c->bio_split);
+		ret = MAP_DONE;
+	} else {
+		n = bio_split(bio, sectors, GFP_NOIO, b->c->bio_split);
+		ret = MAP_CONTINUE;
+	}
+
+	bio_chain(n, bio);
 
 	bkey_copy(&tmp.k, k);
 	k = &tmp.k;
@@ -763,19 +774,14 @@ static int bch_read_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 	bch_cut_front(&KEY(op->inode, n->bi_iter.bi_sector, 0), k);
 	bch_cut_back(&KEY(op->inode, bio_end_sector(n), 0), k);
 
-	n->bi_iter.bi_sector	= PTR_OFFSET(k, ptr);
-	n->bi_bdev		= PTR_CACHE(b->c, k, ptr)->bdev;
-
-	if (n != bio)
-		bio_chain(n, bio);
-	else
-		atomic_inc(&bio->bi_remaining);
-
-	BUG_ON(!n->bi_end_io);
+	bio_key = &container_of(n, struct bbio, bio)->key;
+	bch_bkey_copy_single_ptr(bio_key, k, ptr);
+	n->bi_iter.bi_sector	= PTR_OFFSET(bio_key, 0);
+	n->bi_bdev		= PTR_CACHE(b->c, bio_key, 0)->bdev;
 
 	cache_promote(b->c, n, k, ptr);
 
-	return n == bio ? MAP_DONE : MAP_CONTINUE;
+	return ret;
 }
 
 int bch_read(struct cache_set *c, struct bio *bio, u64 inode)
@@ -899,14 +905,13 @@ static int cache_lookup_fn(struct btree_op *op, struct btree *b, struct bkey *k)
 	bch_cut_front(&KEY(s->inode, n->bi_iter.bi_sector, 0), k);
 	bch_cut_back(&KEY(s->inode, bio_end_sector(n), 0), k);
 
+	bio_key = &container_of(n, struct bbio, bio)->key;
+	bch_bkey_copy_single_ptr(bio_key, k, ptr);
 	n->bi_iter.bi_sector	= PTR_OFFSET(k, ptr);
 	n->bi_bdev		= PTR_CACHE(b->c, k, ptr)->bdev;
 
 	n->bi_end_io		= bch_cache_read_endio;
 	n->bi_private		= &s->cl;
-
-	bio_key = &container_of(n, struct bbio, bio)->key;
-	bch_bkey_copy_single_ptr(bio_key, k, ptr);
 
 	/*
 	 * The bucket we're reading from might be reused while our bio

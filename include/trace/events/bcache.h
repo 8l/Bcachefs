@@ -105,9 +105,14 @@ DEFINE_EVENT(bcache_bio, bcache_bypass_congested,
 	TP_ARGS(bio)
 );
 
-DEFINE_EVENT(bcache_bio, bcache_cache_promote,
+DEFINE_EVENT(bcache_bio, bcache_promote,
 	TP_PROTO(struct bio *bio),
 	TP_ARGS(bio)
+);
+
+DEFINE_EVENT(bkey, bcache_promote_collision,
+	TP_PROTO(struct bkey *k),
+	TP_ARGS(k)
 );
 
 TRACE_EVENT(bcache_read,
@@ -216,11 +221,6 @@ DEFINE_EVENT(bcache_bio, bcache_journal_write,
 	TP_ARGS(bio)
 );
 
-DEFINE_EVENT(cache_set, bcache_cache_miss_collision,
-	TP_PROTO(struct cache_set *c),
-	TP_ARGS(c)
-);
-
 /* Btree */
 
 DECLARE_EVENT_CLASS(btree_node,
@@ -268,7 +268,7 @@ TRACE_EVENT(bcache_btree_write,
 		  __entry->bucket, __entry->block, __entry->keys)
 );
 
-DEFINE_EVENT(btree_node, bcache_btree_write_sync,
+DEFINE_EVENT(btree_node, bcache_btree_bounce_write_fail,
 	TP_PROTO(struct btree *b),
 	TP_ARGS(b)
 );
@@ -572,7 +572,12 @@ DEFINE_EVENT(bkey, bcache_gc_copy,
 	TP_ARGS(k)
 );
 
-DEFINE_EVENT(bkey, bcache_gc_copy_collision,
+DEFINE_EVENT(bkey, bcache_copy_collision,
+	TP_PROTO(struct bkey *k),
+	TP_ARGS(k)
+);
+
+DEFINE_EVENT(bkey, bcache_tiering_copy,
 	TP_PROTO(struct bkey *k),
 	TP_ARGS(k)
 );

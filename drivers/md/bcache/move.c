@@ -39,7 +39,7 @@ static void moving_io_destructor(struct closure *cl)
 		__free_page(bv->bv_page);
 
 	if (io->op.replace_collision)
-		trace_bcache_gc_copy_collision(&io->w->key);
+		trace_bcache_copy_collision(&io->w->key);
 
 	bch_keybuf_del(io->keybuf, io->w);
 	kfree(io);

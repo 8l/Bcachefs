@@ -1127,6 +1127,7 @@ void bch_bset_sort_state_free(struct bset_sort_state *state)
 	if (state->pool)
 		mempool_destroy(state->pool);
 }
+EXPORT_SYMBOL(bch_bset_sort_state_free);
 
 int bch_bset_sort_state_init(struct bset_sort_state *state, unsigned page_order)
 {

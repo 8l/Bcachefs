@@ -176,6 +176,8 @@ struct bbio {
 	struct bio		bio;
 };
 
+#define to_bbio(_bio)		container_of((_bio), struct bbio, bio)
+
 int bch_read(struct cache_set *, struct bio *, u64);
 void bch_data_insert(struct closure *);
 

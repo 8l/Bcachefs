@@ -77,7 +77,6 @@ static void read_moving_endio(struct bio *bio, int error)
 void bch_data_move(struct closure *cl)
 {
 	struct moving_io *io = container_of(cl, struct moving_io, cl);
-	struct bio *bio = &io->bio.bio;
 	int ptr;
 
 	/* bail out if all pointers are stale */
@@ -86,15 +85,14 @@ void bch_data_move(struct closure *cl)
 		closure_return_with_destructor(cl, moving_io_destructor);
 
 	moving_init(io);
-	bio = &io->bio.bio;
 
-	if (bio_alloc_pages(bio, GFP_KERNEL))
+	if (bio_alloc_pages(&io->bio.bio, GFP_KERNEL))
 		closure_return_with_destructor(cl, moving_io_destructor);
 
-	bio->bi_rw	= READ;
-	bio->bi_end_io	= read_moving_endio;
+	io->bio.bio.bi_rw	= READ;
+	io->bio.bio.bi_end_io	= read_moving_endio;
 
-	bch_submit_bbio(bio, io->op.c, &io->w->key, ptr);
+	bch_submit_bbio(&io->bio, io->op.c, &io->w->key, ptr);
 
 	continue_at(cl, write_moving, io->op.c->wq);
 }

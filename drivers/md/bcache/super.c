@@ -1834,6 +1834,7 @@ static int cache_alloc(struct cache_sb *sb, struct cache *ca)
 		total_reserve += ca->free[i].size;
 	pr_debug("%zu buckets reserved", total_reserve);
 
+	mutex_init(&ca->heap_lock);
 	init_waitqueue_head(&ca->fifo_wait);
 	bch_moving_init_cache(ca);
 

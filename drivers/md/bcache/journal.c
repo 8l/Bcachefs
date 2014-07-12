@@ -397,10 +397,10 @@ int bch_journal_replay(struct cache_set *c, struct list_head *list)
 	}
 
 	for_each_cached_btree(b, c, iter) {
-		mutex_lock(&b->write_lock);
+		six_lock_read(&b->lock);
 		if (btree_node_dirty(b))
 			__bch_btree_node_write(b, &cl);
-		mutex_unlock(&b->write_lock);
+		six_unlock_read(&b->lock);
 	}
 
 	closure_sync(&cl);
@@ -444,15 +444,15 @@ retry:
 
 	b = best;
 	if (b) {
-		mutex_lock(&b->write_lock);
+		six_lock_read(&b->lock);
 		if (!btree_current_write(b)->journal) {
-			mutex_unlock(&b->write_lock);
+			six_unlock_read(&b->lock);
 			/* We raced */
 			goto retry;
 		}
 
 		__bch_btree_node_write(b, NULL);
-		mutex_unlock(&b->write_lock);
+		six_unlock_read(&b->lock);
 	}
 }
 

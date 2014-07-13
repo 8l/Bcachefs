@@ -804,7 +804,7 @@ struct cache_set {
 	unsigned short		meta_replicas;
 	unsigned short		data_replicas;
 
-#define BUCKET_HASH_BITS	12
+#define BUCKET_HASH_BITS	14
 	struct hlist_head	bucket_hash[1 << BUCKET_HASH_BITS];
 };
 

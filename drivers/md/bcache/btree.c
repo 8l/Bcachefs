@@ -819,7 +819,7 @@ static struct hlist_head *mca_hash(struct cache_set *c, struct bkey *k)
 	return &c->bucket_hash[hash_32(PTR_HASH(c, k), BUCKET_HASH_BITS)];
 }
 
-static struct btree *mca_find(struct cache_set *c, struct bkey *k)
+static inline struct btree *mca_find(struct cache_set *c, struct bkey *k)
 {
 	struct btree *b;
 

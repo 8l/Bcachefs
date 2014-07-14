@@ -419,6 +419,9 @@ static long bch_ioctl_blockdev_find_by_uuid(struct cache_set *c, unsigned long a
 }
 
 struct bch_ioctl_copy_op {
+	struct work_struct	work;
+	struct kiocb		*req;
+	struct cache_set	*c;
 	struct bch_ioctl_copy	i;
 	struct btree_op		op;
 	struct keylist		keys;
@@ -465,40 +468,66 @@ static int bch_ioctl_copy_fn(struct btree_op *b_op, struct btree *b,
 	return MAP_CONTINUE;
 }
 
-static long bch_copy(struct cache_set *c, unsigned long arg)
+static void bch_copy_work(struct work_struct *work)
 {
-	struct bch_ioctl_copy __user *user_i = (void __user *) arg;
-	struct bch_ioctl_copy_op op;
+	struct bch_ioctl_copy_op *op =
+		container_of(work, struct bch_ioctl_copy_op, work);
+	int ret = 0;
 
-	bch_btree_op_init(&op.op, BTREE_ID_EXTENTS, -1);
-	bch_keylist_init(&op.keys);
-	op.copied = 0;
-
-	if (copy_from_user(&op.i, user_i, sizeof(op.i)))
-		return -EFAULT;
-
-	if (op.i.sectors + op.i.src_offset < op.i.sectors ||
-	    op.i.sectors + op.i.dst_offset < op.i.sectors)
-		return -EINVAL;
-
-	while (op.copied < op.i.sectors) {
-		int ret;
-
-		ret = bch_btree_map_keys(&op.op, c,
-					 &KEY(op.i.src_inode,
-					      op.i.src_offset + op.copied, 0),
+	while (op->copied < op->i.sectors) {
+		ret = bch_btree_map_keys(&op->op, op->c,
+					 &KEY(op->i.src_inode,
+					      op->i.src_offset + op->copied, 0),
 					 bch_ioctl_copy_fn, 0);
 		if (ret < 0)
-			return ret;
+			break;
 
-		ret = bch_btree_insert(c, BTREE_ID_EXTENTS, &op.keys, NULL);
+		ret = bch_btree_insert(op->c, BTREE_ID_EXTENTS, &op->keys, NULL);
 		if (ret < 0)
-			return ret;
+			break;
 
-		BUG_ON(!bch_keylist_empty(&op.keys));
+		BUG_ON(!bch_keylist_empty(&op->keys));
 	}
 
-	return 0;
+	aio_complete(op->req, ret < 0 ? ret : 0, 0);
+	bch_keylist_free(&op->keys);
+	kfree(op);
+}
+
+static void bch_copy(struct kiocb *req, struct cache_set *c,
+		     unsigned long arg)
+{
+	struct bch_ioctl_copy __user *user_i = (void __user *) arg;
+	struct bch_ioctl_copy_op *op;
+
+	op = kzalloc(sizeof(*op), GFP_NOIO);
+	if (!op) {
+		aio_complete(req, -ENOMEM, 0);
+		return;
+	}
+
+	INIT_WORK(&op->work, bch_copy_work);
+	op->req = req;
+	op->c = c;
+
+	bch_btree_op_init(&op->op, BTREE_ID_EXTENTS, -1);
+	bch_keylist_init(&op->keys);
+	op->copied = 0;
+
+	if (copy_from_user(&op->i, user_i, sizeof(op->i))) {
+		aio_complete(req, -EFAULT, 0);
+		kfree(op);
+		return;
+	}
+
+	if (op->i.sectors + op->i.src_offset < op->i.sectors ||
+	    op->i.sectors + op->i.dst_offset < op->i.sectors) {
+		aio_complete(req, -EINVAL, 0);
+		kfree(op);
+		return;
+	}
+
+	queue_work(system_long_wq, &op->work);
 }
 
 static long bch_query_uuid(struct cache_set *c, unsigned long arg)
@@ -537,7 +566,8 @@ static long bch_aio_ioctl(struct kiocb *req, unsigned int cmd,
 	case BCH_IOCTL_BLOCKDEV_FIND_BY_UUID:
 		return bch_ioctl_blockdev_find_by_uuid(c, arg);
 	case BCH_IOCTL_COPY:
-		return bch_copy(c, arg);
+		bch_copy(req, c, arg);
+		return -EIOCBQUEUED;
 	case BCH_IOCTL_QUERY_UUID:
 		return bch_query_uuid(c, arg);
 	}

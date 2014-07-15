@@ -103,6 +103,12 @@ int dfault_remove_module(char *mod_name);
 #define bio_alloc_pages(...)						\
 	(dynamic_fault() ? -ENOMEM	: bio_alloc_pages(__VA_ARGS__))
 
+#define bio_get_user_pages(bio, uaddr, len, write_to_vm)		\
+	bio_get_user_pages(bio, uaddr,					\
+		dynamic_fault() ? min_t(unsigned long, len, PAGE_SIZE)	\
+				: len,					\
+		write_to_vm)
+
 #else /* CONFIG_DYNAMIC_FAULT */
 
 #define dfault_add_module(tab, n, modname)	0

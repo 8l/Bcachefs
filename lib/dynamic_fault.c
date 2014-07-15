@@ -1,7 +1,7 @@
 /*
  * lib/dynamic_fault.c
  *
- * make fault() calls runtime configurable based upon their
+ * make dynamic_fault() calls runtime configurable based upon their
  * source module.
  *
  * Copyright (C) 2011 Adam Berkan <aberkan@google.com>
@@ -55,6 +55,7 @@ struct dfault_query {
 	const char *module;
 	const char *function;
 	unsigned int first_lineno, last_lineno;
+	unsigned int first_index, last_index;
 };
 
 struct dfault_iter {
@@ -101,8 +102,8 @@ static char *dfault_describe_flags(struct _dfault *df, char *buf,
  * the user which dfault's were changed, or whether none
  * were matched.
  */
-static void dfault_change(const struct dfault_query *query,
-			   unsigned int flags, unsigned int mask)
+static int dfault_change(const struct dfault_query *query,
+			 unsigned int flags, unsigned int mask)
 {
 	int i;
 	struct dfault_table *dt;
@@ -141,6 +142,14 @@ static void dfault_change(const struct dfault_query *query,
 			    df->lineno > query->last_lineno)
 				continue;
 
+			/* match against the fault index */
+			if (query->first_index &&
+			    df->index < query->first_index)
+				continue;
+			if (query->last_index &&
+			    df->index > query->last_index)
+				continue;
+
 			nfound++;
 
 			newflags = (df->flags & mask) | flags;
@@ -158,17 +167,21 @@ static void dfault_change(const struct dfault_query *query,
 
 			if (verbose)
 				printk(KERN_INFO
-					"dfault: changed %s:%d [%s]%s %s\n",
-					df->filename, df->lineno,
-					dt->mod_name, df->function,
-					dfault_describe_flags(df, flagbuf,
-							      sizeof(flagbuf)));
+				       "dfault: changed %s:%d [%s]%s #%d %s\n",
+				       df->filename, df->lineno,
+				       dt->mod_name, df->function, df->index,
+				       dfault_describe_flags(df, flagbuf,
+							     sizeof(flagbuf)));
 		}
 	}
 	mutex_unlock(&dfault_lock);
 
-	if (!nfound && verbose)
+	if (!nfound && verbose) {
 		printk(KERN_INFO "dfault: no matches for query\n");
+		return -ENOENT;
+	}
+
+	return 0;
 }
 
 /*
@@ -226,11 +239,11 @@ static int dfault_tokenize(char *buf, char *words[], int maxwords)
 }
 
 /*
- * Parse a single line number.  Note that the empty string ""
- * is treated as a special case and converted to zero, which
+ * Parse a single number.  Note that the empty string "" is
+ * treated as a special case and converted to zero, which
  * is later treated as a "don't care" value.
  */
-static inline int parse_lineno(const char *str, unsigned int *val)
+static inline int parse_number(const char *str, unsigned int *val)
 {
 	char *end = NULL;
 	BUG_ON(str == NULL);
@@ -243,6 +256,31 @@ static inline int parse_lineno(const char *str, unsigned int *val)
 }
 
 /*
+ * Parse a range.
+ */
+static inline int parse_range(char *str,
+			      unsigned int *first,
+			      unsigned int *last)
+{
+	char *first_str = str;
+	char *last_str = strchr(first_str, '-');
+
+	if (last_str)
+		*last_str++ = '\0';
+	if (parse_number(first_str, first) < 0)
+		return -EINVAL;
+	if (last_str != NULL) {
+		/* range <first>-<last> */
+		if (parse_number(last_str, last) < 0)
+			return -EINVAL;
+	} else {
+		*last = *first;
+	}
+
+	return 0;
+}
+
+/*
  * Parse words[] as a dfault query specification, which is a series
  * of (keyword, value) pairs chosen from these possibilities:
  *
@@ -252,6 +290,8 @@ static inline int parse_lineno(const char *str, unsigned int *val)
  * module <module-name>
  * line <lineno>
  * line <first-lineno>-<last-lineno> // where either may be empty
+ * index <m>-<n>                     // dynamic faults numbered from <m>
+ *                                   // to <n> inside each matching function
  */
 static int dfault_parse_query(char *words[], int nwords,
 			      struct dfault_query *query)
@@ -271,19 +311,13 @@ static int dfault_parse_query(char *words[], int nwords,
 		else if (!strcmp(words[i], "module"))
 			query->module = words[i+1];
 		else if (!strcmp(words[i], "line")) {
-			char *first = words[i+1];
-			char *last = strchr(first, '-');
-			if (last)
-				*last++ = '\0';
-			if (parse_lineno(first, &query->first_lineno) < 0)
-				return -EINVAL;
-			if (last != NULL) {
-				/* range <first>-<last> */
-				if (parse_lineno(last, &query->last_lineno) < 0)
-					return -EINVAL;
-			} else {
-				query->last_lineno = query->first_lineno;
-			}
+			parse_range(words[i+1],
+				    &query->first_lineno,
+				    &query->last_lineno);
+		} else if (!strcmp(words[i], "index")) {
+			parse_range(words[i+1],
+				    &query->first_index,
+				    &query->last_index);
 		} else {
 			if (verbose)
 				printk(KERN_ERR "%s: unknown keyword \"%s\"\n",
@@ -294,10 +328,11 @@ static int dfault_parse_query(char *words[], int nwords,
 
 	if (verbose)
 		printk(KERN_INFO "%s: q->function=\"%s\" q->filename=\"%s\" "
-		       "q->module=\"%s\" q->lineno=%u-%u\n",
+		       "q->module=\"%s\" q->lineno=%u-%u\n q->index=%u-%u",
 			__func__, query->function, query->filename,
-			query->module, query->first_lineno,
-			query->last_lineno);
+			query->module,
+			query->first_lineno, query->last_lineno,
+			query->first_index, query->last_index);
 
 	return 0;
 }
@@ -378,6 +413,7 @@ static ssize_t dfault_proc_write(struct file *file, const char __user *ubuf,
 	int nwords;
 	char *words[MAXWORDS];
 	char tmpbuf[256];
+	int ret;
 
 	if (len == 0)
 		return 0;
@@ -400,7 +436,9 @@ static ssize_t dfault_proc_write(struct file *file, const char __user *ubuf,
 		return -EINVAL;
 
 	/* actually go and implement the change */
-	dfault_change(&query, flags, mask);
+	ret = dfault_change(&query, flags, mask);
+	if (ret < 0)
+		return ret;
 
 	*offp += len;
 	return len;
@@ -514,13 +552,14 @@ static int dfault_proc_show(struct seq_file *m, void *p)
 
 	if (p == SEQ_START_TOKEN) {
 		seq_puts(m,
-			"# filename:lineno [module]function flags format\n");
+			"# filename:lineno [module]function index "
+			"flags format\n");
 		return 0;
 	}
 
-	seq_printf(m, "%s:%u [%s]%s %s \"",
+	seq_printf(m, "%s:%u [%s]%s %d %s \"",
 		   df->filename, df->lineno,
-		   iter->table->mod_name, df->function,
+		   iter->table->mod_name, df->function, df->index,
 		   dfault_describe_flags(df, flagsbuf, sizeof(flagsbuf)));
 	seq_puts(m, "\"\n");
 
@@ -591,6 +630,9 @@ int dfault_add_module(struct _dfault *tab, unsigned int n,
 {
 	struct dfault_table *dt;
 	char *new_name;
+	const char *func;
+	unsigned index;
+	int i;
 
 	dt = kzalloc(sizeof(*dt), GFP_KERNEL);
 	if (dt == NULL)
@@ -608,6 +650,18 @@ int dfault_add_module(struct _dfault *tab, unsigned int n,
 	mutex_lock(&dfault_lock);
 	list_add_tail(&dt->link, &dfault_tables);
 	mutex_unlock(&dfault_lock);
+
+	index = 1;
+	func = NULL;
+
+	/* __attribute__(("section")) emits things in reverse order */
+	for (i = n - 1; i >= 0; i--) {
+		if (!func || strcmp(tab[i].function, func)) {
+			index = 1;
+			func = tab[i].function;
+		}
+		tab[i].index = index++;
+	}
 
 	if (verbose)
 		printk(KERN_INFO "%u debug prints in module %s\n",

@@ -14,7 +14,8 @@ struct _dfault {
 	const char		*modname;
 	const char		*function;
 	const char		*filename;
-	unsigned int		lineno:24;
+	unsigned int		lineno:16;
+	unsigned int		index:16;
 	/*
 	 * The flags field controls the behaviour at the callsite.
 	 * The bits here are changed dynamically when the user

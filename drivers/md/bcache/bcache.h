@@ -1065,6 +1065,8 @@ void bch_cache_set_release(struct kobject *);
 void bch_cache_release(struct kobject *);
 
 void bcache_write_super(struct cache_set *);
+const char *register_bcache_devices(char **, int, struct cache_set **);
+const char *bch_run_cache_set(struct cache_set *);
 
 int bch_flash_dev_create(struct cache_set *, uint64_t);
 
@@ -1094,5 +1096,8 @@ void bch_fs_exit(void);
 int bch_fs_init(void);
 void bch_request_exit(void);
 int bch_request_init(void);
+
+int bch_chardev_init(void);
+void bch_chardev_exit(void);
 
 #endif /* _BCACHE_H */

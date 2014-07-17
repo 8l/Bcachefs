@@ -1027,16 +1027,18 @@ static int cached_dev_init(struct cached_dev *dc, unsigned block_size)
 /* Cached device - bcache superblock */
 
 static const char *register_bdev(struct cache_sb *sb, struct page *sb_page,
-				 struct block_device *bdev)
+				 struct block_device *bdev,
+				 struct cached_dev **ret)
 {
 	char name[BDEVNAME_SIZE];
 	const char *err = "cannot allocate memory";
 	struct cache_set *c;
 	struct cached_dev *dc;
 
+	mutex_lock(&bch_register_lock);
 	dc = kzalloc(sizeof(*dc), GFP_KERNEL);
 	if (!dc)
-		return err;
+		goto err;
 
 	memcpy(&dc->sb, sb, sizeof(struct cache_sb));
 	dc->bdev = bdev;
@@ -1070,9 +1072,14 @@ static const char *register_bdev(struct cache_sb *sb, struct page *sb_page,
 	    BDEV_STATE(&dc->sb) == BDEV_STATE_STALE)
 		bch_cached_dev_run(dc);
 
+	*ret = dc;
+
+	mutex_unlock(&bch_register_lock);
 	return NULL;
 err:
-	bcache_device_stop(&dc->disk);
+	if (dc)
+		bcache_device_stop(&dc->disk);
+	mutex_unlock(&bch_register_lock);
 	return err;
 }
 
@@ -1481,7 +1488,7 @@ err:
 	return NULL;
 }
 
-static const char *run_cache_set(struct cache_set *c)
+const char *bch_run_cache_set(struct cache_set *c)
 {
 	const char *err = "cannot allocate memory";
 	struct cached_dev *dc, *t;
@@ -1682,13 +1689,12 @@ static bool can_attach_cache(struct cache *ca, struct cache_set *c)
 		ca->sb.nr_in_set	== c->sb.nr_in_set;
 }
 
-static const char *register_cache_set(struct cache *ca)
+static const char *register_cache_set(struct cache *ca, struct cache_set **ret)
 {
 	char buf[12];
 	const char *err = "cannot allocate memory";
 	struct cache_set *c;
 	struct cache_tier *tier;
-	unsigned i, caches_loaded = 0;
 
 	list_for_each_entry(c, &bch_cache_sets, list)
 		if (!memcmp(&c->sb.set_uuid, &ca->sb.set_uuid,
@@ -1739,17 +1745,10 @@ found:
 	tier = &c->cache_by_alloc[CACHE_TIER(&ca->sb)];
 	tier->devices[tier->nr_devices++] = ca;
 
-	for (i = 0; i < CACHE_TIERS; i++)
-		caches_loaded += c->cache_by_alloc[i].nr_devices;
-
-	err = NULL;
-	if (caches_loaded == c->sb.nr_in_set)
-		err = run_cache_set(c);
-	if (err)
-		goto err;
-
+	*ret = c;
 	return NULL;
 err:
+	*ret = NULL;
 	bch_cache_set_unregister(c);
 	return err;
 }
@@ -1898,7 +1897,8 @@ static int cache_alloc(struct cache_sb *sb, struct cache *ca)
 }
 
 static const char *register_cache(struct cache_sb *sb, struct page *sb_page,
-				struct block_device *bdev)
+				  struct block_device *bdev,
+				  struct cache_set **c)
 {
 	char name[BDEVNAME_SIZE];
 	const char *err = "cannot allocate memory";
@@ -1929,14 +1929,14 @@ static const char *register_cache(struct cache_sb *sb, struct page *sb_page,
 		goto out;
 
 	mutex_lock(&bch_register_lock);
-	err = register_cache_set(ca);
+	err = register_cache_set(ca, c);
 	mutex_unlock(&bch_register_lock);
 
 	if (err)
 		goto out;
 
-	pr_info("registered cache device %s", bdevname(bdev, name));
 	err = NULL;
+	pr_info("registered cache device %s", bdevname(bdev, name));
 out:
 	kobject_put(&ca->kobj);
 	return err;
@@ -1986,68 +1986,127 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 	ssize_t ret = -EINVAL;
 	const char *err = "cannot allocate memory";
 	char *path = NULL;
-	struct cache_sb *sb = NULL;
-	struct block_device *bdev = NULL;
-	struct page *sb_page = NULL;
+	int i, caches_loaded = 0;
+	struct cache_set *c = NULL;
 
-	if (!try_module_get(THIS_MODULE))
-		return -EBUSY;
+	err = "Cannot allocate memory";
+	path = kstrndup(buffer, size, GFP_KERNEL);
+	if (!path)
+		goto out;
 
-	if (!(path = kstrndup(buffer, size, GFP_KERNEL)) ||
-	    !(sb = kmalloc(sizeof(struct cache_sb), GFP_KERNEL)))
-		goto err;
-
-	err = "failed to open device";
-	bdev = blkdev_get_by_path(strim(path),
-				  FMODE_READ|FMODE_WRITE|FMODE_EXCL,
-				  sb);
-	if (IS_ERR(bdev)) {
-		if (bdev == ERR_PTR(-EBUSY)) {
-			bdev = lookup_bdev(strim(path));
-			mutex_lock(&bch_register_lock);
-			if (!IS_ERR(bdev) && bch_is_open(bdev))
-				err = "device already registered";
-			else {
-				err = "device busy";
-				ret = -EBUSY;
-			}
-			mutex_unlock(&bch_register_lock);
-		}
-		goto err;
-	}
-
-	err = "failed to set blocksize";
-	if (set_blocksize(bdev, 4096))
-		goto err_close;
-
-	err = read_super(sb, bdev, &sb_page);
-	if (err)
-		goto err_close;
-
-	if (SB_IS_BDEV(sb)) {
-		mutex_lock(&bch_register_lock);
-		err = register_bdev(sb, sb_page, bdev);
-		mutex_unlock(&bch_register_lock);
-	} else {
-		err = register_cache(sb, sb_page, bdev);
-	}
+	err = register_bcache_devices(&path, 1, &c);
 	if (err)
 		goto err;
+	err = NULL;
+
+	if (c) {
+		for (i = 0; i < CACHE_TIERS; i++)
+			caches_loaded += c->cache_by_alloc[i].nr_devices;
+
+		if (caches_loaded == c->sb.nr_in_set)
+			err = bch_run_cache_set(c);
+		if (err)
+			goto err;
+	}
 
 	ret = size;
 out:
-	if (sb_page)
-		put_page(sb_page);
-	kfree(sb);
 	kfree(path);
-	module_put(THIS_MODULE);
 	return ret;
-
-err_close:
-	blkdev_put(bdev, FMODE_READ|FMODE_WRITE|FMODE_EXCL);
 err:
 	if (attr != &ksysfs_register_quiet)
-		pr_err("error opening %s: %s", path, err);
+		pr_info("error opening %s: %s", buffer, err);
+	goto out;
+}
+
+const char *register_bcache_devices(char **path, int count,
+					   struct cache_set **c)
+{
+	const char *err = "cannot allocate memory";
+	struct cache_sb *sb = NULL;
+	struct page *sb_page = NULL;
+	struct block_device *bdev = NULL;
+	struct cached_dev **dc = NULL;
+	uuid_le uuid;
+	int i;
+
+	err = "module is getting unloaded";
+	if (!try_module_get(THIS_MODULE))
+		return err;
+	memset(&uuid, 0, sizeof(uuid_le));
+
+	dc = kzalloc(sizeof(struct cached_dev *) * count, GFP_KERNEL);
+	if (!dc)
+		goto out;
+
+	sb = kmalloc(sizeof(struct cache_sb), GFP_KERNEL);
+	if (!sb)
+		goto out;
+
+	for (i = 0; i < count; i++) {
+		if (path[i] == NULL)
+			break;
+		err = "failed to open device";
+		bdev = blkdev_get_by_path(strim(path[i]),
+					  FMODE_READ|FMODE_WRITE|FMODE_EXCL,
+					  sb);
+		if (IS_ERR(bdev)) {
+			if (bdev == ERR_PTR(-EBUSY)) {
+				bdev = lookup_bdev(strim(path[i]));
+				mutex_lock(&bch_register_lock);
+				if (!IS_ERR(bdev) && bch_is_open(bdev))
+					err = "device already registered";
+				else
+					err = "device busy";
+				mutex_unlock(&bch_register_lock);
+			}
+			goto err;
+		}
+
+		err = "failed to set blocksize";
+		if (set_blocksize(bdev, 4096))
+			goto err_put;
+
+		err = read_super(sb, bdev, &sb_page);
+		if (err)
+			goto err_put;
+
+		if (i == 0)
+			memcpy(&uuid, &sb->set_uuid, sizeof(uuid_le));
+
+		err = "cache devices belong to different cache sets";
+		if (memcmp(&sb->set_uuid, &uuid, sizeof(uuid_le)))
+			goto err;
+
+		if (SB_IS_BDEV(sb))
+			err = register_bdev(sb, sb_page, bdev, &dc[i]);
+		else
+			err = register_cache(sb, sb_page, bdev, c);
+
+		put_page(sb_page);
+		sb_page = NULL;
+
+		if (err)
+			goto err_put;
+	}
+out:
+	kfree(sb);
+	kfree(dc);
+
+	module_put(THIS_MODULE);
+	return err;
+err_put:
+	blkdev_put(bdev, FMODE_READ|FMODE_WRITE|FMODE_EXCL);
+err:
+	for (i = 0; i < count; i++)
+		if (dc[i])
+			bcache_device_stop(&dc[i]->disk);
+
+	if (*c)
+		bch_cache_set_unregister(*c);
+	*c = NULL;
+	if (sb_page)
+		put_page(sb_page);
 	goto out;
 }
 
@@ -2139,6 +2198,7 @@ static void bcache_exit(void)
 		destroy_workqueue(bcache_io_wq);
 	if (bcache_major)
 		unregister_blkdev(bcache_major, "bcache");
+	bch_chardev_exit();
 	unregister_reboot_notifier(&reboot);
 }
 
@@ -2150,14 +2210,19 @@ static int __init bcache_init(void)
 		&ksysfs_reboot.attr,
 		NULL
 	};
+	int ret;
 
 	mutex_init(&bch_register_lock);
 	init_waitqueue_head(&unregister_wait);
 	register_reboot_notifier(&reboot);
 
+	ret = bch_chardev_init();
+	if (ret)
+		goto err;
+
 	bcache_major = register_blkdev(0, "bcache");
 	if (bcache_major < 0)
-		return bcache_major;
+		goto err;
 
 	if (!(bcache_io_wq = create_workqueue("bcache_io")) ||
 	    !(bcache_kobj = kobject_create_and_add("bcache", fs_kobj)) ||

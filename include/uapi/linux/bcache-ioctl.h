@@ -7,6 +7,9 @@
 extern "C" {
 #endif
 
+#define BCH_IOCTL_REGISTER     _IOW('r', 1, char **)
+#define BCH_IOCTL_ADD_DISK     _IOW('a', 2, char *)
+#define BCH_IOCTL_RM_DISK      _IOW('r', 3, char *)
 
 /* Ioctl interface */
 

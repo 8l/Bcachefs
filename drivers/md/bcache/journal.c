@@ -377,16 +377,11 @@ int bch_journal_replay(struct cache_set *c, struct list_head *list)
 {
 	int ret = 0, keys = 0, entries = 0;
 	struct bkey *k;
-	struct btree *b;
-	struct closure cl;
 	struct jset_keys *jkeys;
 	struct journal_replay *i =
 		list_entry(list->prev, struct journal_replay, list);
-	unsigned iter;
 
 	uint64_t start = i->j.last_seq, end = i->j.seq, n = start;
-
-	closure_init_stack(&cl);
 
 	list_for_each_entry(i, list, list) {
 		cache_set_err_on(n != i->j.seq, c,
@@ -405,14 +400,7 @@ int bch_journal_replay(struct cache_set *c, struct list_head *list)
 		entries++;
 	}
 
-	for_each_cached_btree(b, c, iter) {
-		six_lock_read(&b->lock);
-		if (btree_node_dirty(b))
-			__bch_btree_node_write(b, &cl);
-		six_unlock_read(&b->lock);
-	}
-
-	closure_sync(&cl);
+	bch_btree_flush(c, true);
 
 	pr_info("journal replay done, %i keys in %i entries, seq %llu",
 		keys, entries, end);
@@ -431,7 +419,7 @@ err:
 
 /* Journalling */
 
-void btree_flush_write(struct cache_set *c)
+void btree_write_oldest(struct cache_set *c)
 {
 	/*
 	 * Try to find the btree node with that references the oldest journal
@@ -885,7 +873,7 @@ static int __journal_meta_write_get(struct cache_set *c, struct journal_res *res
 {
 	int ret = bch_journal_res_get(c, 0, res);
 	if (ret == -ENOSPC)
-		btree_flush_write(c);
+		btree_write_oldest(c);
 
 	return ret;
 }

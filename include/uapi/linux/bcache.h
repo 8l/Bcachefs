@@ -5,6 +5,10 @@
  * Bcache on disk data structures
  */
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <asm/types.h>
 #include <asm/byteorder.h>
 #include <linux/uuid.h>
@@ -107,6 +111,8 @@ static inline void SET_KEY_OFFSET(struct bkey *k, __u64 v)
 	SET_KEY_OFFSET_H(k, v >> 44);
 }
 
+#ifndef __cplusplus
+
 #define KEY(inode, offset, size)					\
 ((struct bkey) {							\
 	.header	= BKEY_U64s << 56,					\
@@ -115,6 +121,23 @@ static inline void SET_KEY_OFFSET(struct bkey *k, __u64 v)
 		   ((((__u64) (offset)) >> 44) & KEY_OFFSET_H_MAX)),	\
 	.k2	= ((((__u64) (offset)) & KEY_OFFSET_L_MAX) << 20),	\
 })
+
+#else
+
+static inline struct bkey KEY(__u64 inode, __u64 offset, __u64 size)
+{
+	struct bkey ret;
+
+	ret.header = (__u64)BKEY_U64s << 56,
+	ret.k1 = (((((__u64) (size)) & KEY_SIZE_MAX) << 48)|
+		  ((((__u64) (inode)) & ~(~0ULL << 40)) << 8)|
+		  ((((__u64) (offset)) >> 44) & ~(~0ULL << 8)));
+	ret.k2 = ((((__u64) (offset)) & ~(~0ULL << 44)) << 20);
+
+	return ret;
+}
+
+#endif
 
 #define ZERO_KEY			KEY(0, 0, 0)
 
@@ -151,15 +174,17 @@ static inline void bkey_copy_key(struct bkey *dest, const struct bkey *src)
 
 static inline struct bkey *bkey_next(const struct bkey *k)
 {
-	__u64 *d = (void *) k;
+	__u64 *d = (__u64 *) k;
 	return (struct bkey *) (d + KEY_U64s(k));
 }
 
 static inline struct bkey *bkey_idx(const struct bkey *k, unsigned nr_keys)
 {
-	__u64 *d = (void *) k;
+	__u64 *d = (__u64 *) k;
 	return (struct bkey *) (d + nr_keys);
 }
+
+#define bset_bkey_last(i)	bkey_idx((struct bkey *) (i)->d, (i)->keys)
 
 /* Inodes */
 
@@ -211,6 +236,20 @@ BITMASK(INODE_FLASH_ONLY,	struct bch_inode_blockdev,
 BITMASK(INODE_NET,		struct bch_inode_blockdev,
 				i_inode.i_flags, 1, 1);
 
+#ifdef __cplusplus
+}
+// neither __builtin_types_compatible_p nor typeof really works
+// in C++, but we can do a much better job with an inlined function
+
+void inline BCH_INODE_INIT(struct bch_inode_blockdev *inode) {
+	memset(inode, 0, sizeof(*(inode)));
+	SET_KEY_U64s(&(inode)->i_inode.i_key, sizeof(*inode) / sizeof(__u64));
+        (inode)->i_inode.i_inode_format = BCH_INODE_BLOCKDEV;
+}
+
+extern "C" {
+#else
+
 #define BCH_INODE_INIT(inode)					\
 do {								\
 	struct bch_inode *_i = (void *) inode;			\
@@ -225,6 +264,7 @@ do {								\
 			struct bch_inode_blockdev *))		\
 		_i->i_inode_format = BCH_INODE_BLOCKDEV;	\
 } while (0)
+#endif
 
 /* Dirents */
 
@@ -267,14 +307,14 @@ struct bch_dirent {
 struct cache_sb {
 	__u64			csum;
 	__u64			offset;	/* sector where this sb was written */
-	__u64			version;
+	__u64			version; /* of on disk format */
 
 	__u8			magic[16];
 
-	uuid_le			uuid;
+	uuid_le			uuid;   /* specific to this disk */
 	union {
-		uuid_le		set_uuid;
-		__u64		set_magic;
+		uuid_le		set_uuid;  /* specific to the cache_set */
+		__u64		set_magic; /* xored with magic numbers of other on disk data structs */
 	};
 	__u8			label[SB_LABEL_SIZE];
 
@@ -307,10 +347,10 @@ struct cache_sb {
 
 	__u32			last_mount;	/* time_t */
 
-	__u16			first_bucket;
+	__u16			first_bucket;   /* index to the first bucket used */
 	union {
 		__u16		njournal_buckets;
-		__u16		keys;
+		__u16		keys; /* name simply here for MACRO convenience */
 	};
 	__u64			d[SB_JOURNAL_BUCKETS];	/* journal buckets */
 };
@@ -399,7 +439,7 @@ struct jset_keys {
 	__u16			keys;
 	__u8			btree_id;
 	__u8			level;
-	__u32			flags;
+	__u32			flags; /* designates what this jset holds */
 
 	union {
 		struct bkey	start[0];
@@ -414,9 +454,9 @@ struct jset {
 	__u64			magic;
 	__u64			seq;
 	__u32			version;
-	__u32			keys;
+	__u32			keys; /* size of d[] in u64s */
 
-	__u64			last_seq;
+	__u64			last_seq; /* of the oldest dirty journal entry */
 
 	__u64			prio_bucket[MAX_CACHES_PER_SET];
 
@@ -463,7 +503,7 @@ struct bset {
 	__u64			magic;
 	__u64			seq;
 	__u32			version;
-	__u32			keys;
+	__u32			keys; /* count of d[] in u64s */
 
 	union {
 		struct bkey	start[0];
@@ -496,7 +536,7 @@ static inline unsigned long bkey_v0_u64s(const struct bkey_v0 *k)
 
 static inline struct bkey_v0 *bkey_v0_next(const struct bkey_v0 *k)
 {
-	__u64 *d = (void *) k;
+	__u64 *d = (__u64 *) k;
 	return (struct bkey_v0 *) (d + bkey_v0_u64s(k));
 }
 
@@ -553,4 +593,7 @@ struct uuid_entry {
 
 BITMASK(UUID_FLASH_ONLY,	struct uuid_entry, flags, 0, 1);
 
+#ifdef __cplusplus
+}
+#endif
 #endif /* _LINUX_BCACHE_H */

@@ -16,7 +16,7 @@
 
 static struct class *bch_extent_class;
 static int bch_extent_major;
-static DEFINE_IDR(bch_extent_minor);
+DEFINE_IDR(bch_extent_minor);
 
 static void bch_cache_read_endio(struct bio *bio, int error)
 {
@@ -590,32 +590,6 @@ static long bch_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 }
 
 /* Char device */
-
-void bch_cache_set_close(struct cache_set *c)
-{
-	closure_put(&c->cl);
-}
-EXPORT_SYMBOL(bch_cache_set_close);
-
-struct cache_set *bch_cache_set_open(unsigned minor)
-{
-	struct cache_set *c;
-
-	mutex_lock(&bch_register_lock);
-
-	c = idr_find(&bch_extent_minor, minor);
-	if (!c || test_bit(CACHE_SET_UNREGISTERING, &c->flags)) {
-		c = NULL;
-		goto out;
-	}
-
-	closure_get(&c->cl);
-out:
-	mutex_unlock(&bch_register_lock);
-
-	return c;
-}
-EXPORT_SYMBOL(bch_cache_set_open);
 
 static int bch_extent_release(struct inode *inode, struct file *file)
 {

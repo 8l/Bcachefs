@@ -1023,6 +1023,7 @@ struct bcache_device *bch_dev_get_by_inode(struct cache_set *, uint64_t);
 extern struct workqueue_struct *bcache_io_wq;
 extern const char * const bch_cache_modes[];
 extern struct mutex bch_register_lock;
+extern struct idr bch_extent_minor;
 extern struct list_head bch_cache_sets;
 
 extern struct kobj_type bch_cached_dev_ktype;

@@ -125,8 +125,11 @@ static void dirty_endio(struct bio *bio, int error)
 	struct keybuf_key *w = bio->bi_private;
 	struct dirty_io *io = w->private;
 
-	if (error)
+	if (error) {
+		trace_bcache_writeback_error(&w->key, io->bio.bi_rw & WRITE,
+					     error);
 		io->error = error;
+	}
 
 	closure_put(&io->cl);
 }

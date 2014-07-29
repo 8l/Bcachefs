@@ -1910,7 +1910,7 @@ static bool bch_is_open(struct block_device *bdev) {
 static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 			       const char *buffer, size_t size)
 {
-	ssize_t ret = size;
+	ssize_t ret = -EINVAL;
 	const char *err = "cannot allocate memory";
 	char *path = NULL;
 	struct cache_sb *sb = NULL;
@@ -1934,8 +1934,10 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 			mutex_lock(&bch_register_lock);
 			if (!IS_ERR(bdev) && bch_is_open(bdev))
 				err = "device already registered";
-			else
+			else {
 				err = "device busy";
+				ret = -EBUSY;
+			}
 			mutex_unlock(&bch_register_lock);
 		}
 		goto err;
@@ -1954,11 +1956,12 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 		err = register_bdev(sb, sb_page, bdev);
 		mutex_unlock(&bch_register_lock);
 	} else {
-
 		err = register_cache(sb, sb_page, bdev);
 	}
 	if (err)
-		goto err_close;
+		goto err;
+
+	ret = size;
 out:
 	if (sb_page)
 		put_page(sb_page);
@@ -1972,7 +1975,6 @@ err_close:
 err:
 	if (attr != &ksysfs_register_quiet)
 		pr_err("error opening %s: %s", path, err);
-	ret = -EINVAL;
 	goto out;
 }
 

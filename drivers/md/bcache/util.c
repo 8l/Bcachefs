@@ -263,7 +263,7 @@ void bch_pd_controller_update(struct bch_pd_controller *pd, s64 target, s64 actu
 		change = 0;
 
 	pd->rate.rate = clamp_t(s64, (s64) pd->rate.rate + change,
-				1, NSEC_PER_MSEC);
+				1, UINT_MAX);
 
 	pd->last_actual		= actual;
 	pd->last_derivative	= derivative;

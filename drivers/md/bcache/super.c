@@ -1848,6 +1848,9 @@ static int cache_alloc(struct cache_sb *sb, struct cache *ca)
 	__module_get(THIS_MODULE);
 	kobject_init(&ca->kobj, &bch_cache_ktype);
 
+	if (cache_set_init_fault(4))
+		return -ENOMEM;
+
 	bio_init(&ca->journal.bio);
 	ca->journal.bio.bi_max_vecs = 8;
 	ca->journal.bio.bi_io_vec = ca->journal.bio.bi_inline_vecs;

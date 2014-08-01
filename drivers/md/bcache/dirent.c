@@ -136,7 +136,7 @@ static int bch_dirent_create_fn(struct btree_op *b_op, struct btree *b,
 insert:
 	bkey_copy_key(new_key, k);
 
-	ret = bch_btree_insert_node(b, b_op, &op->keys, NULL, false);
+	ret = bch_btree_insert_node(b, b_op, &op->keys, NULL, NULL);
 	BUG_ON(!ret && !bch_keylist_empty(&op->keys));
 
 	if (!ret)
@@ -241,7 +241,7 @@ static int bch_dirent_delete_fn(struct btree_op *b_op, struct btree *b,
 	SET_KEY_DELETED(keys.top, true);
 	bch_keylist_push(&keys);
 
-	ret = bch_btree_insert_node(b, b_op, &keys, NULL, false);
+	ret = bch_btree_insert_node(b, b_op, &keys, NULL, NULL);
 	BUG_ON(!ret && !bch_keylist_empty(&keys));
 
 	return ret;

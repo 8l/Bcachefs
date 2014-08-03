@@ -64,6 +64,18 @@
 #include <linux/random.h>
 #include <trace/events/bcache.h>
 
+/*
+ * bucket_gc_gen() returns the difference between the bucket's current gen and
+ * the oldest gen of any pointer into that bucket in the btree (last_gc).
+ */
+
+static inline u8 bucket_gc_gen(struct cache *ca, size_t b)
+{
+	return ca->bucket_gens[b] - ca->buckets[b].last_gc;
+}
+
+#define BUCKET_GC_GEN_MAX	96U
+
 /**
  * alloc_failed - kick off external processes to free up buckets
  *
@@ -178,9 +190,9 @@ void bch_increment_clock_slowpath(struct cache_set *c, int rw)
  * them on the various freelists.
  */
 
-static inline bool can_inc_bucket_gen(struct bucket *b)
+static inline bool can_inc_bucket_gen(struct cache *ca, size_t b)
 {
-	return bucket_gc_gen(b) < BUCKET_GC_GEN_MAX;
+	return bucket_gc_gen(ca, b) < BUCKET_GC_GEN_MAX;
 }
 
 static bool bch_can_invalidate_bucket(struct cache *ca, struct bucket *b)
@@ -189,7 +201,7 @@ static bool bch_can_invalidate_bucket(struct cache *ca, struct bucket *b)
 
 	return (!GC_MARK(b) ||
 		GC_MARK(b) == GC_MARK_RECLAIMABLE) &&
-		can_inc_bucket_gen(b);
+		can_inc_bucket_gen(ca, b - ca->buckets);
 }
 
 static void __bch_invalidate_one_bucket(struct cache *ca, struct bucket *b)
@@ -201,7 +213,7 @@ static void __bch_invalidate_one_bucket(struct cache *ca, struct bucket *b)
 	if (GC_SECTORS_USED(b))
 		trace_bcache_invalidate(ca, b - ca->buckets);
 
-	b->gen++;
+	ca->bucket_gens[b - ca->buckets]++;
 	/* this is what makes ptrs to the bucket invalid */
 
 	b->read_prio = ca->set->prio_clock[READ].hand;
@@ -379,7 +391,7 @@ static void invalidate_buckets(struct cache *ca)
 			dirty++;
 		if (GC_MARK(b) == GC_MARK_METADATA)
 			meta++;
-		if (!can_inc_bucket_gen(b))
+		if (!can_inc_bucket_gen(ca, b - ca->buckets))
 			gen++;
 	}
 
@@ -744,7 +756,7 @@ int bch_bucket_alloc_set(struct cache_set *c, enum alloc_reserve reserve,
 			goto err;
 		}
 
-		k->val[i] = PTR(ca->buckets[b].gen,
+		k->val[i] = PTR(ca->bucket_gens[b],
 				bucket_to_sector(c, b),
 				ca->sb.nr_this_dev);
 
@@ -1055,7 +1067,7 @@ found:
 			return ERR_PTR(-ENOSPC);
 		}
 
-		b->key.val[0] = PTR(ca->buckets[bucket].gen,
+		b->key.val[0] = PTR(ca->bucket_gens[bucket],
 				    bucket_to_sector(ca->set, bucket),
 				    ca->sb.nr_this_dev);
 		bch_set_extent_ptrs(&b->key, 1);

@@ -200,8 +200,13 @@
 struct bucket {
 	/* Anyone other than the GC thread must take bucket_lock and check
 	 * c->gc_mark_valid. GC thread can modify without a lock. */
-	uint16_t	read_prio;
-	uint16_t	write_prio;
+	union {
+		struct {
+			u16	read_prio;
+			u16	write_prio;
+		};
+		u16		prio[2];
+	};
 	uint8_t		gen;
 	uint8_t		last_gc; /* Most out of date gen in the btree */
 	uint32_t	gc_mark; /* Bitfield used by GC. See below for field */
@@ -520,9 +525,8 @@ struct cache {
 	/* Allocation stuff: */
 	struct bucket		*buckets;
 
-	/* last calculated minimun prio */
-	u16			min_read_prio;
-	u16			min_write_prio;
+	/* last calculated minimum prio */
+	u16			min_prio[2];
 
 	/*
 	 * Count of currently available buckets.
@@ -693,8 +697,7 @@ struct cache_set {
 	 * those together consistently we keep track of the smallest nonzero
 	 * priority of any bucket.
 	 */
-	struct prio_clock	read_clock;
-	struct prio_clock	write_clock;
+	struct prio_clock	prio_clock[2];
 
 	/* SECTOR ALLOCATOR */
 	struct list_head	open_buckets_open;

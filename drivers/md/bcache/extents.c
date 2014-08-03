@@ -369,8 +369,9 @@ bool __bch_cut_front(const struct bkey *where, struct bkey *k)
 	else
 		bkey_copy_key(k, where);
 
-	for (i = 0; i < bch_extent_ptrs(k); i++)
-		SET_PTR_OFFSET(k, i, PTR_OFFSET(k, i) + KEY_SIZE(k) - len);
+	if (len)
+		for (i = 0; i < bch_extent_ptrs(k); i++)
+			SET_PTR_OFFSET(k, i, PTR_OFFSET(k, i) + KEY_SIZE(k) - len);
 
 	BUG_ON(len > KEY_SIZE(k));
 	SET_KEY_SIZE(k, len);

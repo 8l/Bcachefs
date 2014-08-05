@@ -7,6 +7,8 @@
  *
  */
 
+#include "bcache.h"
+
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/major.h>
@@ -16,7 +18,6 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/bcache-ioctl.h>
-#include "bcache.h"
 
 
 #define MAX_ARG_STRINGS MAX_CACHES_PER_SET
@@ -97,10 +98,10 @@ static int copy_array_from_user(const char __user *const __user *argv,
 
 static long bch_ioctl_register(const char __user *const __user *argv)
 {
-
-	int count, ret, i;
-	char **path = NULL;
+	int ret = 0;
+	int count, i;
 	const char *err;
+	char **path = NULL;
 	struct cache_set *c = NULL;
 
 	if (!try_module_get(THIS_MODULE))

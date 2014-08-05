@@ -178,7 +178,7 @@ static inline void bch_data_insert_op_init(struct data_insert_op *op,
 }
 
 struct bbio {
-	struct cache_set	*c;
+	struct cache		*ca;
 
 	unsigned int		bi_idx;		/* current index into bvl_vec */
 

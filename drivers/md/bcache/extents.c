@@ -89,6 +89,25 @@ bool bch_generic_insert_fixup(struct btree_keys *b, struct bkey *insert,
 
 /* Common among btree and extent ptrs */
 
+static bool should_drop_ptr(struct cache_set *c, struct bkey *k, unsigned ptr)
+{
+	struct cache *ca;
+
+	if (PTR_DEV(k, ptr) > c->sb.nr_in_set)
+		return true;
+
+	return (ca = PTR_CACHE(c, k, ptr)) &&
+		ptr_stale(c, ca, k, ptr);
+}
+
+static unsigned PTR_TIER(struct cache_set *c, const struct bkey *k,
+			 unsigned ptr)
+{
+	struct cache *ca = PTR_CACHE(c, k, ptr);
+
+	return ca ? CACHE_TIER(&ca->sb) : UINT_MAX;
+}
+
 void bch_extent_normalize(struct cache_set *c, struct bkey *k)
 {
 	unsigned i;
@@ -100,9 +119,10 @@ void bch_extent_normalize(struct cache_set *c, struct bkey *k)
 		return;
 	}
 
+	rcu_read_lock();
+
 	for (i = 0; i < bch_extent_ptrs(k); i++)
-		if (!ptr_available(c, k, i) ||
-		    ptr_stale(c, k, i)) {
+		if (should_drop_ptr(c, k, i)) {
 			bch_set_extent_ptrs(k, bch_extent_ptrs(k) - 1);
 			memmove(&k->val[i],
 				&k->val[i + 1],
@@ -120,6 +140,8 @@ void bch_extent_normalize(struct cache_set *c, struct bkey *k)
 			}
 		}
 	} while (swapped);
+
+	rcu_read_unlock();
 
 	if (!bch_extent_ptrs(k))
 		SET_KEY_DELETED(k, true);
@@ -143,9 +165,12 @@ static bool __ptr_invalid(struct cache_set *c, const struct bkey *k)
 	if (!bch_extent_ptrs(k) && !KEY_DELETED(k))
 		return true;
 
-	for (i = 0; i < bch_extent_ptrs(k); i++)
-		if (ptr_available(c, k, i)) {
-			struct cache *ca = PTR_CACHE(c, k, i);
+	rcu_read_lock();
+
+	for (i = 0; i < bch_extent_ptrs(k); i++) {
+		struct cache *ca = PTR_CACHE(c, k, i);
+
+		if (ca) {
 			size_t bucket = PTR_BUCKET_NR(c, k, i);
 			size_t r = bucket_remainder(c, PTR_OFFSET(k, i));
 
@@ -154,17 +179,21 @@ static bool __ptr_invalid(struct cache_set *c, const struct bkey *k)
 			    bucket >= ca->sb.nbuckets)
 				return true;
 		}
+	}
+
+	rcu_read_unlock();
 
 	return false;
 }
 
-static const char *bch_ptr_status(struct cache_set *c, const struct bkey *k)
+static const char *__bch_ptr_status(struct cache_set *c, const struct bkey *k)
 {
 	unsigned i;
 
-	for (i = 0; i < bch_extent_ptrs(k); i++)
-		if (ptr_available(c, k, i)) {
-			struct cache *ca = PTR_CACHE(c, k, i);
+	for (i = 0; i < bch_extent_ptrs(k); i++) {
+		struct cache *ca = PTR_CACHE(c, k, i);
+
+		if (ca) {
 			size_t bucket = PTR_BUCKET_NR(c, k, i);
 			size_t r = bucket_remainder(c, PTR_OFFSET(k, i));
 
@@ -174,9 +203,10 @@ static const char *bch_ptr_status(struct cache_set *c, const struct bkey *k)
 				return "bad, short offset";
 			if (bucket >= ca->sb.nbuckets)
 				return "bad, offset past end of device";
-			if (ptr_stale(c, k, i))
+			if (ptr_stale(c, ca, k, i))
 				return "stale";
 		}
+	}
 
 	if (!bkey_cmp(k, &ZERO_KEY))
 		return "bad, null key";
@@ -185,6 +215,17 @@ static const char *bch_ptr_status(struct cache_set *c, const struct bkey *k)
 	if (!KEY_SIZE(k))
 		return "zeroed key";
 	return "";
+}
+
+static const char *bch_ptr_status(struct cache_set *c, const struct bkey *k)
+{
+	const char *ret;
+
+	rcu_read_lock();
+	ret = __bch_ptr_status(c, k);
+	rcu_read_unlock();
+
+	return ret;
 }
 
 void bch_extent_to_text(char *buf, size_t size, const struct bkey *k)
@@ -232,10 +273,6 @@ static void bch_bkey_dump(struct btree_keys *keys, const struct bkey *k)
 	for (j = 0; j < bch_extent_ptrs(k); j++) {
 		size_t n = PTR_BUCKET_NR(b->c, k, j);
 		printk(" bucket %zu", n);
-
-		if (n >= b->c->sb.first_bucket && n < b->c->sb.nbuckets)
-			printk(" prio %i",
-			       PTR_BUCKET(b->c, k, j)->read_prio);
 	}
 
 	printk(" %s\n", bch_ptr_status(b->c, k));
@@ -274,30 +311,36 @@ static bool btree_ptr_bad_expensive(struct btree *b, const struct bkey *k)
 	unsigned i;
 	char buf[80];
 	struct bucket *g;
+	struct cache *ca;
 
 	if (mutex_trylock(&b->c->bucket_lock)) {
-		for (i = 0; i < bch_extent_ptrs(k); i++)
-			if (ptr_available(b->c, k, i)) {
-				g = PTR_BUCKET(b->c, k, i);
+		rcu_read_lock();
+
+		for (i = 0; i < bch_extent_ptrs(k); i++) {
+			if ((ca = PTR_CACHE(b->c, k, i))) {
+				g = PTR_BUCKET(b->c, ca, k, i);
 
 				if (KEY_CACHED(k) ||
 				    (b->c->gc_mark_valid &&
 				     !g->mark.is_metadata))
 					goto err;
 			}
+		}
 
+		rcu_read_unlock();
 		mutex_unlock(&b->c->bucket_lock);
 	}
 
 	return false;
 err:
-	mutex_unlock(&b->c->bucket_lock);
 	bch_extent_to_text(buf, sizeof(buf), k);
 	btree_bug(b, "inconsistent btree pointer %s: bucket %zi prio %i "
 		  "gen %i last_gc %i mark %08x",
 		  buf, PTR_BUCKET_NR(b->c, k, i),
-		  g->read_prio, PTR_BUCKET_GEN(b->c, k, i),
+		  g->read_prio, PTR_BUCKET_GEN(b->c, ca, k, i),
 		  g->last_gc, g->mark.counter);
+	rcu_read_unlock();
+	mutex_unlock(&b->c->bucket_lock);
 	return true;
 }
 
@@ -316,18 +359,24 @@ static bool bch_btree_ptr_bad(struct btree_keys *bk, const struct bkey *k)
 	return false;
 }
 
-int bch_btree_pick_ptr(struct cache_set *c, const struct bkey *k)
+struct cache *bch_btree_pick_ptr(struct cache_set *c, const struct bkey *k,
+				 unsigned *ptr)
 {
-	unsigned i;
+	rcu_read_lock();
 
-	if (!KEY_SIZE(k))
-		return -1;
+	for (*ptr = 0; *ptr < bch_extent_ptrs(k); (*ptr)++) {
+		struct cache *ca = PTR_CACHE(c, k, *ptr);
 
-	for (i = 0; i < bch_extent_ptrs(k); i++)
-		if (ptr_available(c, k, i))
-			return i;
+		if (ca) {
+			percpu_ref_get(&ca->ref);
+			rcu_read_unlock();
+			return ca;
+		}
+	}
 
-	return -1;
+	rcu_read_unlock();
+
+	return NULL;
 }
 
 const struct btree_keys_ops bch_btree_interior_node_ops = {
@@ -465,6 +514,7 @@ static void bch_add_sectors(struct bkey *k,
 			    int sectors)
 {
 	unsigned replicas_found = 0, replicas_needed = c->data_replicas;
+	struct cache *ca;
 	int i;
 
 	if (!bch_extent_ptrs(k))
@@ -488,20 +538,15 @@ static void bch_add_sectors(struct bkey *k,
 	if (gc_will_visit_key(c, k))
 		return;
 
-	for (i = bch_extent_ptrs(k) - 1; i >= 0; --i) {
-		if (!ptr_available(c, k, i))
-			continue;
+	for (i = bch_extent_ptrs(k) - 1; i >= 0; --i)
+		if ((ca = PTR_CACHE(c, k, i)) &&
+		    !ptr_stale(c, ca, k, i)) {
+			bch_mark_data_bucket(ca, PTR_BUCKET(c, ca, k, i),
+					     sectors,
+					     replicas_found < replicas_needed);
 
-		if (ptr_stale(c, k, i))
-			continue;
-
-		bch_mark_data_bucket(PTR_CACHE(c, k, i),
-				     PTR_BUCKET(c, k, i),
-				     sectors,
-				     replicas_found < replicas_needed);
-
-		replicas_found++;
-	}
+			replicas_found++;
+		}
 }
 
 static void bch_subtract_sectors(struct bkey *k,
@@ -733,14 +778,15 @@ static bool bch_extent_bad_expensive(struct btree *b, const struct bkey *k)
 			mutex_unlock(&b->c->bucket_lock);
 	}
 
+	rcu_read_lock();
+
 	for (i = bch_extent_ptrs(k) - 1; i >= 0; --i) {
-		if (!ptr_available(b->c, k, i))
+		ca = PTR_CACHE(b->c, k, i);
+		if (!ca)
 			continue;
 
-		g = PTR_BUCKET(b->c, k, i);
-		stale = ptr_stale(b->c, k, i);
-
-		ca = PTR_CACHE(b->c, k, i);
+		g = PTR_BUCKET(b->c, ca, k, i);
+		stale = ptr_stale(b->c, ca, k, i);
 
 		btree_bug_on(stale > 96, b,
 			     "key too stale: %i",
@@ -749,7 +795,7 @@ static bool bch_extent_bad_expensive(struct btree *b, const struct bkey *k)
 		btree_bug_on(stale && replicas_needed && KEY_SIZE(k),
 			     b, "stale dirty pointer:\nbucket %zu gen %i != %llu",
 			     PTR_BUCKET_NR(b->c, k, i),
-			     PTR_BUCKET_GEN(b->c, k, i),
+			     PTR_BUCKET_GEN(b->c, ca, k, i),
 			     PTR_GEN(k, i));
 
 		if (stale)
@@ -766,18 +812,21 @@ static bool bch_extent_bad_expensive(struct btree *b, const struct bkey *k)
 			replicas_needed--;
 	}
 
+	rcu_read_unlock();
+
 	if (locked)
 		mutex_unlock(&b->c->bucket_lock);
 
 	return false;
 err:
-	mutex_unlock(&b->c->bucket_lock);
 	bch_extent_to_text(buf, sizeof(buf), k);
 	btree_bug(b, "inconsistent extent pointer %s:\nbucket %zu prio %i "
 		  "gen %i last_gc %i mark 0x%08x",
 		  buf, PTR_BUCKET_NR(b->c, k, i),
-		  g->read_prio, PTR_BUCKET_GEN(b->c, k, i),
+		  g->read_prio, PTR_BUCKET_GEN(b->c, ca, k, i),
 		  g->last_gc, g->mark.counter);
+	rcu_read_unlock();
+	mutex_unlock(&b->c->bucket_lock);
 	return true;
 }
 
@@ -795,18 +844,27 @@ static bool bch_extent_bad(struct btree_keys *bk, const struct bkey *k)
 	return false;
 }
 
-int bch_extent_pick_ptr(struct cache_set *c, const struct bkey *k)
+struct cache *bch_extent_pick_ptr(struct cache_set *c, const struct bkey *k,
+				  unsigned *ptr)
 {
-	unsigned i;
-
 	if (!KEY_SIZE(k))
-		return -1;
+		return NULL;
 
-	for (i = 0; i < bch_extent_ptrs(k); i++)
-		if (ptr_available(c, k, i) && !ptr_stale(c, k, i))
-			return i;
+	rcu_read_lock();
 
-	return -1;
+	for (*ptr = 0; *ptr < bch_extent_ptrs(k); (*ptr)++) {
+		struct cache *ca = PTR_CACHE(c, k, *ptr);
+
+		if (ca && !ptr_stale(c, ca, k, *ptr)) {
+			percpu_ref_get(&ca->ref);
+			rcu_read_unlock();
+			return ca;
+		}
+	}
+
+	rcu_read_unlock();
+
+	return NULL;
 }
 
 static uint64_t merge_chksums(struct bkey *l, struct bkey *r)

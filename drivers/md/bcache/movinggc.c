@@ -7,11 +7,9 @@
 #include "bcache.h"
 #include "alloc.h"
 #include "btree.h"
-#include "bset.h"
-#include "debug.h"
 #include "extents.h"
 #include "keybuf.h"
-#include "request.h"
+#include "move.h"
 
 #include <trace/events/bcache.h>
 #include <linux/kthread.h>
@@ -51,13 +49,6 @@ static void update_gc_rate(struct work_struct *work)
 
 /* Moving GC - IO loop */
 
-struct moving_io {
-	struct closure		cl;
-	struct keybuf_key	*w;
-	struct data_insert_op	op;
-	struct bbio		bio; /* must be last */
-};
-
 static bool moving_pred(struct keybuf *buf, struct bkey *k)
 {
 	struct cache_set *c = container_of(buf, struct cache_set,
@@ -72,98 +63,10 @@ static bool moving_pred(struct keybuf *buf, struct bkey *k)
 	return false;
 }
 
-static void moving_io_destructor(struct closure *cl)
-{
-	struct moving_io *io = container_of(cl, struct moving_io, cl);
-	kfree(io);
-}
-
-static void write_moving_finish(struct closure *cl)
-{
-	struct moving_io *io = container_of(cl, struct moving_io, cl);
-	struct bio *bio = &io->bio.bio;
-	struct bio_vec *bv;
-	int i;
-
-	bio_for_each_segment_all(bv, bio, i)
-		__free_page(bv->bv_page);
-
-	if (io->op.replace_collision)
-		trace_bcache_gc_copy_collision(&io->w->key);
-
-	bch_keybuf_del(&io->op.c->moving_gc_keys, io->w);
-
-	closure_return_with_destructor(cl, moving_io_destructor);
-}
-
-static void read_moving_endio(struct bio *bio, int error)
-{
-	struct bbio *b = container_of(bio, struct bbio, bio);
-	struct moving_io *io = container_of(bio->bi_private,
-					    struct moving_io, cl);
-
-	if (error)
-		io->op.error = error;
-	else if (!KEY_DIRTY(&b->key) &&
-		 ptr_stale(io->op.c, &b->key, 0)) {
-		io->op.error = -EINTR;
-	}
-
-	bch_bbio_endio(io->op.c, bio, error, "reading data to move");
-}
-
-static void moving_init(struct moving_io *io)
-{
-	struct bio *bio = &io->bio.bio;
-
-	bio_init(bio);
-	bio_get(bio);
-	bio_set_prio(bio, IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0));
-
-	bio->bi_iter.bi_size	= KEY_SIZE(&io->w->key) << 9;
-	bio->bi_max_vecs	= DIV_ROUND_UP(KEY_SIZE(&io->w->key),
-					       PAGE_SECTORS);
-	bio->bi_private		= &io->cl;
-	bio->bi_io_vec		= bio->bi_inline_vecs;
-	bch_bio_map(bio, NULL);
-}
-
-static void write_moving(struct closure *cl)
-{
-	struct moving_io *io = container_of(cl, struct moving_io, cl);
-	struct data_insert_op *op = &io->op;
-
-	if (!op->error)	{
-		moving_init(io);
-		io->bio.bio.bi_iter.bi_sector = KEY_START(&io->w->key);
-
-		closure_call(&op->cl, bch_data_insert, NULL, cl);
-	}
-
-	continue_at(cl, write_moving_finish, op->wq);
-}
-
-static void read_moving_submit(struct closure *cl)
-{
-	struct moving_io *io = container_of(cl, struct moving_io, cl);
-	struct bio *bio = &io->bio.bio;
-	int ptr;
-
-	/* bail out if all pointers are stale */
-	ptr = bch_extent_pick_ptr(io->op.c, &io->w->key);
-	if (ptr < 0)
-		closure_return_with_destructor(cl, moving_io_destructor);
-
-	bch_submit_bbio(bio, io->op.c, &io->w->key, ptr);
-
-	continue_at(cl, write_moving, io->op.wq);
-}
-
 static void read_moving(struct cache_set *c)
 {
 	struct keybuf_key *w;
 	struct moving_io *io;
-	struct bio *bio;
 	struct closure cl;
 
 	closure_init_stack(&cl);
@@ -186,6 +89,7 @@ static void read_moving(struct cache_set *c)
 
 		w->private		= io;
 		io->w			= w;
+		io->keybuf		= &c->moving_gc_keys;
 
 		bch_data_insert_op_init(&io->op, c, c->moving_gc_wq,
 					&io->bio.bio, 0,
@@ -193,21 +97,12 @@ static void read_moving(struct cache_set *c)
 					&io->w->key, &io->w->key);
 		io->op.moving_gc	= true;
 
-		moving_init(io);
-		bio = &io->bio.bio;
-
-		bio->bi_rw	= READ;
-		bio->bi_end_io	= read_moving_endio;
-
-		if (bio_alloc_pages(bio, GFP_KERNEL))
-			goto err;
-
 		trace_bcache_gc_copy(&w->key);
 
 		bch_ratelimit_increment(&c->moving_gc_pd.rate,
 					KEY_SIZE(&w->key) << 9);
 
-		closure_call(&io->cl, read_moving_submit, NULL, &cl);
+		closure_call(&io->cl, bch_data_move, NULL, &cl);
 	}
 
 	if (0) {

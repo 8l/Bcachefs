@@ -93,10 +93,11 @@ int bch_inode_update(struct cache_set *c, struct bch_inode *inode)
 struct inode_rm_op {
 	struct btree_op		op;
 	u64			inode_nr;
+	u64			new_size;
 };
 
 /* XXX: this is slow, due to writes and sequential lookups */
-static int inode_rm_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
+static int inode_truncate_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 {
 	struct inode_rm_op *op = container_of(b_op, struct inode_rm_op, op);
 	struct keylist keys;
@@ -109,9 +110,12 @@ static int inode_rm_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 	if (KEY_INODE(k) < op->inode_nr)
 		BUG();
 
-	erase_key = KEY(op->inode_nr,
-			KEY_START(k) + KEY_SIZE_MAX,
-			KEY_SIZE_MAX);
+	if (bkey_cmp(k, &KEY(op->inode_nr, op->new_size, 0)) <= 0)
+		return MAP_CONTINUE;
+
+	op->new_size = max(op->new_size, KEY_START(k)) + KEY_SIZE_MAX;
+
+	erase_key = KEY(op->inode_nr, op->new_size, KEY_SIZE_MAX);
 
 	if (bkey_cmp(&erase_key, &b->key) > 0)
 		bch_cut_back(&b->key, &erase_key);
@@ -121,22 +125,37 @@ static int inode_rm_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 	ret = bch_btree_insert_node(b, b_op, &keys, NULL, NULL);
 	BUG_ON(!ret && !bch_keylist_empty(&keys));
 
+	/*
+	 * this could be more efficient, this way we're always redoing the
+	 * lookup from the start
+	 */
 	return -EINTR;
+}
+
+int bch_inode_truncate(struct cache_set *c, u64 inode_nr, u64 new_size)
+{
+	struct inode_rm_op op;
+	int ret;
+
+	bch_btree_op_init(&op.op, 0);
+	op.inode_nr	= inode_nr;
+	op.new_size	= new_size;
+
+	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_EXTENTS,
+				 &KEY(inode_nr, new_size, 0),
+				 inode_truncate_fn, 0);
+	if (ret < 0)
+		return ret;
+	return 0;
 }
 
 int bch_inode_rm(struct cache_set *c, u64 inode_nr)
 {
-	struct inode_rm_op op;
 	struct keylist keys;
 	struct bkey inode;
 	int ret;
 
-	bch_btree_op_init(&op.op, 0);
-	op.inode_nr = inode_nr;
-
-	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_EXTENTS,
-				 PRECEDING_KEY(&KEY(inode_nr, 0, 0)),
-				 inode_rm_fn, 0);
+	ret = bch_inode_truncate(c, inode_nr, 0);
 	if (ret < 0)
 		BUG();
 

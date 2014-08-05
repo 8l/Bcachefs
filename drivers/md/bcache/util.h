@@ -591,4 +591,24 @@ uint64_t bch_crc64(const void *, size_t);
 
 int bch_kthread_loop_ratelimit(unsigned long *, unsigned long);
 
+#define kthread_wait_freezable(cond)					\
+({									\
+	int _ret = 0;							\
+	while (1) {							\
+		set_current_state(TASK_INTERRUPTIBLE);			\
+		if (kthread_should_stop()) {				\
+			_ret = -1;					\
+			break;						\
+		}							\
+									\
+		if (cond)						\
+			break;						\
+									\
+		try_to_freeze();					\
+		schedule();						\
+	}								\
+	set_current_state(TASK_RUNNING);				\
+	_ret;								\
+})
+
 #endif /* _BCACHE_UTIL_H */

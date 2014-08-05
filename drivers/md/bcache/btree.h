@@ -211,7 +211,7 @@ static inline void __bch_btree_op_init(struct btree_op *op, enum btree_id id,
 {
 	op->id = id;
 	op->reserve = reserve;
-	op->lock = write_lock_level;
+	op->locks_want = write_lock_level;
 	op->iterator_invalidated = 0;
 	op->insert_collision = 0;
 }
@@ -226,10 +226,9 @@ static inline void bch_btree_op_init(struct btree_op *op, enum btree_id id,
 	__bch_btree_op_init(op, id, id, write_lock_level);
 }
 
-static inline void rw_lock(bool w, struct btree *b, int level)
+static inline void rw_lock(bool w, struct btree *b)
 {
-	w ? down_write_nested(&b->lock, level + 1)
-	  : down_read_nested(&b->lock, level + 1);
+	w ? down_write(&b->lock) : down_read(&b->lock);
 	if (w)
 		b->seq++;
 }

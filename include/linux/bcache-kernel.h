@@ -83,18 +83,22 @@ int bch_keylist_realloc(struct keylist *, unsigned);
 struct btree_op {
 	struct closure		cl;
 
-	enum btree_id		id;
+	/* Bitmasks for intent/read locks held per level */
+	u8			locks_intent;
+	u8			locks_read;
 
-	/* For allocating new nodes */
-	unsigned		reserve;
+	/* Btree level below which we start taking intent locks */
+	s8			locks_want;
 
-	/* Btree level at which we start taking write locks */
-	short			lock;
+	enum btree_id		id:8;
+
+	unsigned		iterator_invalidated:1;
 
 	/* State used by btree insertion is also stored here for convenience */
-	u8			iterator_invalidated;
-
 	unsigned		insert_collision:1;
+
+	/* For allocating new nodes */
+	u8			reserve;
 };
 
 struct data_insert_op {

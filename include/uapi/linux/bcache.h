@@ -194,6 +194,8 @@ static inline struct bkey *bkey_idx(const struct bkey *k, unsigned nr_keys)
 
 #define BCACHE_ROOT_INO		4096
 
+#define BCACHE_USER_INODE_RANGE	(1ULL << 39)
+
 enum bch_inode_types {
 	BCH_INODE_BLOCKDEV	= 0,
 	BCH_INODE_FS		= 1,

@@ -88,7 +88,9 @@ static struct inode *bch_vfs_inode_create(struct cache_set *c,
 	bi->i_nlink	= S_ISDIR(mode) ? 2 : 1;
 	/* XXX: init bch_inode */
 
-	ret = bch_inode_create(c, bi, BLOCKDEV_INODE_MAX, UINT_MAX,
+	ret = bch_inode_create(c, bi,
+			       BLOCKDEV_INODE_MAX,
+			       BCACHE_USER_INODE_RANGE,
 			       &c->unused_inode_hint);
 	if (ret) {
 		iput(inode);

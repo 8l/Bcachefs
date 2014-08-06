@@ -37,7 +37,8 @@ ssize_t bch_inode_status(char *buf, size_t len, const struct bkey *k)
 
 		break;
 	case BCH_INODE_BLOCKDEV:
-		if (KEY_INODE(k) >= BLOCKDEV_INODE_MAX)
+		if (KEY_INODE(k) >= BLOCKDEV_INODE_MAX &&
+		    KEY_INODE(k) < BCACHE_USER_INODE_RANGE)
 			return scnprintf(buf, len,
 					 "blockdev inode in fs range: %llu",
 					 KEY_INODE(k));
@@ -98,7 +99,8 @@ bool bch_inode_invalid(const struct bkey *k)
 
 		break;
 	case BCH_INODE_BLOCKDEV:
-		if (KEY_INODE(k) >= BLOCKDEV_INODE_MAX)
+		if (KEY_INODE(k) >= BLOCKDEV_INODE_MAX &&
+		    KEY_INODE(k) < BCACHE_USER_INODE_RANGE)
 			return true;
 
 		if (bkey_bytes(k) != sizeof(struct bch_inode_blockdev))
@@ -329,9 +331,10 @@ int bch_inode_find_by_inum(struct cache_set *c, u64 inode_nr,
 }
 
 struct find_op {
-	struct btree_op		op;
-	uuid_le			*uuid;
+	struct btree_op			op;
+	uuid_le				*uuid;
 	struct bch_inode_blockdev	*ret;
+	u64				max;
 };
 
 static int blockdev_inode_find_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
@@ -339,7 +342,7 @@ static int blockdev_inode_find_fn(struct btree_op *b_op, struct btree *b, struct
 	struct find_op *op = container_of(b_op, struct find_op, op);
 	struct bch_inode *inode = key_to_inode(k);
 
-	if (KEY_INODE(k) >= BLOCKDEV_INODE_MAX)
+	if (KEY_INODE(k) >= op->max)
 		return -ENOENT;
 
 	if (inode->i_inode_format == BCH_INODE_BLOCKDEV) {
@@ -366,9 +369,19 @@ int bch_blockdev_inode_find_by_uuid(struct cache_set *c, uuid_le *uuid,
 	bch_btree_op_init(&op.op, BTREE_ID_INODES, -1);
 	op.uuid = uuid;
 	op.ret = ret;
+	op.max = BLOCKDEV_INODE_MAX;
 
-	return bch_btree_map_keys(&op.op, c, NULL,
-				  blockdev_inode_find_fn, 0) == MAP_DONE
-		? 0 : -ENOENT;
+	if (bch_btree_map_keys(&op.op, c, NULL,
+			       blockdev_inode_find_fn, 0) == MAP_DONE)
+		return 0;
+
+	op.max = ULLONG_MAX;
+
+	if (bch_btree_map_keys(&op.op, c,
+			       &KEY(BCACHE_USER_INODE_RANGE, 0, 0),
+			       blockdev_inode_find_fn, 0) == MAP_DONE)
+		return 0;
+
+	return -ENOENT;
 }
 EXPORT_SYMBOL(bch_blockdev_inode_find_by_uuid);

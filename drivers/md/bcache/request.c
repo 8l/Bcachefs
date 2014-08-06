@@ -582,6 +582,9 @@ static void __cache_promote(struct cache_set *c, struct bbio *orig_bio,
 	if (bio_alloc_pages(bio, __GFP_NOWARN|GFP_NOIO))
 		goto out_free;
 
+	if (op->bio.ca)
+		percpu_ref_get(&op->bio.ca->ref);
+
 	closure_init(&op->cl, &c->cl);
 	op->orig_bio		= &orig_bio->bio;
 	op->stale		= 0;
@@ -1266,6 +1269,7 @@ static int cached_dev_cache_miss(struct btree *b, struct search *s,
 	to_bbio(miss)->key = KEY(s->inode,
 				 bio_end_sector(miss),
 				 bio_sectors(miss));
+	to_bbio(miss)->ca = NULL;
 
 	closure_get(&s->cl);
 	__cache_promote(b->c, to_bbio(miss), &replace.key, request_endio);

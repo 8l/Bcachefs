@@ -768,9 +768,11 @@ static void __bch_open_bucket_put(struct cache_set *c, struct open_bucket *b)
 
 	lockdep_assert_held(&c->open_buckets_lock);
 
+	rcu_read_lock();
 	for (i = 0; i < bch_extent_ptrs(k); i++)
 		if ((ca = PTR_CACHE(c, k, i)))
 			bch_unmark_open_bucket(ca, PTR_BUCKET(c, ca, k, i));
+	rcu_read_unlock();
 
 	list_move(&b->list, &c->open_buckets_free);
 	c->open_buckets_nr_free++;

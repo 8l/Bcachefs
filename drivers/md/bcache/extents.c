@@ -538,6 +538,7 @@ static void bch_add_sectors(struct bkey *k,
 	if (gc_will_visit_key(c, k))
 		return;
 
+	rcu_read_lock();
 	for (i = bch_extent_ptrs(k) - 1; i >= 0; --i)
 		if ((ca = PTR_CACHE(c, k, i)) &&
 		    !ptr_stale(c, ca, k, i)) {
@@ -547,6 +548,7 @@ static void bch_add_sectors(struct bkey *k,
 
 			replicas_found++;
 		}
+	rcu_read_unlock();
 }
 
 static void bch_subtract_sectors(struct bkey *k,

@@ -19,7 +19,6 @@
 #include <linux/slab.h>
 #include <linux/bcache-ioctl.h>
 
-
 #define MAX_ARG_STRINGS MAX_CACHES_PER_SET
 #define MAX_PATH	256
 
@@ -107,12 +106,15 @@ static long bch_ioctl_register(const char __user *const __user *argv)
 	if (!try_module_get(THIS_MODULE))
 		return -EBUSY;
 	count = count_args(argv, MAX_ARG_STRINGS);
-	if (count <= 0)
+	if (count <= 0) {
+		ret = -EINVAL;
 		goto err;
+	}
 
 	path = kmalloc(GFP_KERNEL, (sizeof(char *)) * (count + 1));
 	if (!path) {
 		pr_err("Could not allocate memory to path");
+		ret = -ENOMEM;
 		goto err;
 	}
 

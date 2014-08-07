@@ -1083,11 +1083,13 @@ found:
 
 		bucket = bch_bucket_alloc(ca, RESERVE_MOVINGGC, NULL);
 		if (bucket < 0) {
+			mutex_unlock(&c->bucket_lock);
 			WARN_ONCE(1,
 				  "bcache: movinggc bucket allocation failed "
 				  "with %ld", bucket);
+			bch_open_bucket_put(c, b);
 			b = ERR_PTR(-ENOSPC);
-			goto out_unlock;
+			goto out_put;
 		}
 
 		b->key.val[0] = PTR(ca->bucket_gens[bucket],
@@ -1134,7 +1136,6 @@ found:
 		ca->gc_buckets[gen] = NULL;
 
 	atomic_long_add(sectors, &ca->sectors_written);
-out_unlock:
 	mutex_unlock(&c->bucket_lock);
 out_put:
 	percpu_ref_put(&ca->ref);

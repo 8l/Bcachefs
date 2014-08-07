@@ -844,8 +844,6 @@ struct cache_set {
 	spinlock_t		read_race_lock;
 };
 
-#define INITIAL_PRIO		USHRT_MAX
-
 #define btree_bytes(c)		((c)->btree_pages * PAGE_SIZE)
 #define btree_blocks(b)							\
 	((unsigned) (KEY_SIZE(&b->key) >> (b)->c->block_bits))

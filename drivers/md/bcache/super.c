@@ -1469,6 +1469,7 @@ struct cache_set *bch_cache_set_alloc(struct cache_sb *sb)
 	c->congested_write_threshold_us	= 20000;
 	c->error_limit	= 8 << IO_ERROR_SHIFT;
 
+	c->tiering_percent = 10;
 	c->btree_scan_ratelimit = 30;
 
 	c->meta_replicas = 1;

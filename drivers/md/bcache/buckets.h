@@ -43,7 +43,6 @@ static inline size_t buckets_available_cache(struct cache *ca)
 	size_t buckets = ca->sb.nbuckets - ca->sb.first_bucket;
 	struct bucket_stats stats = bucket_stats_read(ca);
 
-	// XXX: awkward?
 	return buckets -
 		atomic_read(&stats.buckets_dirty) -
 		atomic_read(&stats.buckets_alloc) -

@@ -1020,23 +1020,13 @@ static int bch_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
 	struct super_block *sb = dentry->d_sb;
 	struct cache_set *c = sb->s_fs_info;
-	struct cache *ca;
-	unsigned i;
+	unsigned bucket_to_block_shift = c->bucket_bits - (PAGE_SHIFT - 9);
 
 	buf->f_type	= BCACHE_SB_MAGIC;
 	buf->f_bsize	= sb->s_blocksize;
-
-	buf->f_blocks	= 0;
-	buf->f_bfree	= 0;
-
-	for_each_cache(ca, c, i)
-		buf->f_blocks += (ca->sb.nbuckets *
-				  ca->sb.bucket_size) >> (PAGE_SHIFT - 9);
-
-	buf->f_bfree	= buckets_available(c) >>
-		(c->bucket_bits - (PAGE_SHIFT - 9));
-	buf->f_bavail	= buckets_available(c) >>
-		(c->bucket_bits - (PAGE_SHIFT - 9));
+	buf->f_blocks	= ((u64) c->nbuckets)		<< bucket_to_block_shift;
+	buf->f_bfree	= ((u64) buckets_available(c))	<< bucket_to_block_shift;
+	buf->f_bavail	= buf->f_bfree;
 	buf->f_files	= bch_count_inodes(c);
 	buf->f_namelen	= NAME_MAX;
 

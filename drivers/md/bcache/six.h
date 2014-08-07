@@ -38,15 +38,42 @@ union six_lock_state {
 };
 
 struct six_lock {
-	union six_lock_state		state;
-	wait_queue_head_t		wait;
+	union six_lock_state	state;
+	wait_queue_head_t	wait;
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	struct lockdep_map	dep_map;
+#endif
 };
 
-static inline void six_lock_init(struct six_lock *lock)
+static inline void __six_lock_init(struct six_lock *lock, const char *name,
+				   struct lock_class_key *key)
 {
 	atomic_long_set(&lock->state.counter, 0);
 	init_waitqueue_head(&lock->wait);
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	debug_check_no_locks_freed((void *) lock, sizeof(*lock));
+	lockdep_init_map(&lock->dep_map, name, key, 0);
+#endif
 }
+
+#define six_lock_init(lock)						\
+do {									\
+	static struct lock_class_key __key;				\
+									\
+	__six_lock_init((lock), #lock, &__key);				\
+} while (0)
+
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+
+#define six_acquire(l)	lock_acquire(l, 0, 0, 0, 0, NULL, _THIS_IP_)
+#define six_release(l)	lock_release(l, 0, _THIS_IP_)
+
+#else
+
+#define six_acquire(l)
+#define six_release(l)
+
+#endif
 
 #define __SIX_VAL(type)	((union six_lock_state) { .type##_lock = 1 }).v
 
@@ -95,8 +122,10 @@ static inline void six_lock_init(struct six_lock *lock)
 				return false;				\
 									\
 			v = cmpxchg((&lock->state.v), old.v, new.v);	\
-			if (v == old.v)					\
+			if (v == old.v) {				\
+				six_acquire(&(lock)->dep_map);		\
 				return true;				\
+			}						\
 									\
 			old.v = v;					\
 		}							\
@@ -110,6 +139,7 @@ static inline void six_lock_init(struct six_lock *lock)
 	static inline void six_unlock_##type(struct six_lock *lock)	\
 	{								\
 		BUG_ON(!lock->state.type##_lock);			\
+		six_release(&(lock)->dep_map);				\
 									\
 		smp_wmb();						\
 		atomic_long_sub(__SIX_VAL(type),			\

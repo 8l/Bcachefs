@@ -76,7 +76,7 @@ static int copy_array_from_user(const char __user *const __user *argv,
 
 			len = strnlen_user(str, MAX_PATH);
 
-			kstr = kmalloc(GFP_KERNEL, len);
+			kstr = kmalloc(len, GFP_KERNEL);
 			if (!kstr) {
 				ret = -ENOMEM;
 				break;
@@ -111,7 +111,7 @@ static long bch_ioctl_register(const char __user *const __user *argv)
 		goto err;
 	}
 
-	path = kmalloc(GFP_KERNEL, (sizeof(char *)) * (count + 1));
+	path = kmalloc((sizeof(char *)) * (count + 1), GFP_KERNEL);
 	if (!path) {
 		pr_err("Could not allocate memory to path");
 		ret = -ENOMEM;

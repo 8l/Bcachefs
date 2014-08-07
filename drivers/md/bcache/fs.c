@@ -407,22 +407,6 @@ static int bch_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mode)
 	return 0;
 }
 
-static int bch_fsync(struct file *file, loff_t start, loff_t end, int datasync)
-{
-	int ret;
-	struct super_block *sb = file->f_mapping->host->i_sb;
-	struct address_space *mapping = sb->s_bdev->bd_inode->i_mapping;
-
-	ret = generic_file_fsync(file, start, end, datasync);
-	if (ret == -EIO || test_and_clear_bit(AS_EIO, &mapping->flags)) {
-		struct cache_set *c = sb->s_fs_info;
-		/* We don't really know where the IO error happened... */
-		bch_cache_set_error(c, "detected IO error in fsync");
-		ret = -EIO;
-	}
-	return ret;
-}
-
 struct fiemap_op {
 	struct btree_op			op;
 	struct fiemap_extent_info	*fieinfo;
@@ -521,7 +505,7 @@ static const struct file_operations bch_dir_file_operations = {
 	.llseek		= generic_file_llseek,
 	.read		= generic_read_dir,
 	.iterate	= bch_readdir,
-	.fsync		= bch_fsync,
+	.fsync		= generic_file_fsync,
 };
 
 static int bch_bio_add_page(struct bio *bio, struct page *page)

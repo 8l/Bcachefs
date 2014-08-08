@@ -246,16 +246,10 @@ static int inode_truncate_fn(struct btree_op *b_op, struct btree *b, struct bkey
 	if (KEY_INODE(k) < op->inode_nr)
 		BUG();
 
-	if (bkey_cmp(k, &KEY(op->inode_nr, op->new_size, 0)) <= 0)
-		return MAP_CONTINUE;
-
-	op->new_size = max(op->new_size, KEY_START(k)) + KEY_SIZE_MAX;
-
-	erase_key = KEY(op->inode_nr, op->new_size, KEY_SIZE_MAX);
+	erase_key = KEY(op->inode_nr,
+			max(op->new_size, KEY_START(k)) + KEY_SIZE_MAX,
+			KEY_SIZE_MAX);
 	SET_KEY_DELETED(&erase_key, true);
-
-	if (bkey_cmp(&erase_key, &b->key) > 0)
-		bch_cut_back(&b->key, &erase_key);
 
 	bch_keylist_init_single(&keys, &erase_key);
 

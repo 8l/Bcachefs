@@ -24,8 +24,8 @@ enum BCH_IOCTL {
 	BCH_IOCTL_BLOCKDEV_FIND_BY_UUID	= 3206,
 
 	BCH_IOCTL_COPY			= 3207,
-
 	BCH_IOCTL_QUERY_UUID		= 3208,
+	BCH_IOCTL_DISCARD		= 3209,
 };
 
 struct bch_ioctl_read {
@@ -48,6 +48,12 @@ struct bch_ioctl_copy {
 	__u64			dst_inode;
 	__u64			dst_offset;		/* sectors */
 
+	__u64			sectors;
+};
+
+struct bch_ioctl_discard {
+	__u64			inode;
+	__u64			offset;		/* sectors */
 	__u64			sectors;
 };
 

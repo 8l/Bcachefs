@@ -537,6 +537,69 @@ static void bch_copy(struct kiocb *req, struct cache_set *c,
 	queue_work(system_long_wq, &op->work);
 }
 
+struct bch_ioctl_discard_op {
+	struct closure		cl;
+	struct kiocb		*req;
+	struct bbio		bio;
+	struct data_insert_op	iop;
+};
+
+static void bch_discard_done(struct closure *cl)
+{
+	struct bch_ioctl_discard_op *op =
+		container_of(cl, struct bch_ioctl_discard_op, cl);
+
+	if (op->iop.error) /* not sure if this is actually possible */
+		aio_complete(op->req, op->iop.error, 0);
+	else
+		aio_complete(op->req, 0, 0);
+
+	kfree(op);
+}
+
+/* bch_discard - handles discard requests from the ioctl interface. Essentially
+ *		 just sets up a data_insert_op with a data-less bio and the
+ *		 discard flag set. This tell the data_insert_op to simply
+ *		 discard the range specified.
+ */
+static void bch_discard(struct kiocb *req, struct cache_set *c,
+			unsigned long arg)
+{
+	struct bch_ioctl_discard __user *user_i = (void __user *) arg;
+	struct bch_ioctl_discard i;
+	struct bch_ioctl_discard_op *op;
+	struct bkey key;
+	struct bio *bio;
+
+	if (copy_from_user(&i, user_i, sizeof(i))) {
+		aio_complete(req, -EFAULT, 0);
+		return;
+	}
+
+	op = kzalloc(sizeof(*op), GFP_NOIO);
+	if (!op) {
+		aio_complete(req, -ENOMEM, 0);
+		return;
+	}
+
+	closure_init(&op->cl, NULL);
+	op->req = req;
+
+	/* current discards keys off the bio for offset and size, and
+	 * insert key for inode, so we need to set up both */
+	bio = &op->bio.bio;
+	bio_init(bio);
+	bio->bi_iter.bi_sector = i.offset;
+	bio->bi_iter.bi_size = i.sectors << 9;
+	key = KEY(i.inode, i.offset, i.sectors);
+
+	bch_data_insert_op_init(&op->iop, c, bio, 0, false,
+				/*discard:*/ true, false, &key, NULL);
+
+	closure_call(&op->iop.cl, bch_data_insert, NULL, &op->cl);
+	closure_return_with_destructor_noreturn(&op->cl, bch_discard_done);
+}
+
 static long bch_query_uuid(struct cache_set *c, unsigned long arg)
 {
 	struct bch_ioctl_query_uuid __user *user_i = (void __user *) arg;
@@ -577,6 +640,9 @@ static long bch_aio_ioctl(struct kiocb *req, unsigned int cmd,
 		return -EIOCBQUEUED;
 	case BCH_IOCTL_QUERY_UUID:
 		return bch_query_uuid(c, arg);
+	case BCH_IOCTL_DISCARD:
+		bch_discard(req, c, arg);
+		return -EIOCBQUEUED;
 	}
 
 	return -ENOSYS;

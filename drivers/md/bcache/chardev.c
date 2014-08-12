@@ -164,6 +164,18 @@ static const struct file_operations bch_chardev_fops = {
 	.owner		=	THIS_MODULE,
 };
 
+void bch_chardev_exit(void)
+{
+	if (bch_chardev_major) {
+		if (bch_chardev_class && bch_chardev)
+			device_destroy(bch_chardev_class,
+				       MKDEV(bch_chardev_major, 0));
+		if (bch_chardev_class)
+			class_destroy(bch_chardev_class);
+		unregister_chrdev(bch_chardev_major, "bcache");
+	}
+}
+
 int __init bch_chardev_init(void)
 {
 	int ret = 0;
@@ -188,18 +200,6 @@ int __init bch_chardev_init(void)
 err:
 	bch_chardev_exit();
 	return ret;
-}
-
-void __exit bch_chardev_exit(void)
-{
-	if (bch_chardev_major) {
-		if (bch_chardev_class && bch_chardev)
-			device_destroy(bch_chardev_class,
-				       MKDEV(bch_chardev_major, 0));
-		if (bch_chardev_class)
-			class_destroy(bch_chardev_class);
-		unregister_chrdev(bch_chardev_major, "bcache");
-	}
 }
 
 MODULE_LICENSE("GPL");

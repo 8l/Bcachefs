@@ -2384,6 +2384,7 @@ static int btree_split(struct btree *b, struct btree_op *op,
 	struct closure cl;
 	struct keylist parent_keys;
 	struct bkey *k;
+	enum btree_insert_status status;
 	int ret;
 
 	closure_init_stack(&cl);
@@ -2405,31 +2406,50 @@ static int btree_split(struct btree *b, struct btree_op *op,
 	n1 = btree_node_alloc_replacement(b, op);
 	set1 = btree_bset_first(n1);
 
-	six_unlock_write(&n1->lock);
-	bch_btree_insert_keys(n1, op, insert_keys, replace_key, parent);
-	six_lock_write(&n1->lock);
-
 	/*
-	 * There might be duplicate (deleted) keys after the
-	 * bch_btree_insert_keys() call - we need to remove them before we
-	 * split, as it would be rather bad if we picked a duplicate for the
-	 * pivot.
+	 * For updates to interior nodes, we've got to do the insert before we
+	 * split because the stuff we're inserting has to be inserted
+	 * atomically. Post split, the keys might have to go in different nodes
+	 * and the split would no longer be atomic.
 	 *
-	 * Additionally, inserting might overwrite a bunch of existing keys
-	 * (i.e. a big discard when there were a bunch of small extents
-	 * previously) - we might not want to split after the insert. Splitting
-	 * a node that's too small to be split would be bad (if the node had
-	 * only one key, we wouldn't be able to assign the new node a key
-	 * different from the original node)
+	 * But for updates to leaf nodes (in the extent btree, anyways) - we
+	 * can't update the new replacement node while the old node is still
+	 * visible. Reason being as we do the update we're updating garbage
+	 * collection information on the fly, possibly causing a bucket to
+	 * become unreferenced and available to the allocator to reuse - we
+	 * don't want that to happen while other threads can still use the old
+	 * version of the btree node.
 	 */
-	k = set1->start;
-	while (k != bset_bkey_last(set1))
-		if (bch_ptr_bad(&b->keys, k)) {
-			set1->keys -= KEY_U64s(k);
-			memmove(k, bkey_next(k),
-				(void *) bset_bkey_last(set1) - (void *) k);
-		} else
-			k = bkey_next(k);
+	if (b->level) {
+		six_unlock_write(&n1->lock);
+		status = bch_btree_insert_keys(n1, op, insert_keys,
+					       replace_key, parent);
+		BUG_ON(status != BTREE_INSERT_INSERTED);
+		six_lock_write(&n1->lock);
+
+		/*
+		 * There might be duplicate (deleted) keys after the
+		 * bch_btree_insert_keys() call - we need to remove them before
+		 * we split, as it would be rather bad if we picked a duplicate
+		 * for the pivot.
+		 *
+		 * Additionally, inserting might overwrite a bunch of existing
+		 * keys (i.e. a big discard when there were a bunch of small
+		 * extents previously) - we might not want to split after the
+		 * insert. Splitting a node that's too small to be split would
+		 * be bad (if the node had only one key, we wouldn't be able to
+		 * assign the new node a key different from the original node)
+		 */
+		k = set1->start;
+		while (k != bset_bkey_last(set1))
+			if (bch_ptr_bad(&b->keys, k)) {
+				set1->keys -= KEY_U64s(k);
+				memmove(k, bkey_next(k),
+					(void *) bset_bkey_last(set1) -
+					(void *) k);
+			} else
+				k = bkey_next(k);
+	}
 
 	if (set_blocks(set1, block_bytes(n1->c)) > btree_blocks(b) * 3 / 4) {
 		trace_bcache_btree_node_split(b, set1->keys);
@@ -2472,7 +2492,6 @@ static int btree_split(struct btree *b, struct btree_op *op,
 		bch_keylist_add(&parent_keys, &n2->key);
 		bch_btree_node_write(n2, &cl);
 		six_unlock_write(&n2->lock);
-		six_unlock_intent(&n2->lock);
 	} else {
 		trace_bcache_btree_node_compact(b, set1->keys);
 	}
@@ -2519,6 +2538,17 @@ static int btree_split(struct btree *b, struct btree_op *op,
 	six_unlock_write(&b->lock);
 	op->iterator_invalidated = 1;
 
+	/* New nodes now visible, can finish insert */
+	if (!n1->level) {
+		status = bch_btree_insert_keys(n1, op, insert_keys,
+					       replace_key, parent);
+		if (n2 && status != BTREE_INSERT_NEED_SPLIT)
+			bch_btree_insert_keys(n2, op, insert_keys,
+					      replace_key, parent);
+	}
+
+	if (n2)
+		six_unlock_intent(&n2->lock);
 	six_unlock_intent(&n1->lock);
 
 	bch_time_stats_update(&b->c->btree_split_time, start_time);

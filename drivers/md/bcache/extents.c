@@ -406,9 +406,11 @@ void bch_bkey_copy_single_ptr(struct bkey *dest, const struct bkey *src,
 	SET_KEY_CSUM(dest, 0);
 }
 
-bool __bch_cut_front(const struct bkey *where, struct bkey *k)
+bool bch_cut_front(const struct bkey *where, struct bkey *k)
 {
 	unsigned i, len = 0;
+
+	BUG_ON(bkey_cmp(where, k) > 0);
 
 	if (bkey_cmp(where, &START_KEY(k)) <= 0)
 		return false;
@@ -427,9 +429,11 @@ bool __bch_cut_front(const struct bkey *where, struct bkey *k)
 	return true;
 }
 
-bool __bch_cut_back(const struct bkey *where, struct bkey *k)
+bool bch_cut_back(const struct bkey *where, struct bkey *k)
 {
 	unsigned len = 0;
+
+	BUG_ON(bkey_cmp(where, &START_KEY(k)) < 0);
 
 	if (bkey_cmp(where, k) >= 0)
 		return false;

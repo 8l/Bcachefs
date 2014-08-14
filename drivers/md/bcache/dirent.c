@@ -54,7 +54,7 @@ static int dirent_cmp(const struct bch_dirent *d, const struct qstr *q)
 	return len - q->len ?: memcmp(d->d_name, q->name, len);
 }
 
-static bool bch_dirent_invalid(struct btree_keys *bk, const struct bkey *k)
+static bool bch_dirent_invalid(struct btree_keys *bk, struct bkey *k)
 {
 	if (bkey_bytes(k) < sizeof(struct bch_dirent))
 		return true;
@@ -65,7 +65,7 @@ static bool bch_dirent_invalid(struct btree_keys *bk, const struct bkey *k)
 	return false;
 }
 
-static bool bch_dirent_bad(struct btree_keys *bk, const struct bkey *k)
+static bool bch_dirent_bad(struct btree_keys *bk, struct bkey *k)
 {
 	return KEY_DELETED(k);
 }

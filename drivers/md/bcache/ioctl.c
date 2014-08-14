@@ -537,39 +537,96 @@ static void bch_copy(struct kiocb *req, struct cache_set *c,
 	queue_work(system_long_wq, &op->work);
 }
 
-struct bch_ioctl_discard_op {
-	struct closure		cl;
-	struct kiocb		*req;
-	struct bbio		bio;
-	struct data_insert_op	iop;
+struct bch_discard_op {
+	struct btree_op	op;
+	struct bkey *start_key;
+	struct bkey *end_key;
 };
 
-static void bch_discard_done(struct closure *cl)
+static int bch_discard_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
+{
+	struct bch_discard_op *op = container_of(b_op,
+						 struct bch_discard_op, op);
+	struct keylist keys;
+	struct bkey erase_key;
+	int ret;
+
+	/* TODO replace with extent overlap. maybe? */
+	if (bkey_cmp(&START_KEY(k), op->end_key) >= 0)
+		return MAP_DONE;
+	if (bkey_cmp(k, &START_KEY(op->start_key)) <= 0)
+		BUG();
+
+	/* create the biggest key we can, to minimize writes */
+	erase_key = KEY(KEY_INODE(k), KEY_START(k) + KEY_SIZE_MAX, KEY_SIZE_MAX);
+	bch_cut_front(&START_KEY(op->start_key), &erase_key);
+	bch_cut_back(op->end_key, &erase_key);
+	SET_KEY_DELETED(&erase_key, true);
+
+	ret = bch_btree_insert_node(b, b_op, &keylist_single(&erase_key), NULL, NULL);
+
+	return ret ?: MAP_CONTINUE;
+}
+
+/* bch_discard - discard a range of keys from start_key to end_key.
+ * @c		cache set
+ * @start_key	pointer to start location
+ *		NOTE: discard starts at KEY_START(start_key)
+ * @end_key	pointer to end location
+ *		NOTE: discard ends at KEY_OFFSET(end_key)
+ *
+ * Returns:
+ *	 0 on success
+ *	<0 on error
+ *
+ * XXX: this needs to be refactored with inode_truncate, or more
+ *	appropriately inode_truncate should call this
+ */
+int bch_discard(struct cache_set *c, struct bkey *start_key,
+		struct bkey *end_key)
+{
+	struct bch_discard_op op;
+	int ret;
+
+	bch_btree_op_init(&op.op, BTREE_ID_EXTENTS, 0);
+	op.start_key = start_key;
+	op.end_key = end_key;
+
+	ret = bch_btree_map_keys(&op.op, c, start_key, bch_discard_fn, 0);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
+struct bch_ioctl_discard_op {
+	struct work_struct	work;
+	struct kiocb		*req;
+	struct cache_set	*c;
+	u64			inum;
+	u64			offset;
+	u64			sectors;
+};
+
+static void bch_ioctl_discard_work(struct work_struct *work)
 {
 	struct bch_ioctl_discard_op *op =
-		container_of(cl, struct bch_ioctl_discard_op, cl);
+		container_of(work, struct bch_ioctl_discard_op, work);
+	struct bkey start_key = KEY(op->inum, op->offset, 0);
+	struct bkey end_key = KEY(op->inum, op->offset + op->sectors, 0);
 
-	if (op->iop.error) /* not sure if this is actually possible */
-		aio_complete(op->req, op->iop.error, 0);
-	else
-		aio_complete(op->req, 0, 0);
+	int ret = bch_discard(op->c, &start_key, &end_key);
 
+	aio_complete(op->req, ret, 0);
 	kfree(op);
 }
 
-/* bch_discard - handles discard requests from the ioctl interface. Essentially
- *		 just sets up a data_insert_op with a data-less bio and the
- *		 discard flag set. This tell the data_insert_op to simply
- *		 discard the range specified.
- */
-static void bch_discard(struct kiocb *req, struct cache_set *c,
-			unsigned long arg)
+static void bch_ioctl_discard(struct kiocb *req, struct cache_set *c,
+			      unsigned long arg)
 {
 	struct bch_ioctl_discard __user *user_i = (void __user *) arg;
 	struct bch_ioctl_discard i;
 	struct bch_ioctl_discard_op *op;
-	struct bkey key;
-	struct bio *bio;
 
 	if (copy_from_user(&i, user_i, sizeof(i))) {
 		aio_complete(req, -EFAULT, 0);
@@ -582,22 +639,14 @@ static void bch_discard(struct kiocb *req, struct cache_set *c,
 		return;
 	}
 
-	closure_init(&op->cl, NULL);
+	INIT_WORK(&op->work, bch_ioctl_discard_work);
 	op->req = req;
+	op->c = c;
+	op->inum = i.inode;
+	op->offset = i.offset;
+	op->sectors = i.sectors;
 
-	/* current discards keys off the bio for offset and size, and
-	 * insert key for inode, so we need to set up both */
-	bio = &op->bio.bio;
-	bio_init(bio);
-	bio->bi_iter.bi_sector = i.offset;
-	bio->bi_iter.bi_size = i.sectors << 9;
-	key = KEY(i.inode, i.offset, i.sectors);
-
-	bch_data_insert_op_init(&op->iop, c, bio, 0, false,
-				/*discard:*/ true, false, &key, NULL);
-
-	closure_call(&op->iop.cl, bch_data_insert, NULL, &op->cl);
-	closure_return_with_destructor_noreturn(&op->cl, bch_discard_done);
+	queue_work(system_long_wq, &op->work);
 }
 
 static long bch_query_uuid(struct cache_set *c, unsigned long arg)
@@ -641,7 +690,7 @@ static long bch_aio_ioctl(struct kiocb *req, unsigned int cmd,
 	case BCH_IOCTL_QUERY_UUID:
 		return bch_query_uuid(c, arg);
 	case BCH_IOCTL_DISCARD:
-		bch_discard(req, c, arg);
+		bch_ioctl_discard(req, c, arg);
 		return -EIOCBQUEUED;
 	}
 

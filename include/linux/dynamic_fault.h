@@ -39,7 +39,7 @@ int dfault_remove_module(char *mod_name);
 #define __dynamic_fault_enabled(df)					\
 ({									\
 	int __ret = 0;							\
-	if (static_key_true(&(df).enabled)) {				\
+	if (static_key_false(&(df).enabled)) {				\
 		__ret = df.flags;					\
 		df.flags &= ~_DFAULT_ONE_SHOT;				\
 	}								\

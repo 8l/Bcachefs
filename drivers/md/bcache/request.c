@@ -1498,12 +1498,6 @@ void bch_cached_dev_request_init(struct cached_dev *dc)
 
 /* Flash backed devices */
 
-static int flash_dev_cache_miss(struct btree *b, struct search *s,
-				struct bio *bio, unsigned sectors)
-{
-	return bch_read_hole(bio, sectors);
-}
-
 static void flash_dev_nodata(struct closure *cl)
 {
 	struct search *s = container_of(cl, struct search, cl);
@@ -1514,45 +1508,9 @@ static void flash_dev_nodata(struct closure *cl)
 	continue_at(cl, search_free, NULL);
 }
 
-static void flash_dev_read_error(struct closure *cl)
-{
-	struct search *s = container_of(cl, struct search, cl);
-	struct bio *bio = &s->bio.bio;
-
-	if (s->recoverable) {
-		/* Bucket invalidation read races are handled here */
-		trace_bcache_read_retry(s->orig_bio);
-
-		s->iop.error = 0;
-		do_bio_hook(s, s->orig_bio);
-
-		/* XXX: don't count twice */
-
-		closure_bio_submit(bio, cl);
-	}
-
-	continue_at(cl, search_free, NULL);
-}
-
-/* XXX: this looks a lot like cached_dev_read_done_bh() */
-static void flash_dev_read_done_bh(struct closure *cl)
-{
-	struct search *s = container_of(cl, struct search, cl);
-
-	if (s->iop.error)
-		continue_at_nobarrier(cl, flash_dev_read_error, s->iop.c->wq);
-	else if (!s->cache_miss)
-		atomic_inc(&s->iop.c->accounting.collector.cache_hits);
-	else
-		atomic_inc(&s->iop.c->accounting.collector.cache_misses);
-
-	continue_at_nobarrier(cl, search_free, NULL);
-}
-
 static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct search *s;
-	struct closure *cl;
 	struct bcache_device *d = bio->bi_bdev->bd_disk->private_data;
 	int cpu, rw = bio_data_dir(bio);
 
@@ -1561,13 +1519,10 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 	part_stat_add(cpu, &d->disk->part0, sectors[rw], bio_sectors(bio));
 	part_stat_unlock();
 
-	s = search_alloc(bio, d);
-	cl = &s->cl;
-	bio = &s->bio.bio;
-
-	trace_bcache_request_start(s->d, bio);
+	trace_bcache_request_start(d, bio);
 
 	if (!bio->bi_iter.bi_size) {
+		s = search_alloc(bio, d);
 		/*
 		 * can't call bch_journal_meta from under
 		 * generic_make_request
@@ -1575,9 +1530,10 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 		continue_at_nobarrier(&s->cl,
 				      flash_dev_nodata,
 				      d->c->wq);
-	}
+	} else if (rw) {
+		s = search_alloc(bio, d);
+		bio = &s->bio.bio;
 
-	if (rw) {
 		bch_data_insert_op_init(&s->iop, d->c, bio,
 					hash_long((unsigned long) current, 16),
 					true,
@@ -1585,12 +1541,11 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 					bio->bi_rw & (REQ_FLUSH|REQ_FUA),
 					&KEY(s->inode, 0, 0), NULL);
 
-		closure_call(&s->iop.cl, bch_data_insert, NULL, cl);
-		continue_at(cl, search_free, NULL);
+		closure_call(&s->iop.cl, bch_data_insert, NULL, &s->cl);
+		continue_at(&s->cl, search_free, NULL);
 	} else {
-		bch_increment_clock(d->c, bio_sectors(bio), READ);
-		closure_call(&s->op.cl, cache_lookup, NULL, cl);
-		continue_at(cl, flash_dev_read_done_bh, NULL);
+		int ret = bch_read(d->c, bio, bcache_dev_inum(d));
+		bio_endio(bio, ret);
 	}
 }
 
@@ -1622,7 +1577,6 @@ void bch_flash_dev_request_init(struct bcache_device *d)
 
 	g->queue->make_request_fn		= flash_dev_make_request;
 	g->queue->backing_dev_info.congested_fn = flash_dev_congested;
-	d->cache_miss				= flash_dev_cache_miss;
 	d->ioctl				= flash_dev_ioctl;
 }
 

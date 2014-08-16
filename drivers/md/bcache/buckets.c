@@ -53,6 +53,7 @@
  */
 
 #include "bcache.h"
+#include "btree.h"
 #include "buckets.h"
 
 #include <trace/events/bcache.h>
@@ -150,19 +151,27 @@ void bch_mark_metadata_bucket(struct cache *ca, struct bucket *g)
 	} while(0)
 
 void bch_mark_data_bucket(struct cache_set *c, struct cache *ca,
-			  struct bucket *g, unsigned gen,
-			  int sectors, bool dirty)
+			  struct bkey *k, unsigned i, int sectors,
+			  bool dirty, bool gc)
 {
 	struct bucket_mark old, new;
 	unsigned bucket_gen;
 	bool stale;
+
+	struct bucket *g = PTR_BUCKET(c, ca, k, i);
+	unsigned gen = PTR_GEN(k, i);
 
 	bucket_cmpxchg(g, old, new, ({
 		/*
 		 * cmpxchg() only implies a full barrier on success, not
 		 * failure, so we need a read barrier on all iterations
 		 */
-		smp_rmb();
+		if (!gc) {
+			if (gc_will_visit_key(c, k))
+				return;
+		} else
+			smp_rmb();
+
 		bucket_gen = ACCESS_ONCE(ca->bucket_gens[g - ca->buckets]);
 		stale = gen_after(bucket_gen, gen);
 		if (stale)

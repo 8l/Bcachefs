@@ -1425,9 +1425,9 @@ uint8_t __bch_btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 			if (level)
 				bch_mark_metadata_bucket(ca, g);
 			else
-				bch_mark_data_bucket(c, ca, g,
-					PTR_GEN(k, i), KEY_SIZE(k),
-					replicas_found < replicas_needed);
+				bch_mark_data_bucket(c, ca, k, i, KEY_SIZE(k),
+					replicas_found < replicas_needed,
+					true);
 
 			replicas_found++;
 		}

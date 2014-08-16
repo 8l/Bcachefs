@@ -434,6 +434,10 @@ bool bch_cut_front(const struct bkey *where, struct bkey *k)
 
 	BUG_ON(len > KEY_SIZE(k));
 	SET_KEY_SIZE(k, len);
+
+	if (!len)
+		SET_KEY_DELETED(k, true);
+
 	return true;
 }
 
@@ -455,6 +459,10 @@ bool bch_cut_back(const struct bkey *where, struct bkey *k)
 
 	BUG_ON(len > KEY_SIZE(k));
 	SET_KEY_SIZE(k, len);
+
+	if (!len)
+		SET_KEY_DELETED(k, true);
+
 	return true;
 }
 
@@ -718,6 +726,7 @@ static bool bch_extent_insert_fixup(struct btree_keys *b,
 			 * the binary search tree
 			 */
 			SET_KEY_SIZE(k, 0);
+			SET_KEY_DELETED(k, true);
 			if (!bkey_written(b, k))
 				SET_KEY_OFFSET(k, KEY_START(insert));
 

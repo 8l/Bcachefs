@@ -65,11 +65,6 @@ static bool bch_dirent_invalid(struct btree_keys *bk, struct bkey *k)
 	return false;
 }
 
-static bool bch_dirent_bad(struct btree_keys *bk, struct bkey *k)
-{
-	return KEY_DELETED(k);
-}
-
 static void bch_dirent_to_text(char *buf, size_t size, const struct bkey *k)
 {
 	struct bch_dirent *d = key_to_dirent(k);
@@ -97,7 +92,6 @@ const struct btree_keys_ops bch_dirent_ops = {
 	.insert_fixup	= bch_generic_insert_fixup,
 
 	.key_invalid	= bch_dirent_invalid,
-	.key_bad	= bch_dirent_bad,
 	.key_to_text	= bch_dirent_to_text,
 	.key_dump	= bch_dirent_dump,
 };

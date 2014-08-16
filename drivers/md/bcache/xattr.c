@@ -60,11 +60,6 @@ static bool bch_xattr_invalid(struct btree_keys *bk, struct bkey *k)
 	return false;
 }
 
-static bool bch_xattr_bad(struct btree_keys *bk, struct bkey *k)
-{
-	return KEY_DELETED(k);
-}
-
 static void bch_xattr_to_text(char *buf, size_t size, const struct bkey *k)
 {
 	char *out = buf, *end = buf + size;
@@ -88,7 +83,6 @@ const struct btree_keys_ops bch_xattr_ops = {
 	.insert_fixup	= bch_generic_insert_fixup,
 
 	.key_invalid	= bch_xattr_invalid,
-	.key_bad	= bch_xattr_bad,
 	.key_to_text	= bch_xattr_to_text,
 	.key_dump	= bch_xattr_dump,
 };

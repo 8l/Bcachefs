@@ -1081,8 +1081,10 @@ static const char *register_bdev(struct cache_sb *sb, struct page *sb_page,
 	mutex_unlock(&bch_register_lock);
 	return NULL;
 err:
-	if (dc)
+	if (dc) {
+		dc->bdev = NULL;
 		bcache_device_stop(&dc->disk);
+	}
 	mutex_unlock(&bch_register_lock);
 	return err;
 }
@@ -2017,22 +2019,25 @@ static const char *register_cache(struct cache_sb *sb, struct page *sb_page,
 		ca->discard = CACHE_DISCARD(&ca->sb);
 
 	if (cache_alloc(sb, ca) != 0)
-		goto out;
+		goto err;
 
 	err = "error creating kobject";
 	if (kobject_add(&ca->kobj, &part_to_dev(bdev->bd_part)->kobj, "bcache"))
-		goto out;
+		goto err;
 
 	mutex_lock(&bch_register_lock);
 	err = register_cache_set(ca, c);
 	mutex_unlock(&bch_register_lock);
 
 	if (err)
-		goto out;
+		goto err;
 
-	err = NULL;
 	pr_info("registered cache device %s", bdevname(bdev, name));
-out:
+	kobject_put(&ca->kobj);
+	return NULL;
+
+err:
+	ca->bdev = NULL;
 	kobject_put(&ca->kobj);
 	return err;
 }

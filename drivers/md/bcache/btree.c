@@ -1055,9 +1055,6 @@ retry:
 	b = mca_find(c, k);
 
 	if (!b) {
-		if (current->bio_list)
-			return ERR_PTR(-EAGAIN);
-
 		b = mca_alloc(c, k, level, op->id, &op->cl);
 		if (!b)
 			goto retry;

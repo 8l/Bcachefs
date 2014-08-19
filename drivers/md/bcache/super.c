@@ -1511,6 +1511,8 @@ const char *bch_run_cache_set(struct cache_set *c)
 	struct closure cl;
 	unsigned i, id;
 
+	lockdep_assert_held(&bch_register_lock);
+
 	closure_init_stack(&cl);
 
 	/* We don't want bch_cache_set_error() to free underneath us */
@@ -1716,6 +1718,8 @@ static const char *register_cache_set(struct cache *ca, struct cache_set **ret)
 	const char *err = "cannot allocate memory";
 	struct cache_set *c;
 	struct cache_tier *tier;
+
+	lockdep_assert_held(&bch_register_lock);
 
 	list_for_each_entry(c, &bch_cache_sets, list)
 		if (!memcmp(&c->sb.set_uuid, &ca->sb.set_uuid,
@@ -2107,11 +2111,14 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 	err = NULL;
 
 	if (c) {
+		mutex_lock(&bch_register_lock);
 		for (i = 0; i < CACHE_TIERS; i++)
 			caches_loaded += c->cache_by_alloc[i].nr_devices;
 
 		if (caches_loaded == c->sb.nr_in_set)
 			err = bch_run_cache_set(c);
+		mutex_unlock(&bch_register_lock);
+
 		if (err)
 			goto err;
 	}
@@ -2127,7 +2134,7 @@ err:
 }
 
 const char *register_bcache_devices(char **path, int count,
-					   struct cache_set **c)
+				    struct cache_set **c)
 {
 	const char *err = "cannot allocate memory";
 	struct cache_sb *sb = NULL;

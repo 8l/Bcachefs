@@ -127,8 +127,12 @@ static long bch_ioctl_register(const char __user *const __user *argv)
 	path[count] = NULL;
 
 	err = register_bcache_devices(path, count, &c);
-	if (!err)
+	if (!err) {
+		mutex_lock(&bch_register_lock);
 		err = bch_run_cache_set(c);
+		mutex_unlock(&bch_register_lock);
+	}
+
 	if (err) {
 		pr_err("Could not register bcache devices: %s", err);
 		ret = -EINVAL;

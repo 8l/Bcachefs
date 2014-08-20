@@ -1049,20 +1049,63 @@ static const struct super_operations bch_super_operations = {
 #endif
 };
 
+static struct cache_set *bch_open_as_uuid(const char *dev_name)
+{
+	uuid_le uuid;
+
+	if (uuid_parse(skip_spaces(dev_name), &uuid))
+		return NULL;
+
+	return bch_cache_set_open_by_uuid(&uuid);
+}
+
+static struct cache_set *bch_open_as_blockdevs(const char *_dev_name)
+{
+	size_t nr_devs = 0, i = 0;
+	char *dev_name, *s, **devs;
+	struct cache_set *c = NULL;
+
+	dev_name = kstrdup(_dev_name, GFP_KERNEL);
+	if (!dev_name)
+		return NULL;
+
+	for (s = dev_name; s; s = strchr(s + 1, ':'))
+		nr_devs++;
+
+	devs = kcalloc(sizeof(const char *), nr_devs, GFP_KERNEL);
+	if (!devs)
+		goto out;
+
+	for (i = 0, s = dev_name;
+	     s;
+	     (s = strchr(s, ':')) && (*s++ = '\0'))
+		devs[i++] = s;
+
+	register_bcache_devices(devs, nr_devs, &c);
+	if (!c)
+		goto out;
+
+	if (bch_run_cache_set(c)) {
+		bch_cache_set_close(c);
+		c = NULL;
+	}
+out:
+	kfree(devs);
+	kfree(dev_name);
+
+	return c;
+}
+
 static struct dentry *bch_mount(struct file_system_type *fs_type,
 				int flags, const char *dev_name, void *data)
 {
 	struct cache_set *c;
 	struct super_block *sb;
 	struct inode *inode;
-	uuid_le uuid;
 	int ret;
 
-	if (uuid_parse(skip_spaces(dev_name), &uuid))
-		return ERR_PTR(-EINVAL);
-
-	c = bch_cache_set_open_by_uuid(&uuid);
-	if (!c)
+	if (!(c = bch_open_as_uuid(dev_name)) &&
+	    !(c = bch_open_as_blockdevs(dev_name)))
 		return ERR_PTR(-ENOENT);
 
 	sb = sget(fs_type, NULL, set_anon_super, flags, NULL);
@@ -1106,7 +1149,7 @@ static void bch_kill_sb(struct super_block *sb)
 	struct cache_set *c = sb->s_fs_info;
 
 	generic_shutdown_super(sb);
-	closure_put(&c->cl);
+	bch_cache_set_close(c);
 }
 
 static struct file_system_type bcache_fs_type = {

@@ -6,6 +6,8 @@
 #include <linux/types.h>
 #include <linux/wait.h>
 
+#include "util.h"
+
 /*
  * LOCK STATES:
  *
@@ -84,7 +86,7 @@ do {									\
 	bool _ret = false;						\
 									\
 	while (1) {							\
-		BUG_ON(!_old.from##_lock);				\
+		EBUG_ON(!_old.from##_lock);				\
 									\
 		_new = _old;						\
 		_new.v -= __SIX_VAL(from);				\
@@ -138,7 +140,7 @@ do {									\
 									\
 	static inline void six_unlock_##type(struct six_lock *lock)	\
 	{								\
-		BUG_ON(!lock->state.type##_lock);			\
+		EBUG_ON(!lock->state.type##_lock);			\
 		six_release(&(lock)->dep_map);				\
 									\
 		smp_wmb();						\
@@ -174,8 +176,8 @@ __SIX_LOCK(intent)
 
 static inline bool __six_trylock_write(union six_lock_state *lock)
 {
-	BUG_ON(lock->write_lock);
-	BUG_ON(!lock->intent_lock);
+	EBUG_ON(lock->write_lock);
+	EBUG_ON(!lock->intent_lock);
 	if (lock->read_lock)
 		return false;
 

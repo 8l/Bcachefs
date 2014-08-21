@@ -2287,7 +2287,6 @@ bch_btree_insert_keys(struct btree *b, struct btree_op *op,
 		      struct closure *flush_cl)
 {
 	bool done = false, inserted = false, attempted = false, need_split = false;
-	int oldsize = bch_count_data(&b->keys);
 	struct journal_res res;
 	struct closure cl;
 
@@ -2387,7 +2386,6 @@ bch_btree_insert_keys(struct btree *b, struct btree_op *op,
 		op->insert_collision = true;
 
 	BUG_ON(!bch_keylist_empty(insert_keys) && inserted && b->level);
-	BUG_ON(bch_count_data(&b->keys) < oldsize);
 
 	return need_split ? BTREE_INSERT_NEED_SPLIT :
 		 inserted ? BTREE_INSERT_INSERTED : BTREE_INSERT_NO_INSERT;

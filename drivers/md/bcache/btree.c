@@ -668,7 +668,7 @@ static void mca_bucket_free(struct btree *b)
 {
 	BUG_ON(btree_node_dirty(b));
 
-	memset(&b->key, 0, sizeof(b->key));
+	b->key.val[0] = 0;
 	hlist_del_init_rcu(&b->hash);
 	list_move(&b->list, &b->c->btree_cache_freeable);
 }
@@ -945,7 +945,7 @@ static inline struct btree *mca_find(struct cache_set *c, struct bkey *k)
 
 	rcu_read_lock();
 	hlist_for_each_entry_rcu(b, mca_hash(c, k), hash)
-		if (!memcmp(&b->key, k, bkey_bytes(k)))
+		if (b->key.val[0] == k->val[0])
 			goto out;
 	b = NULL;
 out:
@@ -1170,7 +1170,7 @@ retry:
 		}
 
 		if (!btree_node_lock(b, op, level,
-				     memcmp(&b->key, k, bkey_bytes(k)))) {
+				     b->key.val[0] != k->val[0])) {
 			if (dropped_locks) {
 				trace_bcache_btree_intent_lock_fail(b, op);
 				return ERR_PTR(-EINTR);

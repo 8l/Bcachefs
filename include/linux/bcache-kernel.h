@@ -11,6 +11,11 @@
 struct cache_set;
 struct bkey;
 
+#define BKEY_EXTENT_PTRS_MAX	4
+#define BKEY_EXTENT_MAX_U64s	(BKEY_U64s + BKEY_EXTENT_PTRS_MAX)
+
+#define BKEY_PADDED(key)	__BKEY_PADDED(key, BKEY_EXTENT_PTRS_MAX)
+
 /* Keylists */
 
 struct keylist {

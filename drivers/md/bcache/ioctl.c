@@ -425,84 +425,122 @@ static long bch_ioctl_blockdev_find_by_uuid(struct cache_set *c, unsigned long a
 	return 0;
 }
 
-struct bch_ioctl_copy_op {
-	struct work_struct	work;
-	struct kiocb		*req;
-	struct cache_set	*c;
-	struct bch_ioctl_copy	i;
+struct bch_copy_op {
 	struct btree_op		op;
 	struct keylist		keys;
-	u64			copied;
+
+	struct bkey		src;
+	struct bkey		src_end;
+	u64			dst_inode;
+	u64			dst_shift;
 };
 
-static int bch_ioctl_copy_fn(struct btree_op *b_op, struct btree *b,
-			     struct bkey *k)
+static int bch_copy_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 {
-	struct bch_ioctl_copy_op *op = container_of(b_op,
-					struct bch_ioctl_copy_op, op);
+	struct bch_copy_op *op = container_of(b_op, struct bch_copy_op, op);
+	struct bkey *copy;
 
-	/* XXX: on hole, do what bch_data_invalidate() does */
+	/* XXX: on hole, make this delete stuff in destination */
 
-	if (bkey_cmp(&START_KEY(k),
-		     &KEY(op->i.src_inode,
-			  op->i.src_offset + op->i.sectors, 0)) >= 0)
+	BUG_ON(bkey_cmp(k, &op->src) <= 0);
+
+	if (bkey_cmp(&START_KEY(k), &op->src_end) >= 0)
 		return MAP_DONE;
-
-	if (bkey_cmp(k, &KEY(op->i.src_inode,
-			     op->i.src_offset + op->copied, 0)) <= 0)
-		return MAP_CONTINUE;
 
 	/* If memory alloc fails, just insert what we've slurped up so far */
 	if (bch_keylist_realloc(&op->keys, KEY_U64s(k)))
 		return MAP_DONE;
 
-	bkey_copy(op->keys.top, k);
-	k = op->keys.top;
+	/* cut pointers to size */
+	copy = op->keys.top;
+	bkey_copy(copy, k);
+	bch_cut_front(&op->src, copy);
+	bch_cut_back(&op->src_end, copy);
 
-	bch_cut_front(&KEY(op->i.src_inode, op->i.src_offset + op->copied, 0), k);
-	bch_cut_back(&KEY(op->i.src_inode, op->i.src_offset + op->i.sectors, 0), k);
-
-	op->copied = KEY_OFFSET(k) - op->i.src_offset;
-
-	SET_KEY_INODE(k, op->i.dst_inode);
-	SET_KEY_OFFSET(k, op->i.dst_offset + op->copied);
+	/* modify copy to reference destination */
+	SET_KEY_INODE(copy, op->dst_inode);
+	SET_KEY_OFFSET(copy, KEY_OFFSET(copy) + op->dst_shift);
 
 	bch_keylist_push(&op->keys);
-
-	if (op->copied == op->i.sectors)
-		return MAP_DONE;
+	SET_KEY_OFFSET(&op->src, KEY_OFFSET(k));
 
 	return MAP_CONTINUE;
 }
 
-static void bch_copy_work(struct work_struct *work)
+/* bch_copy - copy a range of size @sectors beginning @src_begin
+ *	      to a destination beginning @dst_begin.
+ * @c		cache set
+ * @src_start	pointer to start location the copy source
+ * @dst_start	pointer to start location of the copy destination
+ *		NOTE: both starts begin at KEY_START(begin)
+ * @sectors	how many sectors to copy
+ *
+ * Returns:
+ *	 0 on success
+ *	<0 on error
+ *
+ * XXX: this needs to be moved to generic io code
+ */
+int bch_copy(struct cache_set *c, struct bkey *src_start, struct bkey *dst_start,
+	     unsigned long sectors)
+{
+	struct bch_copy_op op;
+	int ret = 0;
+
+	bch_btree_op_init(&op.op, BTREE_ID_EXTENTS, -1);
+	bch_keylist_init(&op.keys);
+	op.src = START_KEY(src_start);
+	op.src_end = KEY(KEY_INODE(src_start), KEY_START(src_start) + sectors, 0);
+	op.dst_inode = KEY_INODE(dst_start);
+	op.dst_shift = KEY_START(dst_start) - KEY_START(src_start);
+
+	/* XXX: probably deserves input validation and errors here */
+
+	while (bkey_cmp(&op.src, &op.src_end) < 0) {
+		ret = bch_btree_map_keys(&op.op, c, &op.src, bch_copy_fn, 0);
+
+		if (ret < 0)
+			break;
+		if (ret == MAP_CONTINUE)
+			op.src = op.src_end;
+
+		ret = bch_btree_insert(c, BTREE_ID_EXTENTS, &op.keys, NULL);
+		if (ret < 0)
+			break;
+
+		BUG_ON(!bch_keylist_empty(&op.keys));
+	}
+
+	bch_keylist_free(&op.keys);
+
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
+struct bch_ioctl_copy_op {
+	struct work_struct	work;
+	struct kiocb		*req;
+	struct cache_set	*c;
+	struct bch_ioctl_copy	i;
+};
+
+static void bch_ioctl_copy_work(struct work_struct *work)
 {
 	struct bch_ioctl_copy_op *op =
 		container_of(work, struct bch_ioctl_copy_op, work);
-	int ret = 0;
+	struct bkey src_start = KEY(op->i.src_inode, op->i.src_offset, 0);
+	struct bkey dst_start = KEY(op->i.dst_inode, op->i.dst_offset, 0);
 
-	while (op->copied < op->i.sectors) {
-		ret = bch_btree_map_keys(&op->op, op->c,
-					 &KEY(op->i.src_inode,
-					      op->i.src_offset + op->copied, 0),
-					 bch_ioctl_copy_fn, 0);
-		if (ret < 0)
-			break;
-
-		ret = bch_btree_insert(op->c, BTREE_ID_EXTENTS, &op->keys, NULL);
-		if (ret < 0)
-			break;
-
-		BUG_ON(!bch_keylist_empty(&op->keys));
-	}
+	int ret = bch_copy(op->c, &src_start, &dst_start, op->i.sectors);
 
 	aio_complete(op->req, ret < 0 ? ret : 0, 0);
-	bch_keylist_free(&op->keys);
 	kfree(op);
 }
 
-static void bch_copy(struct kiocb *req, struct cache_set *c,
-		     unsigned long arg)
+static void bch_ioctl_copy(struct kiocb *req, struct cache_set *c,
+			   unsigned long arg)
 {
 	struct bch_ioctl_copy __user *user_i = (void __user *) arg;
 	struct bch_ioctl_copy_op *op;
@@ -513,13 +551,9 @@ static void bch_copy(struct kiocb *req, struct cache_set *c,
 		return;
 	}
 
-	INIT_WORK(&op->work, bch_copy_work);
+	INIT_WORK(&op->work, bch_ioctl_copy_work);
 	op->req = req;
 	op->c = c;
-
-	bch_btree_op_init(&op->op, BTREE_ID_EXTENTS, -1);
-	bch_keylist_init(&op->keys);
-	op->copied = 0;
 
 	if (copy_from_user(&op->i, user_i, sizeof(op->i))) {
 		aio_complete(req, -EFAULT, 0);
@@ -545,17 +579,15 @@ struct bch_discard_op {
 
 static int bch_discard_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 {
-	struct bch_discard_op *op = container_of(b_op,
-						 struct bch_discard_op, op);
-	struct keylist keys;
+	struct bch_discard_op *op = container_of(b_op, struct bch_discard_op, op);
 	struct bkey erase_key;
 	int ret;
+
+	BUG_ON(bkey_cmp(k, &START_KEY(op->start_key)) <= 0);
 
 	/* TODO replace with extent overlap. maybe? */
 	if (bkey_cmp(&START_KEY(k), op->end_key) >= 0)
 		return MAP_DONE;
-	if (bkey_cmp(k, &START_KEY(op->start_key)) <= 0)
-		BUG();
 
 	/* create the biggest key we can, to minimize writes */
 	erase_key = KEY(KEY_INODE(k), KEY_START(k) + KEY_SIZE_MAX, KEY_SIZE_MAX);
@@ -685,7 +717,7 @@ static long bch_aio_ioctl(struct kiocb *req, unsigned int cmd,
 	case BCH_IOCTL_BLOCKDEV_FIND_BY_UUID:
 		return bch_ioctl_blockdev_find_by_uuid(c, arg);
 	case BCH_IOCTL_COPY:
-		bch_copy(req, c, arg);
+		bch_ioctl_copy(req, c, arg);
 		return -EIOCBQUEUED;
 	case BCH_IOCTL_QUERY_UUID:
 		return bch_query_uuid(c, arg);

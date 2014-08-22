@@ -508,6 +508,7 @@ struct cache {
 	struct cache_set	*set;
 	/* Cache tier is protected by bucket_lock */
 	struct cache_sb		sb;
+
 	struct bcache_superblock disk_sb;
 
 	struct kobject		kobj;
@@ -653,6 +654,7 @@ struct cache_set {
 	unsigned long		flags;
 
 	struct cache __rcu	*cache[MAX_CACHES_PER_SET];
+	struct cache_member	*members;
 
 	struct cache_sb		sb;
 	size_t			nbuckets;
@@ -903,6 +905,11 @@ static inline sector_t bucket_to_sector(struct cache_set *c, size_t b)
 static inline sector_t bucket_remainder(struct cache_set *c, sector_t s)
 {
 	return s & (c->sb.bucket_size - 1);
+}
+
+static inline struct cache_member *cache_member_info(struct cache *ca)
+{
+	return ca->set->members + ca->sb.nr_this_dev;
 }
 
 static inline struct cache *PTR_CACHE(struct cache_set *c,

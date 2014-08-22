@@ -1076,6 +1076,8 @@ static int cached_dev_cache_miss_bypass(struct bch_read_op *r_op, struct btree *
 	miss = bio_next_split(bio, sectors, GFP_NOIO, b->c->bio_split);
 	if (miss != bio)
 		bio_chain(miss, bio);
+	else
+		atomic_inc(&bio->bi_remaining);
 	generic_make_request(miss);
 
 	return miss == bio ? MAP_DONE : MAP_CONTINUE;
@@ -1123,16 +1125,21 @@ static int cached_dev_cache_miss(struct bch_read_op *r_op, struct btree *b,
 	sectors = min(sectors, bio_sectors(bio) + reada);
 
 	replace.key = KEY(r_op->inode, bio->bi_iter.bi_sector + sectors, sectors);
-
 	ret = bch_btree_insert_check_key(b, &r_op->op, &replace.key);
 	if (ret)
 		return ret;
 
 	op->cache_miss = true;
 
-	miss = bio_next_split(bio, sectors, GFP_NOIO, b->c->bio_split);
-	if (miss != bio)
-		bio_chain(miss, bio);
+	if (sectors >= bio_sectors(bio)) {
+		miss = bio_clone_fast(bio, GFP_NOIO, b->c->bio_split);
+		ret = MAP_DONE;
+	} else {
+		miss = bio_split(bio, sectors, GFP_NOIO, b->c->bio_split);
+		ret = MAP_CONTINUE;
+	}
+
+	bio_chain(miss, bio);
 
 	to_bbio(miss)->key = KEY(r_op->inode,
 				 bio_end_sector(miss),
@@ -1142,7 +1149,7 @@ static int cached_dev_cache_miss(struct bch_read_op *r_op, struct btree *b,
 	__cache_promote(b->c, to_bbio(miss), &replace.key,
 			cached_dev_cache_miss_endio);
 
-	return miss == bio ? MAP_DONE : MAP_CONTINUE;
+	return ret;
 }
 
 /* Process writes */

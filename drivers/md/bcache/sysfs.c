@@ -900,6 +900,7 @@ static ssize_t show_reserve_stats(struct cache *ca, char *buf)
 SHOW(__bch_cache)
 {
 	struct cache *ca = container_of(kobj, struct cache, kobj);
+	struct cache_member *mi = cache_member_info(ca);
 	struct bucket_stats stats = bucket_stats_read(ca);
 
 	sysfs_hprint(bucket_size,	bucket_bytes(ca));
@@ -933,9 +934,9 @@ SHOW(__bch_cache)
 	if (attr == &sysfs_cache_replacement_policy)
 		return bch_snprint_string_list(buf, PAGE_SIZE,
 					       cache_replacement_policies,
-					       CACHE_REPLACEMENT(&ca->sb));
+					       CACHE_REPLACEMENT(mi));
 
-	sysfs_print(tier,		CACHE_TIER(&ca->sb));
+	sysfs_print(tier,		CACHE_TIER(mi));
 
 	if (attr == &sysfs_read_priority_stats)
 		return show_quantiles(ca, buf, bucket_priority_fn, (void *) 0);
@@ -953,6 +954,7 @@ SHOW_LOCKED(bch_cache)
 STORE(__bch_cache)
 {
 	struct cache *ca = container_of(kobj, struct cache, kobj);
+	struct cache_member *mi = cache_member_info(ca);
 	struct cache_set *c = ca->set;
 
 	sysfs_pd_controller_store(copy_gc, &ca->moving_gc_pd);
@@ -963,8 +965,8 @@ STORE(__bch_cache)
 		if (blk_queue_discard(bdev_get_queue(ca->bdev)))
 			ca->discard = v;
 
-		if (v != CACHE_DISCARD(&ca->sb)) {
-			SET_CACHE_DISCARD(&ca->sb, v);
+		if (v != CACHE_DISCARD(mi)) {
+			SET_CACHE_DISCARD(mi, v);
 			bcache_write_super(c);
 		}
 	}
@@ -975,9 +977,9 @@ STORE(__bch_cache)
 		if (v < 0)
 			return v;
 
-		if ((unsigned) v != CACHE_REPLACEMENT(&ca->sb)) {
+		if ((unsigned) v != CACHE_REPLACEMENT(mi)) {
 			mutex_lock(&c->bucket_lock);
-			SET_CACHE_REPLACEMENT(&ca->sb, v);
+			SET_CACHE_REPLACEMENT(mi, v);
 			mutex_unlock(&c->bucket_lock);
 
 			bcache_write_super(c);
@@ -990,12 +992,12 @@ STORE(__bch_cache)
 		if (v >= CACHE_TIERS)
 			return -EINVAL;
 
-		if (v != CACHE_TIER(&ca->sb)) {
+		if (v != CACHE_TIER(mi)) {
 			unsigned i;
 			struct cache_tier *tier;
 
 			mutex_lock(&c->bucket_lock);
-			tier = &c->cache_by_alloc[CACHE_TIER(&ca->sb)];
+			tier = &c->cache_by_alloc[CACHE_TIER(mi)];
 
 			for (i = 0; i < tier->nr_devices; i++)
 				if (tier->devices[i] == ca)
@@ -1014,7 +1016,7 @@ found:
 
 			mutex_unlock(&c->bucket_lock);
 
-			SET_CACHE_TIER(&ca->sb, v);
+			SET_CACHE_TIER(mi, v);
 			bcache_write_super(c);
 		}
 	}

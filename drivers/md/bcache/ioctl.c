@@ -18,6 +18,8 @@ static struct class *bch_extent_class;
 static int bch_extent_major;
 DEFINE_IDR(bch_extent_minor);
 
+/* read ioctl */
+
 static void bch_cache_read_endio(struct bio *bio, int error)
 {
 	struct kiocb *req = bio->bi_private;
@@ -92,6 +94,8 @@ struct bch_ioctl_write_op {
 	struct data_insert_op	iop;
 	struct bbio		bio;
 };
+
+/* write ioctl */
 
 static void bch_ioctl_write_done(struct closure *cl)
 {
@@ -190,6 +194,8 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 	if (atomic_dec_and_test(ref))
 		aio_complete(req, req->ki_pos, 0);
 }
+
+/* list_keys ioctl */
 
 struct bch_ioctl_list_keys_op {
 	struct bch_ioctl_list_keys	i;
@@ -425,6 +431,20 @@ static long bch_ioctl_blockdev_find_by_uuid(struct cache_set *c, unsigned long a
 	return 0;
 }
 
+static long bch_query_uuid(struct cache_set *c, unsigned long arg)
+{
+	struct bch_ioctl_query_uuid __user *user_i = (void __user *) arg;
+
+	if (copy_to_user(&user_i->uuid,
+			 &c->sb.set_uuid,
+			 sizeof(user_i->uuid)))
+		return -EFAULT;
+
+	return 0;
+}
+
+/* copy ioctl */
+
 struct bch_copy_op {
 	struct btree_op		op;
 	struct keylist		keys;
@@ -571,6 +591,8 @@ static void bch_ioctl_copy(struct kiocb *req, struct cache_set *c,
 	queue_work(system_long_wq, &op->work);
 }
 
+/* discard ioctl */
+
 struct bch_discard_op {
 	struct btree_op	op;
 	struct bkey *start_key;
@@ -681,17 +703,7 @@ static void bch_ioctl_discard(struct kiocb *req, struct cache_set *c,
 	queue_work(system_long_wq, &op->work);
 }
 
-static long bch_query_uuid(struct cache_set *c, unsigned long arg)
-{
-	struct bch_ioctl_query_uuid __user *user_i = (void __user *) arg;
-
-	if (copy_to_user(&user_i->uuid,
-			 &c->sb.set_uuid,
-			 sizeof(user_i->uuid)))
-		return -EFAULT;
-
-	return 0;
-}
+/* ioctl dispatch */
 
 static long bch_aio_ioctl(struct kiocb *req, unsigned int cmd,
 			  unsigned long arg)

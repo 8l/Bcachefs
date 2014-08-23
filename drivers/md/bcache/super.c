@@ -1700,7 +1700,15 @@ const char *bch_run_cache_set(struct cache_set *c)
 		goto err;
 
 	set_bit(CACHE_SET_RUNNING, &c->flags);
+
 	closure_put(&c->caching);
+
+	/*
+	 * If the allocator thread ran out of buckets during journal replay,
+	 * do a GC here so that we can wake up the allocator.
+	 */
+	wake_up_gc(c, false);
+
 	return NULL;
 err:
 	closure_sync(&cl);

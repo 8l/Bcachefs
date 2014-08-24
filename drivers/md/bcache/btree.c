@@ -220,7 +220,8 @@ static u64 btree_csum_set(struct btree *b, struct bset *i)
 	u64 crc = b->key.val[0];
 	void *data = (void *) i + 8, *end = bset_bkey_last(i);
 
-	crc = bch_crc64_update(crc, data, end - data);
+	crc = bch_checksum_update(BSET_CSUM_TYPE(i), crc, data, end - data);
+
 	return crc ^ 0xffffffffffffffffULL;
 }
 
@@ -265,6 +266,10 @@ void bch_btree_node_read_done(struct btree *b)
 
 		err = "bad magic";
 		if (i->magic != bset_magic(&b->c->sb))
+			goto err;
+
+		err = "unknown checksum type";
+		if (BSET_CSUM_TYPE(i) >= BCH_CSUM_NR)
 			goto err;
 
 		err = "bad checksum";
@@ -457,6 +462,8 @@ static void do_btree_node_write(struct btree *b)
 	int n;
 
 	i->version	= BCACHE_BSET_VERSION;
+
+	SET_BSET_CSUM_TYPE(i, CACHE_PREFERRED_CSUM_TYPE(&b->c->sb));
 	i->csum		= btree_csum_set(b, i);
 
 	BUG_ON(b->bio);

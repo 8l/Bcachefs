@@ -1311,6 +1311,8 @@ static void cached_dev_make_request(struct request_queue *q, struct bio *bio)
 				bch_mark_cache_accounting(d->c, dc,
 							  !op.cache_miss,
 							  bypass);
+
+				cached_dev_put(dc);
 			}
 		}
 	} else {

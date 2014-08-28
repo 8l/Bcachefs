@@ -316,7 +316,7 @@ struct journal_device {
 struct keybuf_key {
 	struct rb_node		node;
 	BKEY_PADDED(key);
-	void			*private;
+	atomic_t		ref;
 };
 
 struct keybuf {

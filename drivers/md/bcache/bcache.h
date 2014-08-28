@@ -847,10 +847,6 @@ struct cache_set {
 	/* device for ioctl interface */
 	struct device		*extent_device;
 
-	/* number of caches to replicate data on */
-	unsigned short		meta_replicas;
-	unsigned short		data_replicas;
-
 #define BUCKET_HASH_BITS	14
 	struct hlist_head	bucket_hash[1 << BUCKET_HASH_BITS];
 

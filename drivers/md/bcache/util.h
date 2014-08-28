@@ -365,12 +365,9 @@ static inline int bch_strtoul_h(const char *cp, long *res)
 
 #define strtoul_safe_restrict(cp, var, min, max)			\
 ({									\
-	unsigned long _v;						\
-	int _r = kstrtoul(cp, 10, &_v);					\
-	if (!_r && _v >= min && _v <= max)				\
-		var = _v;						\
-	else								\
-		_r = -EINVAL;						\
+	int _r = kstrtoul(cp, 10, &var);				\
+	if (!_r && (var < (min) || var > (max)))			\
+		_r = -ERANGE;						\
 	_r;								\
 })
 

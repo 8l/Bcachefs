@@ -389,61 +389,55 @@ next:
 	}
 }
 
-static bool refill_dirty(struct cached_dev *dc)
+static void bch_writeback(struct cached_dev *dc)
 {
 	struct keybuf *buf = &dc->writeback_keys;
 	unsigned inode = bcache_dev_inum(&dc->disk);
 	struct bkey end = KEY(inode, KEY_OFFSET_MAX, 0);
-	bool searched_from_start = false;
+	bool searched_from_start;
 
-	if (dc->partial_stripes_expensive) {
-		refill_full_stripes(dc);
-		if (array_freelist_empty(&buf->freelist))
-			return false;
-	}
+	buf->last_scanned = KEY(inode, 0, 0);
 
-	if (bkey_cmp(&buf->last_scanned, &end) >= 0) {
-		buf->last_scanned = KEY(inode, 0, 0);
-		searched_from_start = true;
-	}
+	while (bkey_cmp(&buf->last_scanned, &end) < 0) {
+		down_write(&dc->writeback_lock);
 
-	bch_refill_keybuf(dc->disk.c, buf, &end, dirty_pred);
+		if (!atomic_read(&dc->has_dirty)) {
+			up_write(&dc->writeback_lock);
+			set_current_state(TASK_INTERRUPTIBLE);
 
-	return bkey_cmp(&buf->last_scanned, &end) >= 0 && searched_from_start;
-}
+			if (kthread_should_stop())
+				return;
 
-static void bch_writeback(struct cached_dev *dc)
-{
-	bool searched_full_index;
-
-	down_write(&dc->writeback_lock);
-
-	if (!atomic_read(&dc->has_dirty)) {
-		up_write(&dc->writeback_lock);
-		set_current_state(TASK_INTERRUPTIBLE);
-
-		if (kthread_should_stop())
+			try_to_freeze();
+			schedule();
 			return;
+		}
 
-		try_to_freeze();
-		schedule();
-		return;
+		if (dc->partial_stripes_expensive) {
+			refill_full_stripes(dc);
+			if (array_freelist_empty(&buf->freelist))
+				goto refill_done;
+		}
+
+		searched_from_start = !bkey_cmp(&buf->last_scanned,
+						&KEY(inode, 0, 0));
+
+		bch_refill_keybuf(dc->disk.c, buf, &end, dirty_pred);
+
+		if (searched_from_start &&
+		    bkey_cmp(&buf->last_scanned, &end) >= 0 &&
+		    RB_EMPTY_ROOT(&dc->writeback_keys.keys)) {
+			atomic_set(&dc->has_dirty, 0);
+			cached_dev_put(dc);
+			SET_BDEV_STATE(&dc->sb, BDEV_STATE_CLEAN);
+			bch_write_bdev_super(dc, NULL);
+		}
+refill_done:
+		up_write(&dc->writeback_lock);
+
+		bch_ratelimit_reset(&dc->writeback_pd.rate);
+		read_dirty(dc);
 	}
-
-	searched_full_index = refill_dirty(dc);
-
-	if (searched_full_index &&
-	    RB_EMPTY_ROOT(&dc->writeback_keys.keys)) {
-		atomic_set(&dc->has_dirty, 0);
-		cached_dev_put(dc);
-		SET_BDEV_STATE(&dc->sb, BDEV_STATE_CLEAN);
-		bch_write_bdev_super(dc, NULL);
-	}
-
-	up_write(&dc->writeback_lock);
-
-	bch_ratelimit_reset(&dc->writeback_pd.rate);
-	read_dirty(dc);
 }
 
 static int bch_writeback_thread(void *arg)

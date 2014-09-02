@@ -1119,6 +1119,7 @@ void bch_cache_set_stop(struct cache_set *);
 struct cache_set *bch_cache_set_open_by_uuid(uuid_le *);
 
 void bch_cache_remove(struct cache *);
+int bch_cache_add(struct cache_set *, const char *);
 
 int bch_extent_store_init_cache_set(struct cache_set *);
 void bch_extent_store_exit_cache_set(struct cache_set *);

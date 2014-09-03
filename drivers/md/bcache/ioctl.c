@@ -399,7 +399,7 @@ static void bch_ioctl_inode_delete(struct kiocb *req, struct cache_set *c,
 		return;
 	}
 
-	w = kzalloc(sizeof(w), GFP_NOIO);
+	w = kzalloc(sizeof(*w), GFP_NOIO);
 	if (!w) {
 		aio_complete(req, -ENOMEM, 0);
 		return;

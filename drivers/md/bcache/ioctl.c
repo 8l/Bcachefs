@@ -164,14 +164,9 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 		bio->bi_max_vecs	= pages;
 		bio->bi_io_vec		= bio->bi_inline_vecs;
 
-		bch_data_insert_op_init(&op->iop, c,
-					bio,
-					hash_long((unsigned long) current, 16),
-					true,
-					false,
-					false,
-					&i.extent,
-					NULL);
+		bch_data_insert_op_init(&op->iop, c, bio, NULL,
+					true, false, false,
+					&i.extent, NULL);
 
 		ret = bio_get_user_pages(bio, i.buf,
 					 KEY_SIZE(&i.extent) << 9, 0);

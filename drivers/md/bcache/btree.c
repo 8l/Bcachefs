@@ -457,7 +457,6 @@ static void do_btree_node_write(struct btree *b)
 {
 	struct closure *cl = &b->io;
 	struct bset *i = btree_bset_last(b);
-	unsigned long ptrs_to_write[BITS_TO_LONGS(MAX_CACHES_PER_SET)];
 	BKEY_PADDED(key) k;
 	int n;
 
@@ -478,8 +477,6 @@ static void do_btree_node_write(struct btree *b)
 	b->bio->bi_rw		= REQ_META|WRITE_SYNC|REQ_FUA;
 	b->bio->bi_iter.bi_size	= roundup(set_bytes(i), block_bytes(b->c));
 	bch_bio_map(b->bio, i);
-
-	memset(ptrs_to_write, 0xFF, sizeof(ptrs_to_write));
 
 	/*
 	 * If we're appending to a leaf node, we don't technically need FUA -
@@ -510,8 +507,7 @@ static void do_btree_node_write(struct btree *b)
 			memcpy(page_address(bv->bv_page),
 			       base + j * PAGE_SIZE, PAGE_SIZE);
 
-		bch_submit_bbio_replicas(b->bio, b->c, &k.key,
-					 ptrs_to_write, true);
+		bch_submit_bbio_replicas(b->bio, b->c, &k.key, 0, true);
 		continue_at(cl, btree_node_write_done, NULL);
 	} else {
 		trace_bcache_btree_bounce_write_fail(b);
@@ -519,8 +515,7 @@ static void do_btree_node_write(struct btree *b)
 		b->bio->bi_vcnt = 0;
 		bch_bio_map(b->bio, i);
 
-		bch_submit_bbio_replicas(b->bio, b->c, &k.key,
-					 ptrs_to_write, true);
+		bch_submit_bbio_replicas(b->bio, b->c, &k.key, 0, true);
 
 		closure_sync(cl);
 		continue_at_nobarrier(cl, __btree_node_write_done, NULL);

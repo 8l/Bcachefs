@@ -559,14 +559,14 @@ static void cache_promote_endio(struct bio *bio, int error)
 }
 
 /**
- * __cache_promote -- insert result of read bio into cache
+ * cache_promote -- insert result of read bio into cache
  *
  * Used for backing devices and flash-only volumes.
  *
  * @orig_bio must actually be a bbio with a valid key.
  */
-static void __cache_promote(struct cache_set *c, struct bbio *orig_bio,
-			    struct bkey *replace_key, bio_end_io_t *bi_end_io)
+static void cache_promote(struct cache_set *c, struct bbio *orig_bio,
+			  struct bkey *replace_key, bio_end_io_t *bi_end_io)
 {
 	struct cache_promote_op *op;
 	struct bio *bio;
@@ -621,26 +621,6 @@ out_free:
 	kfree(op);
 out_submit:
 	generic_make_request(&orig_bio->bio);
-}
-
-/**
- * cache_promote - promote data stored in higher tiers
- *
- * Used for flash only volumes.
- *
- * @bio must actually be a bbio with valid key.
- */
-static bool cache_promote(struct cache_set *c, struct cache *ca,
-			  struct bbio *bio, struct bkey *k,
-			  unsigned ptr)
-{
-	if (!CACHE_TIER(&c->members[PTR_DEV(k, ptr)])) {
-		generic_make_request(&bio->bio);
-		return 0;
-	}
-
-	__cache_promote(c, bio, k, cache_promote_endio);
-	return 1;
 }
 
 /* Congested? */
@@ -877,8 +857,10 @@ static int bch_read_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 
 	bch_bbio_prep(bbio, ca);
 
-	cache_promote(b->c, ca, bbio, k, ptr);
-
+	if (!CACHE_TIER(&b->c->members[PTR_DEV(k, ptr)]))
+		generic_make_request(n);
+	else
+		cache_promote(b->c, bbio, k, cache_promote_endio);
 	return ret;
 }
 
@@ -1153,8 +1135,8 @@ static int cached_dev_cache_miss(struct bch_read_op *r_op, struct btree *b,
 				 bio_sectors(miss));
 	to_bbio(miss)->ca = NULL;
 
-	__cache_promote(b->c, to_bbio(miss), &replace.key,
-			cached_dev_cache_miss_endio);
+	cache_promote(b->c, to_bbio(miss), &replace.key,
+		      cached_dev_cache_miss_endio);
 
 	return ret;
 }

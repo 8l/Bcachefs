@@ -444,7 +444,7 @@ struct bch_copy_op {
 	struct btree_op		op;
 	struct keylist		keys;
 
-	struct bkey		src;
+	struct bkey		src_loc;
 	struct bkey		src_end;
 	u64			dst_inode;
 	u64			dst_shift;
@@ -457,10 +457,12 @@ static int bch_copy_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 
 	/* XXX: on hole, make this delete stuff in destination */
 
-	BUG_ON(bkey_cmp(k, &op->src) <= 0);
+	BUG_ON(bkey_cmp(k, &op->src_loc) <= 0);
 
-	if (bkey_cmp(&START_KEY(k), &op->src_end) >= 0)
+	if (bkey_cmp(&START_KEY(k), &op->src_end) >= 0) {
+		op->src_loc = *k;
 		return MAP_DONE;
+	}
 
 	/* If memory alloc fails, just insert what we've slurped up so far */
 	if (bch_keylist_realloc(&op->keys, KEY_U64s(k)))
@@ -469,7 +471,7 @@ static int bch_copy_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 	/* cut pointers to size */
 	copy = op->keys.top;
 	bkey_copy(copy, k);
-	bch_cut_front(&op->src, copy);
+	bch_cut_front(&op->src_loc, copy);
 	bch_cut_back(&op->src_end, copy);
 
 	/* modify copy to reference destination */
@@ -477,7 +479,7 @@ static int bch_copy_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 	SET_KEY_OFFSET(copy, KEY_OFFSET(copy) + op->dst_shift);
 
 	bch_keylist_push(&op->keys);
-	SET_KEY_OFFSET(&op->src, KEY_OFFSET(k));
+	op->src_loc = *k;
 
 	return MAP_CONTINUE;
 }
@@ -504,20 +506,30 @@ int bch_copy(struct cache_set *c, struct bkey *src_start, struct bkey *dst_start
 
 	bch_btree_op_init(&op.op, BTREE_ID_EXTENTS, -1);
 	bch_keylist_init(&op.keys);
-	op.src = START_KEY(src_start);
+	op.src_loc = START_KEY(src_start);
 	op.src_end = KEY(KEY_INODE(src_start), KEY_START(src_start) + sectors, 0);
 	op.dst_inode = KEY_INODE(dst_start);
 	op.dst_shift = KEY_START(dst_start) - KEY_START(src_start);
 
 	/* XXX: probably deserves input validation and errors here */
 
-	while (bkey_cmp(&op.src, &op.src_end) < 0) {
-		ret = bch_btree_map_keys(&op.op, c, &op.src, bch_copy_fn, 0);
+	/*
+	 * We can't use just a single map call because keylists have a finite
+	 * size, so we loop until the full range is covered. op->src_loc keeps
+	 * track of our current location in the copy operation.
+	 */
+	while (bkey_cmp(&op.src_loc, &op.src_end) < 0) {
+		ret = bch_btree_map_keys(&op.op, c, &op.src_loc, bch_copy_fn, 0);
 
 		if (ret < 0)
 			break;
+
+		/*
+		 * when MAP_CONTINUE is returned from bch_btree_map_keys, we know the
+		 * map function was expecting more keys where there weren't any.
+		 */
 		if (ret == MAP_CONTINUE)
-			op.src = op.src_end;
+			op.src_loc = op.src_end;
 
 		ret = bch_btree_insert(c, BTREE_ID_EXTENTS, &op.keys, NULL);
 		if (ret < 0)

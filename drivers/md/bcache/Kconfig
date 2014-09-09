@@ -24,3 +24,9 @@ config SIX_LOCKS_DEBUG
 	Don't select this option unless you're a developer
 
 	Enables SIX lock tracepoints.
+
+config BCACHE_NO_IO
+	bool "Disable IO to underlying device"
+	depends on BCACHE
+	---help---
+	Stubs out all the actual IO calls

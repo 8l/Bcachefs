@@ -471,7 +471,13 @@ static void __bch_write(struct closure *cl)
 		trace_bcache_cache_insert(k);
 
 		n->bi_rw |= REQ_WRITE;
+#ifndef CONFIG_BCACHE_NO_IO
 		bch_submit_bbio_replicas(n, op->c, k, ptrs_from, false);
+#else
+		bch_bbio_prep(to_bbio(n), NULL);
+		closure_get(n->bi_private);
+		bio_endio(n, 0);
+#endif
 
 		BUG_ON(bch_extent_normalize(op->c, k));
 
@@ -1178,7 +1184,11 @@ int bch_read_with_versions(struct cache_set *c,
 			bkey_copy(&bbio->key, &tmp.key);
 			bch_bbio_prep(bbio, ca);
 
+#ifndef CONFIG_BCACHE_NO_IO
 			cache_promote(c, bbio, k);
+#else
+			bio_endio(n, 0);
+#endif
 		} else {
 			unsigned bytes = min_t(unsigned, sectors,
 					       bio_sectors(bio)) << 9;

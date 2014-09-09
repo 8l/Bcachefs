@@ -35,4 +35,4 @@ bcache-y		:= alloc.o\
 	writeback.o\
 	xattr.o
 
-ccflags-y		:= -Werror
+#ccflags-y		:= -Werror

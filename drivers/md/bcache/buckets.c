@@ -96,6 +96,10 @@ static void bucket_stats_update(struct cache *ca,
 	stats->buckets_dirty += is_dirty_bucket(new) - is_dirty_bucket(old);
 
 	preempt_enable();
+
+	if (!is_available_bucket(old) &&
+	    is_available_bucket(new))
+		wake_up_process(ca->alloc_thread);
 }
 
 static struct bucket_mark bch_bucket_mark_set(struct cache *ca, struct bucket *g,
@@ -166,8 +170,10 @@ uint8_t bch_mark_data_bucket(struct cache_set *c, struct cache *ca,
 	unsigned long bucket_nr = PTR_BUCKET_NR(c, k, i);
 	unsigned gen = PTR_GEN(k, i);
 	uint8_t stale;
+	unsigned saturated;
 
 	bucket_cmpxchg(&ca->buckets[bucket_nr], old, new, ({
+		saturated = 0;
 		/*
 		 * cmpxchg() only implies a full barrier on success, not
 		 * failure, so we need a read barrier on all iterations -
@@ -194,6 +200,11 @@ uint8_t bch_mark_data_bucket(struct cache_set *c, struct cache *ca,
 			return 0;
 
 		BUG_ON(old.is_metadata);
+		if (dirty &&
+		    new.dirty_sectors == GC_MAX_SECTORS_USED &&
+		    sectors < 0)
+			saturated = -sectors;
+
 		if (dirty)
 			saturated_add(ca, new.dirty_sectors, sectors,
 				      GC_MAX_SECTORS_USED);
@@ -201,6 +212,13 @@ uint8_t bch_mark_data_bucket(struct cache_set *c, struct cache *ca,
 			saturated_add(ca, new.cached_sectors, sectors,
 				      GC_MAX_SECTORS_USED);
 	}));
+
+	if (saturated &&
+	    atomic_long_add_return(saturated,
+				   &ca->saturated_count) >=
+	    ca->free_inc.size << c->bucket_bits)
+		wake_up_process(ca->alloc_thread);
+
 
 	return 0;
 }

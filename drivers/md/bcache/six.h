@@ -33,7 +33,8 @@ union six_lock_state {
 	};
 
 	struct {
-		unsigned long	read_lock:BITS_PER_LONG - 2;
+		unsigned long	waiters:(BITS_PER_LONG - 2) / 2;
+		unsigned long	read_lock:(BITS_PER_LONG - 2) / 2;
 		unsigned long	intent_lock:1;
 		unsigned long	write_lock:1;
 	};
@@ -77,7 +78,8 @@ do {									\
 
 #endif
 
-#define __SIX_VAL(type)	((union six_lock_state) { .type##_lock = 1 }).v
+#define __SIX_VAL(type)	(((union six_lock_state) { .type##_lock = 1 }).v)
+#define __SIX_WAIT_VAL	(((union six_lock_state) { .waiters = 1 }).v)
 
 #define six_trylock_convert(lock, from, to)				\
 ({									\
@@ -109,7 +111,24 @@ do {									\
 })
 
 #define six_lock_convert(lock, from, to)				\
-	wait_event((lock)->wait, six_trylock_convert((lock), from, to))
+do {									\
+	if (!six_trylock_convert((lock), from, to)) {			\
+		DEFINE_WAIT(_wait);					\
+									\
+		prepare_to_wait(&(lock)->wait, &_wait,			\
+				TASK_UNINTERRUPTIBLE);			\
+		atomic_long_add(__SIX_WAIT_VAL, &(lock)->state.counter);\
+									\
+		while (!six_trylock_convert((lock), from, to)) {	\
+			schedule();					\
+			prepare_to_wait(&(lock)->wait, &_wait,		\
+					TASK_UNINTERRUPTIBLE);		\
+		}							\
+									\
+		atomic_long_sub(__SIX_WAIT_VAL, &(lock)->state.counter);\
+		finish_wait(&(lock)->wait, &_wait);			\
+	}								\
+} while (0)
 
 #define __SIX_LOCK(type)						\
 	static inline bool six_trylock_##type(struct six_lock *lock)	\
@@ -133,22 +152,40 @@ do {									\
 		}							\
 	}								\
 									\
+	static inline void six_lock_slowpath_##type(struct six_lock *lock)\
+	{								\
+		DEFINE_WAIT(wait);					\
+									\
+		prepare_to_wait(&lock->wait, &wait, TASK_UNINTERRUPTIBLE);\
+		atomic_long_add(__SIX_WAIT_VAL, &lock->state.counter);	\
+									\
+		while (!six_trylock_##type(lock)) {			\
+			schedule();					\
+			prepare_to_wait(&lock->wait, &wait,		\
+					TASK_UNINTERRUPTIBLE);		\
+		}							\
+									\
+		atomic_long_sub(__SIX_WAIT_VAL, &lock->state.counter);	\
+		finish_wait(&lock->wait, &wait);			\
+	}								\
+									\
 	static inline void six_lock_##type(struct six_lock *lock)	\
 	{								\
-		wait_event(lock->wait, six_trylock_##type(lock));	\
+		if (!six_trylock_##type(lock))				\
+			six_lock_slowpath_##type(lock);			\
 	}								\
 									\
 	static inline void six_unlock_##type(struct six_lock *lock)	\
 	{								\
+		union six_lock_state state;				\
+									\
 		EBUG_ON(!lock->state.type##_lock);			\
 		six_release(&(lock)->dep_map);				\
 									\
 		smp_wmb();						\
-		atomic_long_sub(__SIX_VAL(type),			\
-				&lock->state.counter);			\
-		smp_rmb();						\
-									\
-		if (!list_empty_careful(&(lock)->wait.task_list))	\
+		state.v = atomic_long_sub_return(__SIX_VAL(type),	\
+						 &lock->state.counter);	\
+		if (state.waiters)					\
 			wake_up(&(lock)->wait);				\
 	}
 

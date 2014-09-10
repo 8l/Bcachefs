@@ -778,8 +778,10 @@ static bool bch_extent_invalid(struct btree_keys *bk, struct bkey *k)
 	return __bch_extent_invalid(b->c, k);
 }
 
-static bool __bch_extent_debug_invalid(struct cache_set *c, struct bkey *k)
+static bool bch_extent_debug_invalid(struct btree_keys *bk, struct bkey *k)
 {
+	struct btree *b = container_of(bk, struct btree, keys);
+	struct cache_set *c = b->c;
 	struct cache *ca;
 	struct bucket *g;
 	unsigned seq, stale, replicas_needed;
@@ -869,14 +871,6 @@ bad_ptr:
 	return true;
 }
 
-static bool bch_extent_debug_invalid(struct btree_keys *bk, struct bkey *k)
-{
-	struct btree *b = container_of(bk, struct btree, keys);
-	struct cache_set *c = b->c;
-
-	return __bch_extent_debug_invalid(c, k);
-}
-
 bool bch_extent_normalize(struct cache_set *c, struct bkey *k)
 {
 	unsigned i;
@@ -903,12 +897,6 @@ bool bch_extent_normalize(struct cache_set *c, struct bkey *k)
 
 	if (!bch_extent_ptrs(k))
 		SET_KEY_DELETED(k, true);
-
-#ifdef CONFIG_BCACHE_DEBUG
-	if (expensive_debug_checks(c) &&
-	    __bch_extent_debug_invalid(c, k))
-		return true;
-#endif
 
 	return KEY_DELETED(k);
 }

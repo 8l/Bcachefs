@@ -1115,6 +1115,8 @@ static int cached_dev_cache_miss(struct bch_read_op *r_op, struct btree *b,
 	sectors = min(sectors, bio_sectors(bio) + reada);
 
 	replace.key = KEY(r_op->inode, bio->bi_iter.bi_sector + sectors, sectors);
+	SET_KEY_CACHED(&replace.key, true);
+
 	ret = bch_btree_insert_check_key(b, &r_op->op, &replace.key);
 	if (ret)
 		return ret;

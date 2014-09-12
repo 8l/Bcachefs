@@ -389,7 +389,8 @@ static void write_bdev_super_endio(struct bio *bio, int error)
 	closure_put(&dc->sb_write);
 }
 
-static void __write_super(struct bcache_superblock *disk_sb,
+static void __write_super(struct cache_set *c,
+			  struct bcache_superblock *disk_sb,
 			  struct block_device *bdev,
 			  struct cache_sb *sb)
 {
@@ -423,7 +424,8 @@ static void __write_super(struct bcache_superblock *disk_sb,
 	pr_debug("ver %llu, flags %llu, seq %llu",
 		 sb->version, sb->flags, sb->seq);
 
-	submit_bio(REQ_WRITE|REQ_SYNC|REQ_META, bio);
+	bio->bi_rw		|= (REQ_WRITE|REQ_SYNC|REQ_META);
+	bch_generic_make_request(bio, c);
 }
 
 static void bch_write_bdev_super_unlock(struct closure *cl)
@@ -446,7 +448,7 @@ void bch_write_bdev_super(struct cached_dev *dc, struct closure *parent)
 	bio->bi_private = dc;
 
 	closure_get(cl);
-	__write_super(&dc->disk_sb, dc->bdev, &dc->sb);
+	__write_super(dc->disk.c, &dc->disk_sb, dc->bdev, &dc->sb);
 
 	closure_return_with_destructor(cl, bch_write_bdev_super_unlock);
 }
@@ -551,7 +553,7 @@ static void __bcache_write_super(struct cache_set *c)
 
 		closure_get(cl);
 		percpu_ref_get(&ca->ref);
-		__write_super(&ca->disk_sb, ca->bdev, &ca->sb);
+		__write_super(c, &ca->disk_sb, ca->bdev, &ca->sb);
 	}
 
 	closure_return_with_destructor(cl, bcache_write_super_unlock);

@@ -163,6 +163,35 @@ struct bcache_device *bch_dev_get_by_inode(struct cache_set *c, uint64_t inode)
 	return d;
 }
 
+void bch_cache_group_remove_cache(struct cache_group *grp, struct cache *ca)
+{
+	unsigned i;
+
+	write_seqcount_begin(&grp->lock);
+
+	for (i = 0; i < grp->nr_devices; i++)
+		if (grp->devices[i] == ca) {
+			grp->nr_devices--;
+			memmove(&grp->devices[i],
+				&grp->devices[i + 1],
+				(grp->nr_devices - i) * sizeof(ca));
+			goto done;
+		}
+
+	WARN(1, "cache device not found in tier\n");
+done:
+	write_seqcount_end(&grp->lock);
+}
+
+void bch_cache_group_add_cache(struct cache_group *grp, struct cache *ca)
+{
+	write_seqcount_begin(&grp->lock);
+	BUG_ON(grp->nr_devices >= MAX_CACHES_PER_SET);
+
+	rcu_assign_pointer(grp->devices[grp->nr_devices++], ca);
+	write_seqcount_end(&grp->lock);
+}
+
 /* Superblock */
 
 static const char *validate_super(struct bcache_superblock *disk_sb,
@@ -1753,8 +1782,12 @@ static struct cache_set *bch_cache_set_alloc(struct cache *ca)
 	seqlock_init(&c->gc_cur_lock);
 	c->gc_cur_btree = BTREE_ID_NR;
 
-	for (i = 0; i < ARRAY_SIZE(c->cache_by_alloc); i++)
-		c->cache_by_alloc[i].wp.tier = &c->cache_by_alloc[i];
+	seqcount_init(&c->cache_all.lock);
+
+	for (i = 0; i < ARRAY_SIZE(c->cache_tiers); i++) {
+		seqcount_init(&c->cache_tiers[i].lock);
+		c->tier_write_points[i].tier = &c->cache_tiers[i];
+	}
 
 	return c;
 err:
@@ -1977,7 +2010,7 @@ static const char *can_attach_cache(struct cache *ca, struct cache_set *c)
 
 static int cache_set_add_device(struct cache_set *c, struct cache *ca)
 {
-	struct cache_tier *tier;
+	struct cache_group *tier;
 	char buf[12];
 	int ret;
 
@@ -2000,11 +2033,10 @@ static int cache_set_add_device(struct cache_set *c, struct cache *ca)
 
 	rcu_assign_pointer(c->cache[ca->sb.nr_this_dev], ca);
 
-	tier = &c->cache_by_alloc[CACHE_TIER(cache_member_info(ca))];
+	tier = &c->cache_tiers[CACHE_TIER(cache_member_info(ca))];
 
-	BUG_ON(tier->nr_devices >= MAX_CACHES_PER_SET);
-
-	rcu_assign_pointer(tier->devices[tier->nr_devices++], ca);
+	bch_cache_group_add_cache(tier, ca);
+	bch_cache_group_add_cache(&c->cache_all, ca);
 
 	return 0;
 }
@@ -2171,17 +2203,14 @@ static void bch_cache_kill_rcu(struct rcu_head *rcu)
 static void __bch_cache_remove(struct cache *ca)
 {
 	struct cache_set *c = ca->set;
-	struct cache_tier *tier =
-		&c->cache_by_alloc[CACHE_TIER(cache_member_info(ca))];
-	unsigned i;
+	struct cache_group *tier =
+		&c->cache_tiers[CACHE_TIER(cache_member_info(ca))];
 
 	lockdep_assert_held(&bch_register_lock);
 
 	/* already ran? */
 	if (rcu_access_pointer(c->cache[ca->sb.nr_this_dev]) != ca)
 		return;
-
-	rcu_assign_pointer(c->cache[ca->sb.nr_this_dev], NULL);
 
 	if (c->kobj.state_in_sysfs) {
 		char buf[12];
@@ -2190,20 +2219,16 @@ static void __bch_cache_remove(struct cache *ca)
 		sysfs_remove_link(&c->kobj, buf);
 	}
 
-	for (i = 0; i < tier->nr_devices; i++)
-		if (tier->devices[i] == ca) {
-			tier->nr_devices--;
-			memmove(&tier->devices[i],
-				&tier->devices[i + 1],
-				(tier->nr_devices - i) * sizeof(ca));
-			break;
-		}
-
 	bch_moving_gc_stop(ca);
+
+	bch_cache_group_remove_cache(&c->cache_all, ca);
+	bch_cache_group_remove_cache(tier, ca);
 
 	if (ca->alloc_thread)
 		kthread_stop(ca->alloc_thread);
 	ca->alloc_thread = NULL;
+
+	rcu_assign_pointer(c->cache[ca->sb.nr_this_dev], NULL);
 
 	call_rcu(&ca->kill_rcu, bch_cache_kill_rcu);
 }

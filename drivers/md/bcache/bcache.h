@@ -513,7 +513,7 @@ struct write_point {
 	 * If not NULL, tier specific writepoint used by tiering/promotion -
 	 * always allocates a single replica
 	 */
-	struct cache_tier	*tier;
+	struct cache_group	*tier;
 
 	/*
 	 * Otherwise do a normal replicated bucket allocation that could come
@@ -653,15 +653,10 @@ struct gc_stat {
 #define	CACHE_SET_STOPPING		1
 #define	CACHE_SET_RUNNING		2
 
-struct cache_tier {
+struct cache_group {
+	seqcount_t		lock;
 	unsigned		nr_devices;
 	struct cache __rcu	*devices[MAX_CACHES_PER_SET];
-
-	/*
-	 * writepoint specific to this tier, for cache promote/background
-	 * tiering
-	 */
-	struct write_point	wp;
 };
 
 struct prio_clock {
@@ -745,7 +740,9 @@ struct cache_set {
 	struct workqueue_struct	*wq;
 
 	/* ALLOCATION */
-	struct cache_tier	cache_by_alloc[CACHE_TIERS];
+	struct cache_group	cache_all;
+	struct cache_group	cache_tiers[CACHE_TIERS];
+
 	struct mutex		bucket_lock;
 
 	/* Protected by freelist_lock */
@@ -769,6 +766,8 @@ struct cache_set {
 	struct open_bucket	open_buckets[OPEN_BUCKETS_COUNT];
 
 	struct write_point	write_points[WRITE_POINT_COUNT];
+
+	struct write_point	tier_write_points[CACHE_TIERS];
 
 	/* GARBAGE COLLECTION */
 	struct task_struct	*gc_thread;
@@ -1122,6 +1121,9 @@ static inline void bch_check_mark_super(struct cache_set *c,
 }
 
 /* Forward declarations */
+
+void bch_cache_group_remove_cache(struct cache_group *, struct cache *);
+void bch_cache_group_add_cache(struct cache_group *, struct cache *);
 
 void bch_count_io_errors(struct cache *, int, const char *);
 void bch_bbio_count_io_errors(struct bbio *, int, const char *);

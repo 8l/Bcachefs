@@ -122,9 +122,9 @@ static int wait_buckets_available(struct cache *ca)
 		 * potentially make room on our cache by tiering
 		 */
 		for (i = CACHE_TIER(cache_member_info(ca)) + 1;
-		     i < ARRAY_SIZE(c->cache_by_alloc);
+		     i < ARRAY_SIZE(c->cache_tiers);
 		     i++)
-			if (c->cache_by_alloc[i].nr_devices) {
+			if (c->cache_tiers[i].nr_devices) {
 				c->tiering_pd.rate.rate = UINT_MAX;
 				bch_ratelimit_reset(&c->tiering_pd.rate);
 				wake_up_process(c->tiering_read);
@@ -615,13 +615,13 @@ static void bch_bucket_free_never_used(struct cache_set *c, struct bkey *k)
 
 static struct cache *bch_next_cache(struct cache_set *c,
 				    enum alloc_reserve reserve,
-				    int tier_idx, long *cache_used,
+				    struct cache_group *devs,
+				    long *cache_used,
 				    struct closure *cl)
 {
-	struct cache __rcu **devices;
 	struct cache *ca;
 	size_t bucket_count = 0, rand;
-	int i, nr_devices;
+	unsigned i;
 
 	/*
 	 * first ptr allocation will always go to the specified tier,
@@ -629,18 +629,8 @@ static struct cache *bch_next_cache(struct cache_set *c,
 	 * it is likely to go that tier.
 	 */
 
-	if (tier_idx == -1) {
-		devices = c->cache;
-		nr_devices = c->sb.nr_in_set;
-	} else {
-		struct cache_tier *tier = &c->cache_by_alloc[tier_idx];
-
-		devices = tier->devices;
-		nr_devices = tier->nr_devices;
-	}
-
-	for (i = 0; i < nr_devices; i++) {
-		if (!(ca = rcu_dereference(devices[i])))
+	for (i = 0; i < devs->nr_devices; i++) {
+		if (!(ca = rcu_dereference(devs->devices[i])))
 			continue;
 
 		if (test_bit(ca->sb.nr_this_dev, cache_used))
@@ -667,8 +657,8 @@ static struct cache *bch_next_cache(struct cache_set *c,
 
 	ca = NULL;
 
-	for (i = 0; i < nr_devices; i++) {
-		if (!(ca = rcu_dereference(devices[i])))
+	for (i = 0; i < devs->nr_devices; i++) {
+		if (!(ca = rcu_dereference(devs->devices[i])))
 			continue;
 
 		if (test_bit(ca->sb.nr_this_dev, cache_used))
@@ -684,19 +674,19 @@ static struct cache *bch_next_cache(struct cache_set *c,
 	 * If the bucket free counters changed while we were running, we might
 	 * fall off the end, so just return the last dev we saw
 	 */
-	if (ca)
-		__set_bit(ca->sb.nr_this_dev, cache_used);
+
 	return ca;
 }
 
 int bch_bucket_alloc_set(struct cache_set *c, enum alloc_reserve reserve,
-			 struct bkey *k, int n, unsigned tier_idx,
+			 struct bkey *k, int n,
+			 struct cache_group *tier,
 			 struct closure *cl)
 {
+	struct cache_group *devs = tier ?: &c->cache_tiers[0];
 	long caches_used[BITS_TO_LONGS(MAX_CACHES_PER_SET)];
 	int i, ret;
 
-	BUG_ON(tier_idx > ARRAY_SIZE(c->cache_by_alloc));
 	BUG_ON(!n || n > BKEY_EXTENT_PTRS_MAX);
 
 	bkey_init(k);
@@ -708,17 +698,31 @@ int bch_bucket_alloc_set(struct cache_set *c, enum alloc_reserve reserve,
 
 	for (i = 0; i < n; i++) {
 		struct cache *ca;
+		unsigned seq;
 		long r;
-
+retry:
 		/* first ptr goes to the specified tier, the rest to any */
-		ca = bch_next_cache(c, reserve, i == 0 ? tier_idx : -1,
-				    caches_used, cl);
+		do {
+			seq = read_seqcount_begin(&devs->lock);
+			ca = bch_next_cache(c, reserve, devs,
+					    caches_used, cl);
+		} while (read_seqcount_retry(&devs->lock, seq));
+
+		/* tier went away? */
+		if (!ca) {
+			/* we were asked for a specific tier */
+			if (tier)
+				return -ENOSPC;
+			devs = &c->cache_all;
+			goto retry;
+		}
 
 		if (IS_ERR_OR_NULL(ca)) {
-			BUG_ON(!ca);
 			ret = PTR_ERR(ca);
 			goto err;
 		}
+
+		__set_bit(ca->sb.nr_this_dev, caches_used);
 
 		r = bch_bucket_alloc(ca, reserve, cl);
 		if (r < 0) {
@@ -731,6 +735,8 @@ int bch_bucket_alloc_set(struct cache_set *c, enum alloc_reserve reserve,
 				ca->sb.nr_this_dev);
 
 		bch_set_extent_ptrs(k, i + 1);
+
+		devs = &c->cache_all;
 	}
 
 	rcu_read_unlock();
@@ -829,13 +835,13 @@ static struct open_bucket *bch_open_bucket_alloc(struct cache_set *c,
 		bch_set_extent_ptrs(&b->key, 1);
 	} else if (wp->tier) {
 		ret = bch_bucket_alloc_set(c, RESERVE_NONE, &b->key, 1,
-					   wp->tier - c->cache_by_alloc, cl);
+					   wp->tier, cl);
 		if (ret)
 			goto err;
 	} else {
 		ret = bch_bucket_alloc_set(c, RESERVE_NONE, &b->key,
 				CACHE_SET_DATA_REPLICAS_WANT(&c->sb),
-				0, cl);
+				NULL, cl);
 		if (ret)
 			goto err;
 	}

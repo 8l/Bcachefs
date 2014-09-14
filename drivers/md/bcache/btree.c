@@ -78,6 +78,12 @@ static int __bch_btree_insert_node(struct btree *, struct btree_op *,
 #define PTR_HASH(c, k)							\
 	(((k)->val[0] >> c->bucket_bits) | PTR_GEN(k, 0))
 
+#define for_each_cached_btree(b, c, iter)				\
+	for (iter = 0;							\
+	     iter < ARRAY_SIZE((c)->bucket_hash);			\
+	     iter++)							\
+		hlist_for_each_entry_rcu((b), (c)->bucket_hash + iter, hash)
+
 /*
  * These macros are for recursing down the btree - they handle the details of
  * locking and looking up nodes in the cache for you. They're best treated as
@@ -521,7 +527,7 @@ static void do_btree_node_write(struct btree *b)
 	}
 }
 
-void __bch_btree_node_write(struct btree *b, struct closure *parent)
+static void __bch_btree_node_write(struct btree *b, struct closure *parent)
 {
 	struct bset *i = btree_bset_last(b);
 	size_t blocks_to_write = set_blocks(i, block_bytes(b->c));
@@ -595,6 +601,43 @@ static void btree_node_write_work(struct work_struct *w)
 {
 	struct btree *b = container_of(to_delayed_work(w), struct btree, work);
 	bch_btree_node_write_dirty(b, NULL);
+}
+
+void bch_btree_write_oldest(struct cache_set *c)
+{
+	/*
+	 * Try to find the btree node with that references the oldest journal
+	 * entry, best is our current candidate and is locked if non NULL:
+	 */
+	struct btree *b, *best;
+	unsigned i;
+retry:
+	cond_resched();
+	best = NULL;
+
+	for_each_cached_btree(b, c, i)
+		if (btree_current_write(b)->journal) {
+			if (!best)
+				best = b;
+			else if (journal_pin_cmp(c,
+					btree_current_write(best)->journal,
+					btree_current_write(b)->journal)) {
+				best = b;
+			}
+		}
+
+	b = best;
+	if (b) {
+		six_lock_read(&b->lock);
+		if (!btree_current_write(b)->journal) {
+			six_unlock_read(&b->lock);
+			/* We raced */
+			goto retry;
+		}
+
+		__bch_btree_node_write(b, NULL);
+		six_unlock_read(&b->lock);
+	}
 }
 
 /*

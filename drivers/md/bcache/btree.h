@@ -171,14 +171,6 @@ static inline void set_gc_sectors(struct cache_set *c)
 	atomic64_set(&c->sectors_until_gc, c->sb.bucket_size * c->nbuckets / 16);
 }
 
-/* Looping macros */
-
-#define for_each_cached_btree(b, c, iter)				\
-	for (iter = 0;							\
-	     iter < ARRAY_SIZE((c)->bucket_hash);			\
-	     iter++)							\
-		hlist_for_each_entry_rcu((b), (c)->bucket_hash + iter, hash)
-
 /* Recursing down the btree */
 
 /**
@@ -214,8 +206,8 @@ static inline void bch_btree_op_init(struct btree_op *op, enum btree_id id,
 #define btree_node_root(b)	((b)->c->btree_roots[(b)->btree_id])
 
 void bch_btree_node_read_done(struct btree *);
-void __bch_btree_node_write(struct btree *, struct closure *);
-void bch_btree_flush(struct cache_set *, bool wait);
+void bch_btree_flush(struct cache_set *, bool);
+void bch_btree_write_oldest(struct cache_set *);
 
 int bch_btree_root_alloc(struct cache_set *, enum btree_id, struct closure *);
 int bch_btree_root_read(struct cache_set *, enum btree_id,

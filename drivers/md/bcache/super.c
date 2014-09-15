@@ -2505,9 +2505,11 @@ static ssize_t register_bcache(struct kobject *k, struct kobj_attribute *attr,
 	char *path = NULL;
 	struct cache_set *c = NULL;
 
-	path = kstrndup(buffer, size, GFP_KERNEL);
+	path = kstrndup(skip_spaces(buffer), size, GFP_KERNEL);
 	if (!path)
 		goto err;
+
+	strim(path);
 
 	err = register_bcache_devices(&path, 1, &c);
 	if (err)
@@ -2529,7 +2531,7 @@ out:
 	return ret;
 err:
 	if (attr != &ksysfs_register_quiet)
-		pr_info("error opening %s: %s", buffer, err);
+		pr_info("error opening %s: %s", path, err);
 	goto out;
 }
 

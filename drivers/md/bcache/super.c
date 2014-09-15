@@ -1761,6 +1761,7 @@ static const char *run_cache_set(struct cache_set *c)
 	struct cache *ca;
 	struct closure cl;
 	unsigned i, id;
+	int ret;
 
 	closure_init_stack(&cl);
 
@@ -1776,8 +1777,14 @@ static const char *run_cache_set(struct cache_set *c)
 		struct jset_keys *jk;
 		u64 *prio_bucket_ptrs = NULL;
 
+		ret = bch_journal_read(c, &journal);
+
 		err = "cannot allocate memory for journal";
-		if (bch_journal_read(c, &journal))
+		if (ret == -ENOMEM)
+			goto err;
+
+		err = "error reading journal";
+		if (ret)
 			goto err;
 
 		pr_debug("btree_journal_read() done");

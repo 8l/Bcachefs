@@ -1804,6 +1804,7 @@ const char *bch_run_cache_set(struct cache_set *c)
 	struct cache *ca;
 	struct closure cl;
 	unsigned i, id;
+	int ret;
 
 	lockdep_assert_held(&bch_register_lock);
 
@@ -1821,8 +1822,14 @@ const char *bch_run_cache_set(struct cache_set *c)
 		struct jset_keys *jk;
 		u64 *prio_bucket_ptrs = NULL;
 
+		ret = bch_journal_read(c, &journal);
+
 		err = "cannot allocate memory for journal";
-		if (bch_journal_read(c, &journal))
+		if (ret == -ENOMEM)
+			goto err;
+
+		err = "error reading journal";
+		if (ret)
 			goto err;
 
 		pr_debug("btree_journal_read() done");

@@ -567,7 +567,6 @@ struct cache {
 
 	struct task_struct	*alloc_thread;
 
-	struct closure		prio;
 	struct prio_set		*disk_buckets;
 
 	/*

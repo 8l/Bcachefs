@@ -1868,8 +1868,7 @@ const char *bch_run_cache_set(struct cache_set *c)
 			k = bch_journal_find_btree_root(c, j, id, &level);
 			if (!k && id == BTREE_ID_EXTENTS)
 				goto err;
-			if (!k)
-			{
+			if (!k) {
 				pr_debug("missing btree root: %d", id);
 				continue;
 			}
@@ -1907,8 +1906,10 @@ const char *bch_run_cache_set(struct cache_set *c)
 
 		err = "unable to allocate journal buckets";
 		for_each_cache(ca, c, i)
-			if (bch_cache_journal_alloc(ca))
+			if (bch_cache_journal_alloc(ca)) {
+				percpu_ref_put(&ca->ref);
 				goto err;
+			}
 
 		bch_initial_gc(c, NULL);
 

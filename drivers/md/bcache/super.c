@@ -2145,6 +2145,7 @@ void bch_cache_read_only(struct cache *ca)
 {
 	struct cache_set *c = ca->set;
 	struct cache_group *tier;
+	struct task_struct *p;
 
 	bch_moving_gc_stop(ca);
 
@@ -2153,9 +2154,11 @@ void bch_cache_read_only(struct cache *ca)
 	bch_cache_group_remove_cache(tier, ca);
 	bch_cache_group_remove_cache(&c->cache_all, ca);
 
-	if (ca->alloc_thread)
-		kthread_stop(ca->alloc_thread);
+	p = ca->alloc_thread;
 	ca->alloc_thread = NULL;
+	smp_wmb();
+	if (p)
+		kthread_stop(p);
 }
 
 void bch_cache_release(struct kobject *kobj)

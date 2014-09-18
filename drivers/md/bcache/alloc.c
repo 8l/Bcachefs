@@ -471,7 +471,7 @@ static int bch_allocator_thread(void *arg)
 					break;
 
 				if (kthread_should_stop())
-					return 0;
+					goto out;
 				schedule();
 			}
 
@@ -485,7 +485,7 @@ static int bch_allocator_thread(void *arg)
 		do {
 			if (wait_buckets_available(ca)) {
 				up_read(&c->gc_lock);
-				return 0;
+				goto out;
 			}
 
 			/*
@@ -509,6 +509,13 @@ static int bch_allocator_thread(void *arg)
 		if (CACHE_SYNC(&ca->set->sb))
 			bch_prio_write(ca);
 	}
+out:
+	/*
+	 * Avoid a race with bucket_stats_update() trying to wake us up after
+	 * we've exited:
+	 */
+	synchronize_rcu();
+	return 0;
 }
 
 /* Allocation */

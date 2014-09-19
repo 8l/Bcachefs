@@ -1157,6 +1157,7 @@ static inline void bch_check_mark_super(struct cache_set *c,
 void bch_cache_group_remove_cache(struct cache_group *, struct cache *);
 void bch_cache_group_add_cache(struct cache_group *, struct cache *);
 void bch_cache_read_only(struct cache *);
+const char *bch_cache_read_write(struct cache *);
 
 void bch_count_io_errors(struct cache *, int, const char *);
 void bch_bbio_count_io_errors(struct bbio *, int, const char *);

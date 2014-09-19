@@ -1875,10 +1875,9 @@ const char *bch_run_cache_set(struct cache_set *c)
 		 */
 		bch_journal_next(&c->journal);
 
-		err = "error starting allocator thread";
 		for_each_cache(ca, c, i)
 			if (CACHE_STATE(cache_member_info(ca)) == CACHE_ACTIVE &&
-			    bch_cache_allocator_start(ca)) {
+			    (err = bch_cache_allocator_start(ca))) {
 				percpu_ref_put(&ca->ref);
 				goto err;
 			}
@@ -1899,10 +1898,9 @@ const char *bch_run_cache_set(struct cache_set *c)
 
 		bch_initial_gc(c, NULL);
 
-		err = "error starting allocator thread";
 		for_each_cache(ca, c, i)
 			if (CACHE_STATE(cache_member_info(ca)) == CACHE_ACTIVE &&
-			    bch_cache_allocator_start(ca)) {
+			    (err = bch_cache_allocator_start(ca))) {
 				percpu_ref_put(&ca->ref);
 				goto err;
 			}

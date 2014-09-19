@@ -1432,6 +1432,21 @@ int bch_flash_dev_create(struct cache_set *c, uint64_t size)
 
 /* Cache set */
 
+static void bch_recalc_capacity(struct cache_set *c)
+{
+	struct cache_group *tier = &c->cache_all;
+	u64 nbuckets = 0;
+	unsigned i;
+
+	for (i = 0; i < tier->nr_devices; i++) {
+		struct cache *ca = tier->devices[i];
+
+		nbuckets += ca->sb.nbuckets - ca->sb.first_bucket;
+	}
+
+	c->nbuckets = nbuckets;
+}
+
 __printf(2, 3)
 bool bch_cache_set_error(struct cache_set *c, const char *fmt, ...)
 {
@@ -1740,9 +1755,6 @@ static const char *run_cache_set(struct cache_set *c)
 	/* We don't want bch_cache_set_error() to free underneath us */
 	closure_get(&c->caching);
 
-	for_each_cache(ca, c, i)
-		c->nbuckets += ca->sb.nbuckets;
-
 	if (CACHE_SYNC(&c->sb)) {
 		LIST_HEAD(journal);
 		struct jset *j;
@@ -1835,7 +1847,7 @@ static const char *run_cache_set(struct cache_set *c)
 		for_each_cache(ca, c, i)
 			if (CACHE_STATE(cache_member_info(ca)) ==
 			    CACHE_ACTIVE &&
-			    (err = bch_cache_allocator_start(ca))) {
+			    (err = bch_cache_read_write(ca))) {
 				percpu_ref_put(&ca->ref);
 				goto err;
 			}
@@ -1857,7 +1869,7 @@ static const char *run_cache_set(struct cache_set *c)
 		for_each_cache(ca, c, i)
 			if (CACHE_STATE(cache_member_info(ca)) ==
 			    CACHE_ACTIVE &&
-			    (err = bch_cache_allocator_start(ca))) {
+			    (err = bch_cache_read_write(ca))) {
 				percpu_ref_put(&ca->ref);
 				goto err;
 			}
@@ -1943,7 +1955,6 @@ static const char *can_attach_cache(struct cache *ca, struct cache_set *c)
 
 static int cache_set_add_device(struct cache_set *c, struct cache *ca)
 {
-	struct cache_member *mi = c->members + ca->sb.nr_this_dev;
 	char buf[12];
 	int ret;
 
@@ -1965,13 +1976,6 @@ static int cache_set_add_device(struct cache_set *c, struct cache *ca)
 
 	kobject_get(&ca->kobj);
 	rcu_assign_pointer(c->cache[ca->sb.nr_this_dev], ca);
-
-	if (CACHE_STATE(mi) == CACHE_ACTIVE) {
-		struct cache_group *tier = &c->cache_tiers[CACHE_TIER(mi)];
-
-		bch_cache_group_add_cache(tier, ca);
-		bch_cache_group_add_cache(&c->cache_all, ca);
-	}
 
 	return 0;
 }
@@ -2027,12 +2031,11 @@ err:
 void bch_cache_read_only(struct cache *ca)
 {
 	struct cache_set *c = ca->set;
-	struct cache_group *tier;
+	struct cache_member *mi = cache_member_info(ca);
+	struct cache_group *tier = &c->cache_tiers[CACHE_TIER(mi)];
 	struct task_struct *p;
 
 	bch_moving_gc_stop(ca);
-
-	tier = &c->cache_tiers[CACHE_TIER(cache_member_info(ca))];
 
 	bch_cache_group_remove_cache(tier, ca);
 	bch_cache_group_remove_cache(&c->cache_all, ca);
@@ -2042,6 +2045,27 @@ void bch_cache_read_only(struct cache *ca)
 	smp_wmb(); /* XXX */
 	if (p)
 		kthread_stop(p);
+
+	bch_recalc_capacity(c);
+}
+
+const char *bch_cache_read_write(struct cache *ca)
+{
+	struct cache_set *c = ca->set;
+	struct cache_member *mi = cache_member_info(ca);
+	struct cache_group *tier = &c->cache_tiers[CACHE_TIER(mi)];
+	const char *err;
+
+	err = bch_cache_allocator_start(ca);
+	if (err)
+		return err;
+
+	bch_cache_group_add_cache(tier, ca);
+	bch_cache_group_add_cache(&c->cache_all, ca);
+
+	bch_recalc_capacity(c);
+
+	return NULL;
 }
 
 void bch_cache_release(struct kobject *kobj)
@@ -2375,10 +2399,6 @@ have_slot:
 	if (bch_cache_journal_alloc(ca))
 		goto err_put;
 
-	err = "error starting allocator thread";
-	if (bch_cache_allocator_start(ca))
-		goto err_put;
-
 	c->members[nr_this_dev].uuid = ca->sb.uuid;
 	bcache_write_super(c);
 
@@ -2388,6 +2408,10 @@ have_slot:
 
 	err = "sysfs error";
 	if (cache_set_add_device(c, ca))
+		goto err_put;
+
+	err = bch_cache_read_write(ca);
+	if (err)
 		goto err_put;
 
 	ret = 0;

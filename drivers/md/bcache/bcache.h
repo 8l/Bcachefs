@@ -199,6 +199,8 @@
 
 #include <linux/dynamic_fault.h>
 
+#define CACHE_RESERVE_PERCENT		20
+
 #define cache_set_init_fault(id)	named_fault(cache_set_init_##id)
 
 struct bucket_mark {
@@ -599,6 +601,8 @@ struct cache {
 	DECLARE_FIFO(long, free_inc);
 	spinlock_t		freelist_lock;
 
+	size_t			reserve_buckets_count;
+
 	size_t			fifo_last_bucket;
 
 	/* Allocation stuff: */
@@ -717,7 +721,6 @@ struct cache_set {
 	unsigned long		cache_slots_used[BITS_TO_LONGS(MAX_CACHES_PER_SET)];
 
 	struct cache_sb		sb;
-	size_t			nbuckets;
 	unsigned short		bucket_bits;	/* ilog2(bucket_size) */
 	unsigned short		block_bits;	/* ilog2(block_size) */
 
@@ -778,6 +781,7 @@ struct cache_set {
 	/* ALLOCATION */
 	struct cache_group	cache_all;
 	struct cache_group	cache_tiers[CACHE_TIERS];
+	u64			capacity; /* sectors */
 
 	struct mutex		bucket_lock;
 

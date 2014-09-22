@@ -198,6 +198,15 @@ uint8_t bch_mark_data_bucket(struct cache_set *c, struct cache *ca,
 		if (!gc && gc_will_visit_key(c, k))
 			return 0;
 
+		/*
+		 * Disallowed state transition - this means a bkey_cmpxchg()
+		 * operation is racing; just treat it like the pointer was
+		 * already stale
+		 */
+		if (!gc && dirty &&
+		    is_available_bucket(old))
+			return 1;
+
 		BUG_ON(old.is_metadata);
 		if (dirty &&
 		    new.dirty_sectors == GC_MAX_SECTORS_USED &&

@@ -629,7 +629,7 @@ static int bch_readpage(struct file *file, struct page *page)
 
 struct bch_writepage_io {
 	struct closure		cl;
-	struct data_insert_op	op;
+	struct bch_write_op	op;
 	struct bbio		bio;
 };
 
@@ -668,7 +668,7 @@ static void bch_writepage_do_io(struct bch_writepage_io *io)
 		 KEY_INODE(&io->op.insert_key),
 		 (u64) io->bio.bio.bi_iter.bi_sector);
 
-	closure_call(&io->op.cl, bch_data_insert, NULL, &io->cl);
+	closure_call(&io->op.cl, bch_write, NULL, &io->cl);
 	closure_return_with_destructor(&io->cl, bch_writepage_io_free);
 }
 
@@ -710,9 +710,9 @@ again:
 		bio->bi_io_vec = bio->bi_inline_vecs;
 		bio->bi_max_vecs = BIO_MAX_PAGES;
 
-		bch_data_insert_op_init(&w->io->op, w->c, bio, NULL,
-					true, false, false,
-					&KEY(w->inum, 0, 0), NULL);
+		bch_write_op_init(&w->io->op, w->c, bio, NULL,
+				  true, false, false,
+				  &KEY(w->inum, 0, 0), NULL);
 	}
 
 	if (bch_bio_add_page(&w->io->bio.bio, page)) {
@@ -767,9 +767,9 @@ static int bch_writepage(struct page *page, struct writeback_control *wbc)
 	bio->bi_io_vec = bio->bi_inline_vecs;
 	bio->bi_max_vecs = 1;
 
-	bch_data_insert_op_init(&io->op, c, bio, NULL,
-				true, false, false,
-				&KEY(inode->i_ino, 0, 0), NULL);
+	bch_write_op_init(&io->op, c, bio, NULL,
+			  true, false, false,
+			  &KEY(inode->i_ino, 0, 0), NULL);
 
 	bch_bio_add_page(bio, page);
 

@@ -108,7 +108,7 @@ struct btree_op {
 	u8			reserve;
 };
 
-struct data_insert_op {
+struct bch_write_op {
 	struct closure		cl;
 	struct cache_set	*c;
 	struct workqueue_struct	*io_wq;
@@ -136,7 +136,7 @@ struct data_insert_op {
 		/* Set on completion, if cmpxchg index update failed */
 		unsigned	replace_collision:1;
 		/* Internal */
-		unsigned	insert_data_done:1;
+		unsigned	write_done:1;
 	};
 	};
 
@@ -150,9 +150,9 @@ struct data_insert_op {
 	BKEY_PADDED(replace_key);
 };
 
-void bch_data_insert_op_init(struct data_insert_op *, struct cache_set *,
-			     struct bio *, struct write_point *, bool,
-			     bool, bool, struct bkey *, struct bkey *);
+void bch_write_op_init(struct bch_write_op *, struct cache_set *,
+		       struct bio *, struct write_point *, bool,
+		       bool, bool, struct bkey *, struct bkey *);
 
 struct bbio {
 	struct cache		*ca;
@@ -171,7 +171,7 @@ struct bbio {
 #define to_bbio(_bio)		container_of((_bio), struct bbio, bio)
 
 int bch_read(struct cache_set *, struct bio *, u64);
-void bch_data_insert(struct closure *);
+void bch_write(struct closure *);
 
 int bch_list_keys(struct cache_set *, unsigned, struct bkey *, struct bkey *,
 		  struct bkey *, size_t, unsigned, unsigned *);

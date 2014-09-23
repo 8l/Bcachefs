@@ -14,7 +14,6 @@ void bch_submit_bbio(struct bbio *, struct cache *, struct bkey *,
 		     unsigned, bool);
 void bch_submit_bbio_replicas(struct bio *, struct cache_set *,
 			      struct bkey *, unsigned, bool);
-void bch_bbio_reset(struct bbio *bio);
 
 void __cache_promote(struct cache_set *, struct bbio *, struct bkey *);
 bool cache_promote(struct cache_set *, struct bbio *, struct bkey *, unsigned);

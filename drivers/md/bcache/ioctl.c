@@ -91,7 +91,7 @@ static void bch_ioctl_read(struct kiocb *req, struct cache_set *c,
 struct bch_ioctl_write_op {
 	struct closure		cl;
 	struct kiocb		*req;
-	struct data_insert_op	iop;
+	struct bch_write_op	iop;
 	struct bbio		bio;
 };
 
@@ -164,9 +164,9 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 		bio->bi_max_vecs	= pages;
 		bio->bi_io_vec		= bio->bi_inline_vecs;
 
-		bch_data_insert_op_init(&op->iop, c, bio, NULL,
-					true, false, false,
-					&i.extent, NULL);
+		bch_write_op_init(&op->iop, c, bio, NULL,
+				  true, false, false,
+				  &i.extent, NULL);
 
 		ret = bio_get_user_pages(bio, i.buf,
 					 KEY_SIZE(&i.extent) << 9, 0);
@@ -181,7 +181,7 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 			     KEY_SIZE(&i.extent) - bio_sectors(bio));
 		i.buf += bio_sectors(bio) << 9;
 
-		closure_call(&op->iop.cl, bch_data_insert, NULL, &op->cl);
+		closure_call(&op->iop.cl, bch_write, NULL, &op->cl);
 		closure_return_with_destructor_noreturn(&op->cl,
 							bch_ioctl_write_done);
 	}

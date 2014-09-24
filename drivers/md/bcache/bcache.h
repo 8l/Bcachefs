@@ -1184,8 +1184,6 @@ bool bch_cache_set_error(struct cache_set *, const char *, ...);
 void bch_prio_write(struct cache *);
 void bch_write_bdev_super(struct cached_dev *, struct closure *);
 
-struct bcache_device *bch_dev_get_by_inode(struct cache_set *, uint64_t);
-
 extern struct workqueue_struct *bcache_io_wq;
 extern struct mutex bch_register_lock;
 extern struct idr bch_extent_minor;

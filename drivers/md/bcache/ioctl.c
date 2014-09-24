@@ -16,7 +16,7 @@
 
 static struct class *bch_extent_class;
 static int bch_extent_major;
-DEFINE_IDR(bch_extent_minor);
+DEFINE_IDR(bch_cache_set_minor);
 
 /* read ioctl */
 
@@ -793,7 +793,7 @@ static struct file_operations bch_extent_store = {
 
 int bch_extent_store_init_cache_set(struct cache_set *c)
 {
-	c->minor = idr_alloc(&bch_extent_minor, c, 0, 0, GFP_KERNEL);
+	c->minor = idr_alloc(&bch_cache_set_minor, c, 0, 0, GFP_KERNEL);
 	if (c->minor < 0)
 		return c->minor;
 
@@ -813,7 +813,7 @@ void bch_extent_store_exit_cache_set(struct cache_set *c)
 	if (!IS_ERR_OR_NULL(c->extent_device))
 		device_unregister(c->extent_device);
 	if (c->minor >= 0)
-		idr_remove(&bch_extent_minor, c->minor);
+		idr_remove(&bch_cache_set_minor, c->minor);
 }
 
 void bch_extent_store_exit(void)

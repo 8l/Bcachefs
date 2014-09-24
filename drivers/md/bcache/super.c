@@ -10,6 +10,7 @@
 #include "alloc.h"
 #include "btree.h"
 #include "debug.h"
+#include "inode.h"
 #include "io.h"
 #include "journal.h"
 #include "movinggc.h"
@@ -17,6 +18,7 @@
 #include "writeback.h"
 
 #include <linux/blkdev.h>
+#include <linux/crc32c.h>
 #include <linux/debugfs.h>
 #include <linux/genhd.h>
 #include <linux/idr.h>
@@ -2108,7 +2110,7 @@ struct cache_set *bch_cache_set_open(unsigned minor)
 	struct cache_set *c;
 
 	mutex_lock(&bch_register_lock);
-	c = bch_cache_set_get(idr_find(&bch_extent_minor, minor));
+	c = bch_cache_set_get(idr_find(&bch_cache_set_minor, minor));
 	mutex_unlock(&bch_register_lock);
 
 	return c;
@@ -2538,6 +2540,13 @@ err:
 }
 
 /* Global interfaces/init */
+
+#define kobj_attribute_write(n, fn)					\
+	static struct kobj_attribute ksysfs_##n = __ATTR(n, S_IWUSR, NULL, fn)
+
+#define kobj_attribute_rw(n, show, store)				\
+	static struct kobj_attribute ksysfs_##n =			\
+		__ATTR(n, S_IWUSR|S_IRUSR, show, store)
 
 static ssize_t register_bcache(struct kobject *, struct kobj_attribute *,
 			       const char *, size_t);

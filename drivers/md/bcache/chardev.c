@@ -8,6 +8,7 @@
  */
 
 #include "bcache.h"
+#include "super.h"
 
 #include <linux/module.h>
 #include <linux/fs.h>

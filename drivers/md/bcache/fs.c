@@ -6,6 +6,7 @@
 #include "extents.h"
 #include "inode.h"
 #include "request.h"
+#include "super.h"
 #include "xattr.h"
 
 #include "linux/buffer_head.h"

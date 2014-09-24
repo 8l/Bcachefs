@@ -11,6 +11,7 @@
 #include "dirent.h"
 #include "extents.h"
 #include "inode.h"
+#include "super.h"
 #include "writeback.h"
 #include "xattr.h"
 

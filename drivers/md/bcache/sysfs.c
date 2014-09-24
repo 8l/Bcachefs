@@ -6,6 +6,7 @@
  */
 
 #include "bcache.h"
+#include "blockdev.h"
 #include "sysfs.h"
 #include "btree.h"
 #include "inode.h"

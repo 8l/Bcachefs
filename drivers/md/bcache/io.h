@@ -18,7 +18,8 @@ void bch_submit_bbio_replicas(struct bio *, struct cache_set *,
 void __cache_promote(struct cache_set *, struct bbio *, struct bkey *);
 bool cache_promote(struct cache_set *, struct bbio *, struct bkey *, unsigned);
 
-void bch_read_race_work(struct work_struct *work);
+void bch_read_race_work(struct work_struct *);
+void bch_wake_delayed_writes(unsigned long data);
 
 extern struct workqueue_struct *bcache_io_wq;
 

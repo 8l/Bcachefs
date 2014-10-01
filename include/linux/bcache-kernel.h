@@ -143,7 +143,15 @@ struct bch_write_op {
 	u8			btree_alloc_reserve;
 
 	struct write_point	*wp;
+
+	union {
 	struct open_bucket	*open_buckets[2];
+	struct {
+	struct bch_write_op	*next;
+	unsigned long		expires;
+	};
+	};
+
 
 	struct keylist		insert_keys;
 	BKEY_PADDED(insert_key);

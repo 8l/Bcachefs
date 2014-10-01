@@ -666,6 +666,7 @@ static void cache_set_flush(struct closure *cl)
 	bch_extent_store_exit_cache_set(c);
 	mutex_unlock(&bch_register_lock);
 
+	del_timer_sync(&c->foreground_write_wakeup);
 	cancel_delayed_work_sync(&c->pd_controllers_update);
 
 	c->tiering_pd.rate.rate = UINT_MAX;

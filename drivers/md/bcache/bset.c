@@ -786,6 +786,7 @@ void bch_bset_insert(struct btree_keys *b, struct bkey *where,
 	struct bset_tree *t = bset_tree_last(b);
 
 	BUG_ON(!b->last_set_unwritten);
+	BUG_ON(where < t->data->start);
 	BUG_ON(bset_byte_offset(b, t->data) +
 	       __set_bytes(t->data, t->data->keys + KEY_U64s(insert)) >
 	       PAGE_SIZE << b->page_order);

@@ -230,6 +230,14 @@ static int bch_moving_gc_thread(void *arg)
 	return 0;
 }
 
+void bch_moving_init_cache(struct cache *ca)
+{
+	bch_keybuf_init(&ca->moving_gc_keys, DFLT_MOVING_GC_KEYS_KEYBUF_NR);
+	bch_pd_controller_init(&ca->moving_gc_pd);
+
+	ca->moving_gc_pd.d_term = 0;
+}
+
 void bch_moving_gc_stop(struct cache *ca)
 {
 	ca->moving_gc_pd.rate.rate = UINT_MAX;

@@ -14,6 +14,7 @@
 #include "request.h"
 #include "super.h"
 #include "writeback.h"
+#include "keybuf.h"
 
 #include <linux/blkdev.h>
 #include <linux/sort.h>
@@ -168,6 +169,20 @@ rw_attribute(data_replicas);
 rw_attribute(tier);
 sysfs_pd_controller_attribute(copy_gc);
 
+/* New paramters */
+
+rw_attribute(gc_sector_percent);
+rw_attribute(cache_reserve_percent);
+
+/* cache_set */
+rw_attribute(tiering_key_pairs);
+
+/* cached_dev */
+rw_attribute(writeback_key_pairs);
+
+/* cache */
+rw_attribute(copy_gc_key_pairs);
+
 static struct attribute sysfs_state_rw =
 	{ .name = "state", .mode = S_IRUGO|S_IWUSR };
 
@@ -212,6 +227,9 @@ SHOW(__bch_cached_dev)
 		strcat(buf, "\n");
 		return strlen(buf);
 	}
+
+	sysfs_printf(writeback_key_pairs,		"%i",
+		     ((int) (bch_keybuf_size(&dc->writeback_keys))));
 
 #undef var
 	return 0;
@@ -313,6 +331,14 @@ STORE(__cached_dev)
 	if (attr == &sysfs_stop)
 		bcache_device_stop(&dc->disk);
 
+	if (attr == &sysfs_writeback_key_pairs) {
+		int nr = (strtoi_h_or_return(buf));
+		nr = (clamp(nr,
+			    MIN_WRITEBACK_KEYS_KEYBUF_NR,
+			    MAX_WRITEBACK_KEYS_KEYBUF_NR));
+		bch_keybuf_resize((&dc->writeback_keys), ((unsigned) nr));
+	}
+
 	return size;
 }
 
@@ -361,6 +387,9 @@ static struct attribute *bch_cached_dev_files[] = {
 	&sysfs_verify,
 	&sysfs_bypass_torture_test,
 #endif
+
+	&sysfs_writeback_key_pairs,
+
 	NULL
 };
 KTYPE(bch_cached_dev);
@@ -631,6 +660,11 @@ SHOW(__bch_cache_set)
 	sysfs_print(tree_depth,			c->btree_roots[BTREE_ID_EXTENTS]->level);
 	sysfs_print(root_usage_percent,		bch_root_usage(c));
 
+	sysfs_printf(gc_sector_percent,		"%i", c->gc_sector_percent);
+	sysfs_printf(cache_reserve_percent,	"%i", c->cache_reserve_percent);
+	sysfs_printf(tiering_key_pairs,		"%i",
+		     ((int) (bch_keybuf_size(&c->tiering_keys))));
+
 	return 0;
 }
 SHOW_LOCKED(bch_cache_set)
@@ -823,6 +857,30 @@ STORE(__bch_cache_set)
 		c->btree_cache_shrink.scan_objects(&c->btree_cache_shrink, &sc);
 	}
 
+	if (attr == &sysfs_gc_sector_percent) {
+		int v = (strtoi_h_or_return(buf));
+		v = (clamp(v,
+			   MIN_CACHE_SET_GC_SECTOR_PERCENT,
+			   MAX_CACHE_SET_GC_SECTOR_PERCENT));
+		c->gc_sector_percent = ((unsigned) v);
+	}
+
+	if (attr == &sysfs_cache_reserve_percent) {
+		int v = (strtoi_h_or_return(buf));
+		v = (clamp(v,
+			   MIN_CACHE_SET_CACHE_RESERVE_PERCENT,
+			   MAX_CACHE_SET_CACHE_RESERVE_PERCENT));
+		c->cache_reserve_percent = ((unsigned) v);
+	}
+
+	if (attr == &sysfs_tiering_key_pairs) {
+		int v = (strtoi_h_or_return(buf));
+		v = (clamp(v,
+			   MIN_TIERING_KEYS_KEYBUF_NR,
+			   MAX_TIERING_KEYS_KEYBUF_NR));
+		bch_keybuf_resize((&c->tiering_keys), ((unsigned) v));
+	}
+
 	return size;
 }
 STORE_LOCKED(bch_cache_set)
@@ -880,6 +938,10 @@ static struct attribute *bch_cache_set_files[] = {
 	&sysfs_bucket_reserve_percent,
 	&sysfs_sector_reserve_percent,
 	&sysfs_tiering_percent,
+
+	&sysfs_gc_sector_percent,
+	&sysfs_cache_reserve_percent,
+	&sysfs_tiering_key_pairs,
 
 	NULL
 };
@@ -1055,6 +1117,9 @@ SHOW(__bch_cache)
 	if (attr == &sysfs_reserve_stats)
 		return show_reserve_stats(ca, buf);
 
+	sysfs_printf(copy_gc_key_pairs,		"%i",
+		     ((int) (bch_keybuf_size(&ca->moving_gc_keys))));
+
 	return 0;
 }
 SHOW_LOCKED(bch_cache)
@@ -1164,6 +1229,13 @@ STORE(__bch_cache)
 		atomic_set(&ca->io_errors, 0);
 	}
 
+	if (attr == &sysfs_copy_gc_key_pairs) {
+		int nr = (strtoi_h_or_return(buf));
+		nr = (clamp(nr,
+			    MIN_MOVING_GC_KEYS_KEYBUF_NR,
+			    MAX_MOVING_GC_KEYS_KEYBUF_NR));
+		bch_keybuf_resize((&ca->moving_gc_keys), ((unsigned) nr));
+	}
 	return size;
 }
 STORE_LOCKED(bch_cache)
@@ -1200,6 +1272,9 @@ static struct attribute *bch_cache_files[] = {
 	&sysfs_tier,
 	&sysfs_state_rw,
 	sysfs_pd_controller_files(copy_gc),
+
+	&sysfs_copy_gc_key_pairs,
+
 	NULL
 };
 KTYPE(bch_cache);

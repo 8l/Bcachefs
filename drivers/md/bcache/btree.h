@@ -168,7 +168,13 @@ static inline unsigned bset_block_offset(struct btree *b, struct bset *i)
 
 static inline void set_gc_sectors(struct cache_set *c)
 {
-	atomic64_set(&c->sectors_until_gc, c->capacity / 16);
+	u64 val;
+
+	val = div64_u64((((u64) (c->capacity))
+			 * ((u64) (c->gc_sector_percent))),
+			((u64) 100));
+
+	atomic64_set(&c->sectors_until_gc, val);
 }
 
 static inline size_t btree_bytes(struct cache_set *c)

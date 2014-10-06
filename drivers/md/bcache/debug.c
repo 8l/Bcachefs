@@ -211,7 +211,7 @@ static int bch_dump_open(struct inode *inode, struct file *file)
 
 	file->private_data = i;
 	i->c = c;
-	bch_keybuf_init(&i->keys);
+	bch_keybuf_init(&i->keys, DFLT_KEYBUF_KEYBUF_NR);
 	i->keys.last_scanned = KEY(0, 0, 0);
 
 	return 0;
@@ -219,6 +219,10 @@ static int bch_dump_open(struct inode *inode, struct file *file)
 
 static int bch_dump_release(struct inode *inode, struct file *file)
 {
+	struct dump_iterator *i;
+
+	i = (file->private_data);
+	bch_keybuf_free(&i->keys);
 	kfree(file->private_data);
 	return 0;
 }

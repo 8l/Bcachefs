@@ -289,6 +289,10 @@ struct cache {
 	/* Moving GC: */
 	struct task_struct	*moving_gc_read;
 	struct workqueue_struct	*moving_gc_write;
+
+#define DFLT_MOVING_GC_KEYS_KEYBUF_NR	 500
+#define MIN_MOVING_GC_KEYS_KEYBUF_NR	   1
+#define MAX_MOVING_GC_KEYS_KEYBUF_NR	4999
 	struct keybuf		moving_gc_keys;
 	struct bch_pd_controller moving_gc_pd;
 
@@ -520,6 +524,9 @@ struct cache_set {
 	struct task_struct	*tiering_read;
 	struct workqueue_struct	*tiering_write;
 
+#define DFLT_TIERING_KEYS_KEYBUF_NR	 500
+#define MIN_TIERING_KEYS_KEYBUF_NR	   1
+#define MAX_TIERING_KEYS_KEYBUF_NR	4999
 	struct keybuf		tiering_keys;
 	struct bch_pd_controller tiering_pd;
 
@@ -609,6 +616,23 @@ struct cache_set {
 	struct bio_list		read_race_list;
 	struct work_struct	read_race_work;
 	spinlock_t		read_race_lock;
+
+	/* 6% approximates the current 1 / 16 = 6.25% */
+#define DFLT_CACHE_SET_GC_SECTOR_PERCENT		 6
+#define MIN_CACHE_SET_GC_SECTOR_PERCENT			 1
+#define MAX_CACHE_SET_GC_SECTOR_PERCENT			99
+
+	/* The following is clampd by the sysfs code so that it is
+	   always legal (between 0 and 100 inclusive) */
+	unsigned		gc_sector_percent;
+
+#define DFLT_CACHE_SET_CACHE_RESERVE_PERCENT		20
+#define MIN_CACHE_SET_CACHE_RESERVE_PERCENT		 1
+#define MAX_CACHE_SET_CACHE_RESERVE_PERCENT		99
+
+	/* The following is clampd by the sysfs code so that it is
+	   always legal (between 0 and 100 inclusive) */
+	unsigned		cache_reserve_percent;
 };
 
 #define bucket_pages(c)		((c)->sb.bucket_size / PAGE_SECTORS)

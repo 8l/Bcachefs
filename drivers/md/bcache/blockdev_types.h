@@ -88,6 +88,10 @@ struct cached_dev {
 	unsigned		writeback_pd_update_seconds;
 
 	struct task_struct	*writeback_thread;
+
+#define DFLT_WRITEBACK_KEYS_KEYBUF_NR	 500
+#define MIN_WRITEBACK_KEYS_KEYBUF_NR	   1
+#define MAX_WRITEBACK_KEYS_KEYBUF_NR	4999
 	struct keybuf		writeback_keys;
 	mempool_t		*writeback_io_pool;
 	mempool_t		*writeback_page_pool;

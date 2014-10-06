@@ -363,7 +363,7 @@ static void refill_full_stripes(struct cached_dev *dc)
 				       next_stripe * dc->disk.stripe_size, 0),
 				  dirty_pred);
 
-		if (array_freelist_empty(&buf->freelist))
+		if (freelist_empty(&buf->freelist))
 			return;
 
 		stripe = next_stripe;
@@ -408,7 +408,7 @@ static void bch_writeback(struct cached_dev *dc)
 
 		if (dc->partial_stripes_expensive) {
 			refill_full_stripes(dc);
-			if (array_freelist_empty(&buf->freelist))
+			if (freelist_empty(&buf->freelist))
 				goto refill_done;
 		}
 
@@ -535,6 +535,8 @@ void bch_cached_dev_writeback_free(struct cached_dev *dc)
 		vfree(d->stripe_sectors_dirty);
 	else
 		kfree(d->stripe_sectors_dirty);
+
+	bch_keybuf_free(&dc->writeback_keys);
 }
 
 int bch_cached_dev_writeback_init(struct cached_dev *dc)
@@ -594,7 +596,7 @@ int bch_cached_dev_writeback_init(struct cached_dev *dc)
 		return -ENOMEM;
 
 	init_rwsem(&dc->writeback_lock);
-	bch_keybuf_init(&dc->writeback_keys);
+	bch_keybuf_init(&dc->writeback_keys, DFLT_WRITEBACK_KEYS_KEYBUF_NR);
 
 	dc->writeback_metadata		= true;
 	dc->writeback_running		= true;

@@ -309,6 +309,91 @@ do {									\
 
 #define array_freelist_empty(array)	((array)->freelist == NULL)
 
+/*
+ * Simple free-list based allocator.
+ * These routines must be called under a lock/mutex.
+ * Unlike the array-based allocator, the size can be adjusted
+ * dynamically (lazily).
+ * On allocation, if the free list is not empty, the next entry in the
+ *  free list is used.
+ * On allocation, if the free list is empty, but the target size is
+ *  larger than the current size, a new entry is allocated and the
+ *  current size is incremented.
+ * Allocation fails if the free list is empty and the current size is
+ *  at or above the target size.
+ * On de-allocation, if the current size is <= the target size, the entry
+ *  is added to the free list.
+ * On de-allocation if the current size is > the target size, the
+ *  entry is directly freed.
+ * Note that any client (e.g. keybuf) that does not want to call
+ * kmalloc dynamically can just pre-allocate all the nodes when
+ * initializing or growing.
+ * However, as the nodes may be in use when re-sizing, there is generally
+ * no avoiding dynamic freeing when shrinking.
+ */
+
+#define DECLARE_FREELIST_ALLOCATOR(type, name)				\
+	struct {							\
+		unsigned current_size;					\
+		unsigned target_size;					\
+		unsigned in_use;					\
+		type *free_list;					\
+	} name
+
+#define freelist_alloc(fl)						\
+({									\
+	typeof((fl)->free_list) _ret = (fl)->free_list;			\
+									\
+	if (((fl)->in_use) >= ((fl)->target_size))			\
+		_ret = ((typeof((fl)->free_list)) NULL);		\
+	else if (_ret)							\
+		(fl)->free_list = *((typeof((fl)->free_list)*) _ret);	\
+	else if (((fl)->current_size) < ((fl)->target_size)) {		\
+	        _ret = ((typeof((fl)->free_list))			\
+			(kmalloc((sizeof (* _ret)), GFP_KERNEL)));	\
+		if (_ret != ((typeof((fl)->free_list)) NULL))		\
+		        (fl)->current_size += 1;			\
+	}								\
+									\
+	if (_ret != ((typeof((fl)->free_list)) NULL))			\
+		(fl)->in_use += 1;					\
+	_ret;								\
+})
+
+#define freelist_free(fl, ptr)						\
+do {									\
+	typeof((fl)->free_list) _ptr = (ptr);				\
+									\
+	(fl)->in_use -= 1;						\
+	if (((fl)->current_size) <= ((fl)->target_size)) {		\
+		*((typeof((fl)->free_list)*) _ptr)			\
+		  = ((fl)->free_list);					\
+		(fl)->free_list = _ptr;					\
+	} else {							\
+		(fl)->current_size -= 1;				\
+		kfree(_ptr);						\
+	}								\
+} while (0)
+
+/* All allocation is lazy */
+
+#define freelist_allocator_init(fl, tgt_siz)				\
+do {									\
+	(fl)->free_list = ((typeof((fl)->free_list)) NULL);		\
+	(fl)->target_size = (tgt_siz);					\
+	(fl)->in_use = 0;						\
+	(fl)->current_size = 0;						\
+} while (0)
+
+#define freelist_empty(fl)	((fl)->free_list == NULL)
+
+#define freelist_get_target_size(fl)	((fl)->target_size)
+
+#define freelist_set_target_size(fl, tgt_siz)				\
+do {								\
+	(fl)->target_size = (tgt_siz);					\
+} while (0)
+
 #define ANYSINT_MAX(t)							\
 	((((t) 1 << (sizeof(t) * 8 - 2)) - (t) 1) * (t) 2 + (t) 1)
 

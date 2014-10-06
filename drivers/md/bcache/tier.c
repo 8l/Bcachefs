@@ -103,7 +103,7 @@ static int bch_tiering_thread(void *arg)
 
 void bch_tiering_init_cache_set(struct cache_set *c)
 {
-	bch_keybuf_init(&c->tiering_keys);
+	bch_keybuf_init(&c->tiering_keys, DFLT_TIERING_KEYS_KEYBUF_NR);
 	bch_pd_controller_init(&c->tiering_pd);
 }
 

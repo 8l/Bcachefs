@@ -1,6 +1,12 @@
 #ifndef _BCACHE_KEYBUF_TYPES_H
 #define _BCACHE_KEYBUF_TYPES_H
 
+/* IMPORTANT: The ref can be -1, 0, or a positive number.
+   It is -1 when the I/O that uses the key has not yet been started.
+   It is 0 when it has finished.
+   It is positive when in progress.
+*/
+
 struct keybuf_key {
 	struct rb_node		node;
 	BKEY_PADDED(key);
@@ -23,8 +29,8 @@ struct keybuf {
 
 	struct semaphore	in_flight;
 
-#define KEYBUF_NR		500
-	DECLARE_ARRAY_ALLOCATOR(struct keybuf_key, freelist, KEYBUF_NR);
+#define DFLT_KEYBUF_KEYBUF_NR		250
+	DECLARE_FREELIST_ALLOCATOR(struct keybuf_key, freelist);
 };
 
 #endif /* _BCACHE_KEYBUF_TYPES_H */

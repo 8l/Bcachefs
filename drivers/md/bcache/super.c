@@ -18,6 +18,7 @@
 #include "movinggc.h"
 #include "stats.h"
 #include "super.h"
+#include "keybuf.h"
 
 #include <linux/blkdev.h>
 #include <linux/crc32c.h>
@@ -698,6 +699,8 @@ static void cache_set_free(struct closure *cl)
 	list_del(&c->list);
 	mutex_unlock(&bch_register_lock);
 
+	bch_keybuf_free(&c->tiering_keys);
+
 	pr_info("Cache set %pU unregistered", c->sb.set_uuid.b);
 
 	closure_debug_destroy(&c->cl);
@@ -906,6 +909,8 @@ static struct cache_set *bch_cache_set_alloc(struct cache *ca)
 	}
 
 	c->migration_write_point.n_replicas = 1;
+	c->gc_sector_percent = DFLT_CACHE_SET_GC_SECTOR_PERCENT;
+	c->cache_reserve_percent = DFLT_CACHE_SET_CACHE_RESERVE_PERCENT;
 
 	return c;
 err:
@@ -1480,6 +1485,8 @@ static void bch_cache_stop(struct cache *ca)
 	BUG_ON(rcu_access_pointer(c->cache[ca->sb.nr_this_dev]) != ca);
 
 	rcu_assign_pointer(c->cache[ca->sb.nr_this_dev], NULL);
+
+	bch_keybuf_free(&ca->moving_gc_keys);
 
 	call_rcu(&ca->kill_rcu, bch_cache_kill_rcu);
 }

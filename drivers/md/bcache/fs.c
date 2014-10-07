@@ -1020,7 +1020,7 @@ static int bch_statfs(struct dentry *dentry, struct kstatfs *buf)
 	struct super_block *sb = dentry->d_sb;
 	struct cache_set *c = sb->s_fs_info;
 
-	buf->f_type	= BCACHE_SB_MAGIC;
+	buf->f_type	= BCACHE_STATFS_MAGIC;
 	buf->f_bsize	= sb->s_blocksize;
 	buf->f_blocks	= c->capacity		>> (PAGE_SHIFT - 9);
 	buf->f_bfree	= sectors_available(c)	>> (PAGE_SHIFT - 9);
@@ -1118,7 +1118,7 @@ static struct dentry *bch_mount(struct file_system_type *fs_type,
 	sb->s_maxbytes		= MAX_LFS_FILESIZE;
 	sb->s_op		= &bch_super_operations;
 	sb->s_xattr		= bch_xattr_handlers;
-	sb->s_magic		= BCACHE_SB_MAGIC;
+	sb->s_magic		= BCACHE_STATFS_MAGIC;
 	sb->s_time_gran		= 1;
 	sb->s_fs_info		= c;
 

@@ -243,7 +243,8 @@ static int bch_ioctl_list_keys_fn(struct btree_op *b_op, struct btree *b,
 	    op->i.buf_size / sizeof(u64))
 		return -ENOSPC;
 
-	if (copy_to_user((u64 __user *) op->i.buf + op->i.keys_found,
+	if (copy_to_user(((u64 __user *) (unsigned long)
+			  op->i.buf) + op->i.keys_found,
 			 k, bkey_bytes(k)))
 		return -EFAULT;
 

@@ -106,7 +106,7 @@ static inline void SET_KEY_OFFSET(struct bkey *k, __u64 v)
 
 #define KEY(inode, offset, size)					\
 ((struct bkey) {							\
-	.header	= BKEY_U64s << KEY_U64s_OFFSET,				\
+	.header	= (__u64) BKEY_U64s << KEY_U64s_OFFSET,				\
 	.k1	= (((((__u64) (size)) & KEY_SIZE_MAX) << KEY_SIZE_OFFSET)|\
 		   ((((__u64) (inode)) & KEY_INODE_MAX) << KEY_INODE_OFFSET)|\
 		   ((((__u64) (offset)) >> KEY_OFFSET_L_BITS) & KEY_OFFSET_H_MAX)),\
@@ -456,6 +456,8 @@ static inline _Bool SB_IS_BDEV(const struct cache_sb *sb)
 #define BCACHE_MAGIC							\
 	UUID_LE(0xf67385c6, 0x1a4e, 0xca45,				\
 		0x82, 0x65, 0xf5, 0x7f, 0x48, 0xba, 0x6d, 0x81)
+
+#define BCACHE_STATFS_MAGIC		0xca451a4e
 
 #define BCACHE_SB_MAGIC			0xca451a4ef67385c6ULL
 #define BCACHE_SB_MAGIC2		0x816dba487ff56582ULL

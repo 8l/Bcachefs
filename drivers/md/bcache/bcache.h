@@ -197,8 +197,6 @@
 
 #include <linux/dynamic_fault.h>
 
-#define CACHE_RESERVE_PERCENT		20
-
 #define cache_set_init_fault(id)	named_fault(cache_set_init_##id)
 
 #include "alloc_types.h"
@@ -557,6 +555,22 @@ struct cache_set {
 	unsigned		tiering_enabled:1;
 	unsigned		tiering_percent;
 	unsigned		btree_scan_ratelimit;
+
+	/*
+	 * foreground writes will be throttled when the number of free
+	 * buckets is below this percentage
+	 */
+	unsigned		foreground_target_percent;
+	/*
+	 * foreground writes will wait when the number of free buckets is
+	 * below this percentage
+	 */
+	unsigned		bucket_reserve_percent;
+	/*
+	 * foreground writes will fail when the number of free sectors is
+	 * below this percentage
+	 */
+	unsigned		sector_reserve_percent;
 
 	/* device for ioctl interface */
 	struct device		*extent_device;

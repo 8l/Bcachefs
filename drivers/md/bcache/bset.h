@@ -310,7 +310,6 @@ void bch_btree_keys_init(struct btree_keys *, const struct btree_keys_ops *,
 void bch_bset_init_next(struct btree_keys *, struct bset *);
 void bch_bset_build_written_tree(struct btree_keys *);
 void bch_bset_fix_invalidated_key(struct btree_keys *, struct bkey *);
-bool bch_bkey_try_merge(struct btree_keys *, struct bkey *, struct bkey *);
 unsigned bch_bset_insert_with_hint(struct btree_keys *, struct btree_iter *,
 				   struct bkey *, struct bkey *);
 unsigned bch_btree_insert_key(struct btree_keys *, struct bkey *,
@@ -403,6 +402,19 @@ static inline bool bch_bkey_equal_header(const struct bkey *l,
 		KEY_VERSION(l) == KEY_VERSION(r) &&
 		KEY_U64s(l) == KEY_U64s(r) &&
 		KEY_CSUM(l) == KEY_CSUM(r));
+}
+
+/*
+ * Tries to merge l and r: l should be lower than r
+ * Returns true if we were able to merge. If we did merge, l will be the merged
+ * key, r will be untouched.
+ */
+static inline bool bch_bkey_try_merge(struct btree_keys *b,
+				      struct bkey *l, struct bkey *r)
+{
+	return b->ops->key_merge
+		? b->ops->key_merge(b, l, r)
+		: false;
 }
 
 enum bch_extent_overlap {

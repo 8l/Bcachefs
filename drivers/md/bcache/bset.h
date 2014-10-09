@@ -486,6 +486,8 @@ static inline struct bkey *bch_btree_iter_next_overlapping(struct btree_iter *it
 void bch_btree_iter_push(struct btree_iter *, struct bkey *, struct bkey *);
 struct bkey *bch_btree_iter_init(struct btree_keys *, struct btree_iter *,
 				 struct bkey *);
+void bch_btree_iter_fix(struct btree_iter *iter, struct bkey *top,
+			struct bkey *new);
 
 struct bkey *__bch_bset_search(struct btree_keys *, struct bset_tree *,
 			       const struct bkey *);

@@ -108,7 +108,7 @@ static int bch_dirent_create_fn(struct btree_op *b_op, struct btree *b,
 				struct bkey *k)
 {
 	struct create_op *op = container_of(b_op, struct create_op, op);
-	struct bkey *new_key = op->keys.keys;
+	struct bkey *new_key = bch_keylist_front(&op->keys);
 	struct bch_dirent *new_dirent = key_to_dirent(new_key);
 	int ret;
 
@@ -176,7 +176,7 @@ static int __bch_dirent_create(struct cache_set *c, u64 dir_inum,
 	BUG_ON(dirent_name_bytes(dirent) != name->len);
 	BUG_ON(dirent_cmp(dirent, name));
 
-	bch_keylist_push(&op.keys);
+	__bch_keylist_push(&op.keys);
 
 	ret = bch_btree_map_keys(&op.op, c, k, bch_dirent_create_fn, MAP_HOLES);
 

@@ -479,7 +479,7 @@ static int bch_copy_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 	SET_KEY_INODE(copy, op->dst_inode);
 	SET_KEY_OFFSET(copy, KEY_OFFSET(copy) + op->dst_shift);
 
-	bch_keylist_push(&op->keys);
+	__bch_keylist_push(&op->keys);
 	op->src_loc = *k;
 
 	return MAP_CONTINUE;
@@ -520,6 +520,7 @@ int bch_copy(struct cache_set *c, struct bkey *src_start, struct bkey *dst_start
 	 * track of our current location in the copy operation.
 	 */
 	while (bkey_cmp(&op.src_loc, &op.src_end) < 0) {
+		bch_keylist_reset(&op.keys);
 		ret = bch_btree_map_keys(&op.op, c, &op.src_loc, bch_copy_fn, 0);
 
 		if (ret < 0)

@@ -2140,7 +2140,7 @@ EXPORT_SYMBOL_GPL(blk_rq_err_bytes);
 
 void blk_account_io_completion(struct request *req, unsigned int bytes)
 {
-	if (blk_do_io_stat(req)) {
+	if (blk_do_io_stat(req) && !(req->cmd_flags & REQ_DISCARD)) {
 		const int rw = rq_data_dir(req);
 		struct hd_struct *part;
 		int cpu;

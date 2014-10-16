@@ -520,7 +520,6 @@ int bch_copy(struct cache_set *c, struct bkey *src_start, struct bkey *dst_start
 	 * track of our current location in the copy operation.
 	 */
 	while (bkey_cmp(&op.src_loc, &op.src_end) < 0) {
-		bch_keylist_reset(&op.keys);
 		ret = bch_btree_map_keys(&op.op, c, &op.src_loc, bch_copy_fn, 0);
 
 		if (ret < 0)

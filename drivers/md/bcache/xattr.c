@@ -78,7 +78,6 @@ static void bch_xattr_dump(struct btree_keys *keys, const struct bkey *k)
 }
 
 const struct btree_keys_ops bch_xattr_ops = {
-	.sort_cmp	= bch_generic_sort_cmp,
 	.sort_fixup	= bch_generic_sort_fixup,
 	.insert_fixup	= bch_generic_insert_fixup,
 

@@ -8,6 +8,16 @@
 
 #include "util.h"
 
+#ifdef CONFIG_SIX_LOCKS_DEBUG
+#include <trace/events/six.h>
+#else
+#define trace_six_trylock(lock, type)
+#define trace_six_lock(lock, type)
+#define trace_six_unlock(lock, type)
+#define trace_six_trylock_convert(lock, from, to)
+#define trace_six_lock_convert(lock, from, to)
+#endif
+
 /*
  * LOCK STATES:
  *
@@ -87,6 +97,8 @@ do {									\
 	unsigned long v;						\
 	bool _ret = false;						\
 									\
+	trace_six_trylock_convert(lock, #from, #to);			\
+									\
 	while (1) {							\
 		EBUG_ON(!_old.from##_lock);				\
 									\
@@ -128,6 +140,8 @@ do {									\
 		atomic_long_sub(__SIX_WAIT_VAL, &(lock)->state.counter);\
 		finish_wait(&(lock)->wait, &_wait);			\
 	}								\
+									\
+	trace_six_lock_convert(lock, #from, #to);			\
 } while (0)
 
 #define __SIX_LOCK(type)						\
@@ -171,13 +185,19 @@ do {									\
 									\
 	static inline void six_lock_##type(struct six_lock *lock)	\
 	{								\
+		trace_six_trylock(lock, #type);				\
+									\
 		if (!six_trylock_##type(lock))				\
 			six_lock_slowpath_##type(lock);			\
+									\
+		trace_six_lock(lock, #type);				\
 	}								\
 									\
 	static inline void six_unlock_##type(struct six_lock *lock)	\
 	{								\
 		union six_lock_state state;				\
+									\
+		trace_six_unlock(lock, #type);				\
 									\
 		EBUG_ON(!lock->state.type##_lock);			\
 		six_release(&(lock)->dep_map);				\

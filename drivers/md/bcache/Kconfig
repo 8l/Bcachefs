@@ -16,3 +16,11 @@ config BCACHE_DEBUG
 
 	Enables extra debugging tools, allows expensive runtime checks to be
 	turned on.
+
+config SIX_LOCKS_DEBUG
+	bool "SIX locks debugging"
+	depends on BCACHE
+	---help---
+	Don't select this option unless you're a developer
+
+	Enables SIX lock tracepoints.

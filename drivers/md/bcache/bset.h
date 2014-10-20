@@ -603,17 +603,20 @@ void bch_btree_keys_stats(struct btree_keys *, struct bset_stats *);
 
 int __bch_count_data(struct btree_keys *);
 void __bch_check_keys(struct btree_keys *, const char *, ...);
-void bch_dump_bset(struct btree_keys *, struct bset *, unsigned);
 void bch_dump_bucket(struct btree_keys *);
+void bch_btree_iter_verify(struct btree_keys *, struct btree_iter *);
 
 #else
 
 static inline int __bch_count_data(struct btree_keys *b) { return -1; }
 static inline void __bch_check_keys(struct btree_keys *b, const char *fmt, ...) {}
 static inline void bch_dump_bucket(struct btree_keys *b) {}
-void bch_dump_bset(struct btree_keys *, struct bset *, unsigned);
+static inline void bch_btree_iter_verify(struct btree_keys *b,
+					 struct btree_iter *iter) {}
 
 #endif
+
+void bch_dump_bset(struct btree_keys *, struct bset *, unsigned);
 
 static inline int bch_count_data(struct btree_keys *b)
 {

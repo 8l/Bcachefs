@@ -198,7 +198,7 @@ static int bch_xattr_set_fn(struct btree_op *b_op, struct btree *b,
 		BUG_ON(xattr_cmp(xattr, &op->name));
 	} else {
 		/* removing */
-		SET_KEY_DELETED(keys.top, true);
+		SET_KEY_DELETED(keys.top, 1);
 	}
 
 	bch_keylist_push(&keys);

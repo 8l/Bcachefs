@@ -232,7 +232,7 @@ static int bch_dirent_delete_fn(struct btree_op *b_op, struct btree *b,
 
 	bch_keylist_init(&keys);
 	bkey_copy(keys.top, k);
-	SET_KEY_DELETED(keys.top, true);
+	SET_KEY_DELETED(keys.top, 1);
 	bch_keylist_push(&keys);
 
 	ret = bch_btree_insert_node(b, b_op, &keys, NULL, NULL);

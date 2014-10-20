@@ -134,6 +134,7 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 
 	bch_set_extent_ptrs(&i.extent, 0);
 	SET_KEY_DELETED(&i.extent, 0);
+	SET_KEY_WIPED(&i.extent, 0);
 	SET_KEY_CSUM(&i.extent, 0);
 
 	/*
@@ -449,6 +450,7 @@ struct bch_copy_op {
 	struct bkey		src_end;
 	u64			dst_inode;
 	u64			dst_shift;
+	u64			version;
 };
 
 static int bch_copy_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
@@ -456,7 +458,10 @@ static int bch_copy_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 	struct bch_copy_op *op = container_of(b_op, struct bch_copy_op, op);
 	struct bkey *copy;
 
-	/* XXX: on hole, make this delete stuff in destination */
+	/* Note: It is caller (client) responsibility to clear
+	   the destination by doing discards.
+	   Hence this doesn't map holes!
+	*/
 
 	BUG_ON(bkey_cmp(k, &op->src_loc) <= 0);
 
@@ -479,6 +484,12 @@ static int bch_copy_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 	SET_KEY_INODE(copy, op->dst_inode);
 	SET_KEY_OFFSET(copy, KEY_OFFSET(copy) + op->dst_shift);
 
+	if (op->version != ((u64) 0ULL)) {
+		/* Version 0 means retain the source version */
+		/* Else use the new version */
+		SET_KEY_VERSION(copy, (op->version));
+	}
+
 	__bch_keylist_push(&op->keys);
 	op->src_loc = *k;
 
@@ -492,6 +503,7 @@ static int bch_copy_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
  * @dst_start	pointer to start location of the copy destination
  *		NOTE: both starts begin at KEY_START(begin)
  * @sectors	how many sectors to copy
+ * @version	Version to use for new extents, 0ULL to preserve source versions
  *
  * Returns:
  *	 0 on success
@@ -500,7 +512,7 @@ static int bch_copy_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
  * XXX: this needs to be moved to generic io code
  */
 int bch_copy(struct cache_set *c, struct bkey *src_start, struct bkey *dst_start,
-	     unsigned long sectors)
+	     unsigned long sectors, unsigned long version)
 {
 	struct bch_copy_op op;
 	int ret = 0;
@@ -511,6 +523,8 @@ int bch_copy(struct cache_set *c, struct bkey *src_start, struct bkey *dst_start
 	op.src_end = KEY(KEY_INODE(src_start), KEY_START(src_start) + sectors, 0);
 	op.dst_inode = KEY_INODE(dst_start);
 	op.dst_shift = KEY_START(dst_start) - KEY_START(src_start);
+
+	op.version = version;
 
 	/* XXX: probably deserves input validation and errors here */
 
@@ -526,8 +540,9 @@ int bch_copy(struct cache_set *c, struct bkey *src_start, struct bkey *dst_start
 			break;
 
 		/*
-		 * when MAP_CONTINUE is returned from bch_btree_map_keys, we know the
-		 * map function was expecting more keys where there weren't any.
+		 * when MAP_CONTINUE is returned from
+		 * bch_btree_map_keys, we know the map function was
+		 * expecting more keys where there weren't any.
 		 */
 		if (ret == MAP_CONTINUE)
 			op.src_loc = op.src_end;
@@ -551,7 +566,7 @@ struct bch_ioctl_copy_op {
 	struct work_struct	work;
 	struct kiocb		*req;
 	struct cache_set	*c;
-	struct bch_ioctl_copy	i;
+	struct bch_ioctl_versioned_copy	i;
 };
 
 static void bch_ioctl_copy_work(struct work_struct *work)
@@ -561,7 +576,8 @@ static void bch_ioctl_copy_work(struct work_struct *work)
 	struct bkey src_start = KEY(op->i.src_inode, op->i.src_offset, 0);
 	struct bkey dst_start = KEY(op->i.dst_inode, op->i.dst_offset, 0);
 
-	int ret = bch_copy(op->c, &src_start, &dst_start, op->i.sectors);
+	int ret = bch_copy(op->c, &src_start, &dst_start, op->i.sectors,
+			   op->i.version);
 
 	aio_complete(op->req, ret < 0 ? ret : 0, 0);
 	kfree(op);
@@ -571,6 +587,48 @@ static void bch_ioctl_copy(struct kiocb *req, struct cache_set *c,
 			   unsigned long arg)
 {
 	struct bch_ioctl_copy __user *user_i = (void __user *) arg;
+	struct bch_ioctl_copy i;
+	struct bch_ioctl_copy_op *op;
+
+	op = kzalloc(sizeof(*op), GFP_NOIO);
+	if (!op) {
+		aio_complete(req, -ENOMEM, 0);
+		return;
+	}
+
+	INIT_WORK(&op->work, bch_ioctl_copy_work);
+	op->req = req;
+	op->c = c;
+
+	if (copy_from_user(&i, user_i, sizeof(i))) {
+		aio_complete(req, -EFAULT, 0);
+		kfree(op);
+		return;
+	}
+
+	/* Transform a plain copy to a versioned copy with version 0 */
+	op->i.src_inode = i.src_inode;
+	op->i.dst_inode = i.dst_inode;
+	op->i.src_offset = i.src_offset;
+	op->i.dst_offset = i.dst_offset;
+	op->i.sectors = i.sectors;
+	op->i.version = ((u64) 0ULL); /* Preserve the original versions */
+
+	if (op->i.sectors + op->i.src_offset < op->i.sectors ||
+	    op->i.sectors + op->i.dst_offset < op->i.sectors) {
+		aio_complete(req, -EINVAL, 0);
+		kfree(op);
+		return;
+	}
+
+	queue_work(system_long_wq, &op->work);
+}
+
+static void bch_ioctl_versioned_copy(struct kiocb *req,
+				     struct cache_set *c,
+				     unsigned long arg)
+{
+	struct bch_ioctl_versioned_copy __user *user_i = (void __user *) arg;
 	struct bch_ioctl_copy_op *op;
 
 	op = kzalloc(sizeof(*op), GFP_NOIO);
@@ -605,6 +663,7 @@ struct bch_discard_op {
 	struct btree_op	op;
 	struct bkey *start_key;
 	struct bkey *end_key;
+	u64 version;
 };
 
 static int bch_discard_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
@@ -623,7 +682,13 @@ static int bch_discard_fn(struct btree_op *b_op, struct btree *b, struct bkey *k
 	erase_key = KEY(KEY_INODE(k), KEY_START(k) + KEY_SIZE_MAX, KEY_SIZE_MAX);
 	bch_cut_front(&START_KEY(op->start_key), &erase_key);
 	bch_cut_back(op->end_key, &erase_key);
-	SET_KEY_DELETED(&erase_key, true);
+	if ((op->version) == 0ULL) {
+		/* This is probably wrong but retains legacy behavior */
+		SET_KEY_DELETED(&erase_key, 1);
+	} else {
+		SET_KEY_WIPED(&erase_key, 1);
+		SET_KEY_VERSION(&erase_key, op->version);
+	}
 
 	ret = bch_btree_insert_node(b, b_op, &keylist_single(&erase_key), NULL, NULL);
 
@@ -636,6 +701,7 @@ static int bch_discard_fn(struct btree_op *b_op, struct btree *b, struct bkey *k
  *		NOTE: discard starts at KEY_START(start_key)
  * @end_key	pointer to end location
  *		NOTE: discard ends at KEY_OFFSET(end_key)
+ * @version	version of discard (0ULL if none)
  *
  * Returns:
  *	 0 on success
@@ -645,7 +711,7 @@ static int bch_discard_fn(struct btree_op *b_op, struct btree *b, struct bkey *k
  *	appropriately inode_truncate should call this
  */
 int bch_discard(struct cache_set *c, struct bkey *start_key,
-		struct bkey *end_key)
+		struct bkey *end_key, u64 version)
 {
 	struct bch_discard_op op;
 	int ret;
@@ -653,6 +719,7 @@ int bch_discard(struct cache_set *c, struct bkey *start_key,
 	bch_btree_op_init(&op.op, BTREE_ID_EXTENTS, 0);
 	op.start_key = start_key;
 	op.end_key = end_key;
+	op.version = version;
 
 	ret = bch_btree_map_keys(&op.op, c, start_key, bch_discard_fn, 0);
 	if (ret < 0)
@@ -668,6 +735,7 @@ struct bch_ioctl_discard_op {
 	u64			inum;
 	u64			offset;
 	u64			sectors;
+	u64			version;
 };
 
 static void bch_ioctl_discard_work(struct work_struct *work)
@@ -677,7 +745,7 @@ static void bch_ioctl_discard_work(struct work_struct *work)
 	struct bkey start_key = KEY(op->inum, op->offset, 0);
 	struct bkey end_key = KEY(op->inum, op->offset + op->sectors, 0);
 
-	int ret = bch_discard(op->c, &start_key, &end_key);
+	int ret = bch_discard(op->c, &start_key, &end_key, op->version);
 
 	aio_complete(op->req, ret, 0);
 	kfree(op);
@@ -707,6 +775,37 @@ static void bch_ioctl_discard(struct kiocb *req, struct cache_set *c,
 	op->inum = i.inode;
 	op->offset = i.offset;
 	op->sectors = i.sectors;
+	op->version = ((u64) 0ULL);
+
+	queue_work(system_long_wq, &op->work);
+}
+
+static void bch_ioctl_versioned_discard(struct kiocb *req,
+					struct cache_set *c,
+					unsigned long arg)
+{
+	struct bch_ioctl_versioned_discard __user *user_i = (void __user *) arg;
+	struct bch_ioctl_versioned_discard i;
+	struct bch_ioctl_discard_op *op;
+
+	if (copy_from_user(&i, user_i, sizeof(i))) {
+		aio_complete(req, -EFAULT, 0);
+		return;
+	}
+
+	op = kzalloc(sizeof(*op), GFP_NOIO);
+	if (!op) {
+		aio_complete(req, -ENOMEM, 0);
+		return;
+	}
+
+	INIT_WORK(&op->work, bch_ioctl_discard_work);
+	op->req = req;
+	op->c = c;
+	op->inum = i.inode;
+	op->offset = i.offset;
+	op->sectors = i.sectors;
+	op->version = i.version;
 
 	queue_work(system_long_wq, &op->work);
 }
@@ -743,6 +842,12 @@ static long bch_aio_ioctl(struct kiocb *req, unsigned int cmd,
 		return bch_query_uuid(c, arg);
 	case BCH_IOCTL_DISCARD:
 		bch_ioctl_discard(req, c, arg);
+		return -EIOCBQUEUED;
+	case BCH_IOCTL_VERSIONED_COPY:
+		bch_ioctl_versioned_copy(req, c, arg);
+		return -EIOCBQUEUED;
+	case BCH_IOCTL_VERSIONED_DISCARD:
+		bch_ioctl_versioned_discard(req, c, arg);
 		return -EIOCBQUEUED;
 	}
 

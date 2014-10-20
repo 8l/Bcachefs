@@ -857,6 +857,8 @@ static struct cache_set *bch_cache_set_alloc(struct cache *ca)
 	    bch_bset_sort_state_init(&c->sort, ilog2(c->btree_pages)))
 		goto err;
 
+	c->btree_flush_delay = 30;
+
 	c->congested_read_threshold_us	= 2000;
 	c->congested_write_threshold_us	= 20000;
 	c->error_limit	= 16 << IO_ERROR_SHIFT;

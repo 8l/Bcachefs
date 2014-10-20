@@ -977,6 +977,9 @@ static bool __journal_res_get(struct cache_set *c, struct journal_res *res,
  * Journal write is the structure used set up journal writes. The calling
  * function will then add its keys to the structure, queuing them for the
  * next write.
+ *
+ * To ensure forward progress, the current task must not be holding any
+ * btree node write locks.
  */
 void bch_journal_res_get(struct cache_set *c, struct journal_res *res,
 			 unsigned nkeys_min, unsigned nkeys_max)

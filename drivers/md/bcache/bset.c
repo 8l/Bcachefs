@@ -55,7 +55,7 @@ void bch_dump_bucket(struct btree_keys *b)
 	console_unlock();
 }
 
-int __bch_count_data(struct btree_keys *b)
+int bch_count_data(struct btree_keys *b)
 {
 	unsigned ret = 0;
 	struct btree_iter iter;
@@ -883,7 +883,8 @@ unsigned __bch_btree_insert_key(struct btree_keys *b, struct bkey *insert,
 				struct bkey *replace, struct btree_iter *iter,
 				struct bkey *where, struct bkey *done)
 {
-	int oldsize = bch_count_data(b);
+	bool expensive = btree_keys_expensive_checks(b);
+	int oldsize = expensive ? bch_count_data(b) : -1, newsize;
 	unsigned status;
 
 	BUG_ON(b->ops->is_extents && !KEY_SIZE(insert));
@@ -892,7 +893,8 @@ unsigned __bch_btree_insert_key(struct btree_keys *b, struct bkey *insert,
 		? BTREE_INSERT_STATUS_NO_INSERT
 		: bch_bset_insert(b, iter, where, insert);
 
-	BUG_ON(bch_count_data(b) < oldsize);
+	newsize = expensive ? bch_count_data(b) : -1;
+	BUG_ON(newsize < oldsize);
 	return status;
 }
 

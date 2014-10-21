@@ -602,14 +602,14 @@ void bch_btree_keys_stats(struct btree_keys *, struct bset_stats *);
 
 #ifdef CONFIG_BCACHE_DEBUG
 
-int __bch_count_data(struct btree_keys *);
+int bch_count_data(struct btree_keys *);
 void __bch_check_keys(struct btree_keys *, const char *, ...);
 void bch_dump_bucket(struct btree_keys *);
 void bch_btree_iter_verify(struct btree_keys *, struct btree_iter *);
 
 #else
 
-static inline int __bch_count_data(struct btree_keys *b) { return -1; }
+static inline int bch_count_data(struct btree_keys *b) { return -1; }
 static inline void __bch_check_keys(struct btree_keys *b, const char *fmt, ...) {}
 static inline void bch_dump_bucket(struct btree_keys *b) {}
 static inline void bch_btree_iter_verify(struct btree_keys *b,
@@ -618,11 +618,6 @@ static inline void bch_btree_iter_verify(struct btree_keys *b,
 #endif
 
 void bch_dump_bset(struct btree_keys *, struct bset *, unsigned);
-
-static inline int bch_count_data(struct btree_keys *b)
-{
-	return btree_keys_expensive_checks(b) ? __bch_count_data(b) : -1;
-}
 
 #define bch_check_keys(b, ...)						\
 do {									\

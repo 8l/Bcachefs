@@ -263,7 +263,10 @@ static void bch_prio_write(struct cache *ca)
 		spin_unlock(&ca->prio_buckets_lock);
 
 		ret = prio_io(ca, r, REQ_WRITE);
-		cache_set_err_on(ret, ca->set, "writing priorities");
+		if (ret)
+			bch_cache_error(ca,
+				"IO error %d writing prios to bucket %lu",
+					ret, r);
 	}
 
 	spin_lock(&ca->prio_buckets_lock);
@@ -293,15 +296,24 @@ static void bch_prio_write(struct cache *ca)
 	trace_bcache_prio_write_end(ca);
 }
 
-const char *bch_prio_read(struct cache *ca, u64 bucket)
+int bch_prio_read(struct cache *ca, u64 bucket)
 {
 	struct prio_set *p = ca->disk_buckets;
 	struct bucket_disk *d = p->data + prios_per_bucket(ca), *end = d;
-	size_t b;
 	unsigned bucket_nr = 0;
+	u64 expect, got;
+	size_t b;
+	int ret;
 
-	if (cache_set_init_fault(2))
-		return "bch_prio_read() dynamic fault";
+	if (cache_set_init_fault(2)) {
+		bch_cache_error(ca, "bch_prio_read() dynamic fault");
+		return -EIO;
+	}
+
+	if (bucket < ca->sb.first_bucket && bucket >= ca->sb.nbuckets) {
+		bch_cache_error(ca, "bad prio bucket %llu", bucket);
+		return -EIO;
+	}
 
 	ca->prio_journal_bucket = bucket;
 
@@ -310,16 +322,37 @@ const char *bch_prio_read(struct cache *ca, u64 bucket)
 			ca->prio_last_buckets[bucket_nr] = bucket;
 			bucket_nr++;
 
-			if (prio_io(ca, bucket, READ_SYNC))
-				return "IO error reading priorities";
+			ret = prio_io(ca, bucket, READ_SYNC);
+			if (ret) {
+				bch_cache_error(ca,
+					"IO error %d reading prios from bucket %llu",
+						ret, bucket);
+				return -EIO;
+			}
 
-			if (p->magic != pset_magic(&ca->sb))
-				return "bad magic reading priorities";
+			got = p->magic;
+			expect = pset_magic(&ca->sb);
+			if (got != expect) {
+				bch_cache_error(ca,
+						"bad magic (got %llu "
+						"expect %llu) while "
+						"reading prios from bucket %llu",
+						got, expect, bucket);
+				return -EIO;
+			}
 
-			if (p->csum != bch_checksum(PSET_CSUM_TYPE(p),
-						    &p->magic,
-						    bucket_bytes(ca) - 8))
-				return "bad csum reading priorities";
+			got = p->csum;
+			expect = bch_checksum(PSET_CSUM_TYPE(p),
+					      &p->magic,
+					      bucket_bytes(ca) - 8);
+			if (got != expect) {
+				bch_cache_error(ca,
+						"bad checksum (got %llu "
+						"expect %llu) while "
+						"reading prios from bucket %llu",
+						got, expect, bucket);
+				return -EIO;
+			}
 
 			bucket = p->next_bucket;
 			d = p->data;
@@ -331,7 +364,7 @@ const char *bch_prio_read(struct cache *ca, u64 bucket)
 		ca->bucket_gens[b] = d->gen;
 	}
 
-	return NULL;
+	return 0;
 }
 
 /*

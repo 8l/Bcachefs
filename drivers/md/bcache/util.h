@@ -520,18 +520,21 @@ size_t bch_pd_controller_print_debug(struct bch_pd_controller *, char *);
 
 #define sysfs_pd_controller_attribute(name)				\
 	rw_attribute(name##_rate);					\
+	rw_attribute(name##_rate_bytes);				\
 	rw_attribute(name##_rate_d_term);				\
 	rw_attribute(name##_rate_p_term_inverse);			\
 	read_attribute(name##_rate_debug)
 
 #define sysfs_pd_controller_files(name)					\
 	&sysfs_##name##_rate,						\
+	&sysfs_##name##_rate_bytes,					\
 	&sysfs_##name##_rate_d_term,					\
 	&sysfs_##name##_rate_p_term_inverse,				\
 	&sysfs_##name##_rate_debug
 
 #define sysfs_pd_controller_show(name, var)				\
 	sysfs_hprint(name##_rate,		(var)->rate.rate);	\
+	sysfs_print(name##_rate_bytes,		(var)->rate.rate);	\
 	sysfs_print(name##_rate_d_term,		(var)->d_term);		\
 	sysfs_print(name##_rate_p_term_inverse,	(var)->p_term_inverse);	\
 									\
@@ -540,6 +543,8 @@ size_t bch_pd_controller_print_debug(struct bch_pd_controller *, char *);
 
 #define sysfs_pd_controller_store(name, var)				\
 	sysfs_strtoul_clamp(name##_rate,				\
+			    (var)->rate.rate, 1, UINT_MAX);		\
+	sysfs_strtoul_clamp(name##_rate_bytes,				\
 			    (var)->rate.rate, 1, UINT_MAX);		\
 	sysfs_strtoul(name##_rate_d_term,	(var)->d_term);		\
 	sysfs_strtoul_clamp(name##_rate_p_term_inverse,			\

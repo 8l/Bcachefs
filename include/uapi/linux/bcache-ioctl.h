@@ -42,6 +42,9 @@ struct bch_ioctl_read {
 struct bch_ioctl_write {
 	struct bkey		extent;
 	__u64			buf;
+	__u32			flags;
+#define BCH_IOCTL_WRITE_FLUSH		(1 << 0)
+#define BCH_IOCTL_WRITE_FUA		(1 << 1)
 };
 
 struct bch_ioctl_copy {

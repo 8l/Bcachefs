@@ -313,6 +313,8 @@ struct gc_stat {
 
 	u64			data;	/* sectors */
 	u64			inodes;
+
+	u64			last_start;
 };
 
 /*

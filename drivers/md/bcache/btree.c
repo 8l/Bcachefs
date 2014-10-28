@@ -40,6 +40,7 @@
 #include <linux/prefetch.h>
 #include <linux/random.h>
 #include <linux/rcupdate.h>
+#include <linux/delay.h>
 #include <trace/events/bcache.h>
 
 /*
@@ -1802,6 +1803,27 @@ static unsigned btree_gc_count_keys(struct btree *b)
 	return ret;
 }
 
+#define ENABLE_GC_TIMEOUTS		1
+
+/* Time is in nsec, use msec here */
+#define BTREE_GC_RUN_QUANTUM		125
+#define BTREE_GC_IDLE_QUANTUM		1000
+
+static int btree_gc_run_long_enough(uint64_t last_start)
+{
+	if (ENABLE_GC_TIMEOUTS) {
+		uint64_t now = local_clock();
+		uint64_t duration
+			= time_after64(now, last_start)
+			? (now - last_start)
+			: 0;
+
+		return duration
+			>= (((uint64_t) BTREE_GC_RUN_QUANTUM) * 1000000);
+	} else
+		return 0;
+}
+
 /**
  * btree_gc_recurse - tracing garbage collection on a node and children
  *
@@ -1878,7 +1900,18 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 		memmove(r + 1, r, sizeof(r[0]) * (GC_MERGE_NODES - 1));
 		r->b = NULL;
 
-		if (need_resched() || dynamic_fault()) {
+		/*
+		 * The run_long_enough term guarantees that btree_gc doesn't
+		 * hold a lock forever.
+		 * When a task needs a hold that btree_gc holds, it won't
+		 * claim to need to be rescheduled until the lock is released,
+		 * so periodically release all locks by claiming that
+		 * we timed out, and let others get the locks.
+		 */
+
+		if (need_resched()
+		    || dynamic_fault()
+		    || btree_gc_run_long_enough(gc->last_start)) {
 			ret = -ETIMEDOUT;
 			break;
 		}
@@ -2030,9 +2063,11 @@ static void bch_btree_gc(struct cache_set *c)
 	trace_bcache_gc_start(c);
 
 	memset(&stats, 0, sizeof(struct gc_stat));
+	stats.last_start = start_time;
 
 	down_write(&c->gc_lock);
 	btree_gc_start(c);
+	stats.last_start = local_clock();
 
 	while (c->gc_cur_btree < BTREE_ID_NR) {
 		enum btree_id id = c->gc_cur_btree;
@@ -2049,6 +2084,15 @@ static void bch_btree_gc(struct cache_set *c)
 			if (ret != -ETIMEDOUT)
 				pr_warn("gc failed with %d!", ret);
 
+			if (!ENABLE_GC_TIMEOUTS
+			    || need_resched()
+			    || dynamic_fault())
+				cond_resched();
+			else {
+				/* Sleep for some time before continuing. */
+				msleep(BTREE_GC_IDLE_QUANTUM);
+			}
+			stats.last_start = local_clock();
 			continue;
 		}
 

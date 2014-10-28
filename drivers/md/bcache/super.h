@@ -122,7 +122,7 @@ const char *bch_run_cache_set(struct cache_set *);
 
 struct cache_set *bch_cache_set_open_by_uuid(uuid_le *);
 
-void bch_cache_remove(struct cache *);
+bool bch_cache_remove(struct cache *);
 int bch_cache_add(struct cache_set *, const char *);
 
 void bch_cache_group_remove_cache(struct cache_group *, struct cache *);

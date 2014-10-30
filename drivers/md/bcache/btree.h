@@ -186,6 +186,12 @@ static inline unsigned btree_blocks(struct cache_set *c)
 	return btree_sectors(c) >> c->block_bits;
 }
 
+#define for_each_cached_btree(b, c, iter)				\
+	for (iter = 0;							\
+	     iter < ARRAY_SIZE((c)->bucket_hash);			\
+	     iter++)							\
+		hlist_for_each_entry_rcu((b), (c)->bucket_hash + iter, hash)
+
 /* Recursing down the btree */
 
 /**
@@ -247,13 +253,8 @@ int bch_btree_cache_alloc(struct cache_set *);
 #define MAP_DONE	0  /* We're done */
 #define MAP_CONTINUE	1  /* Continue and advance the iterator */
 
-/* Only map_nodes */
-#define MAP_ALL_NODES	0
-#define MAP_LEAF_NODES	1
-
-/* Only map_keys */
-#define MAP_HOLES	1
-
+/* Values for @flags parameter to map_nodes and map_keys */
+#define MAP_HOLES	1  /* Only map_keys */
 #define MAP_ASYNC	2
 
 typedef int (btree_map_nodes_fn)(struct btree_op *, struct btree *);

@@ -81,12 +81,6 @@ static int __bch_btree_insert_node(struct btree *, struct btree_op *,
 #define PTR_HASH(c, k)							\
 	(((k)->val[0] >> c->bucket_bits) | PTR_GEN(k, 0))
 
-#define for_each_cached_btree(b, c, iter)				\
-	for (iter = 0;							\
-	     iter < ARRAY_SIZE((c)->bucket_hash);			\
-	     iter++)							\
-		hlist_for_each_entry_rcu((b), (c)->bucket_hash + iter, hash)
-
 /*
  * These macros are for recursing down the btree - they handle the details of
  * locking and looking up nodes in the cache for you. They're best treated as
@@ -2878,7 +2872,7 @@ static int bch_btree_map_nodes_recurse(struct btree *b, struct btree_op *op,
 		}
 	}
 
-	if (!level || (flags & MAP_ALL_NODES)) {
+	if (!level) {
 		ret = fn(op, b);
 
 		if (ret == MAP_CONTINUE && op->iterator_invalidated)

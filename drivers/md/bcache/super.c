@@ -1269,9 +1269,13 @@ EXPORT_SYMBOL(bch_cache_set_open_by_uuid);
 void bch_cache_read_only(struct cache *ca)
 {
 	struct cache_set *c = ca->set;
-	struct cache_group *tier = &c->cache_tiers[CACHE_TIER(&ca->mi)];
+	struct cache_member_rcu *mi = cache_member_info_get(c);
+	struct cache_group *tier = &c->cache_tiers[
+		CACHE_TIER(&mi->m[ca->sb.nr_this_dev])];
 	struct task_struct *p;
 	char buf[BDEVNAME_SIZE];
+
+	cache_member_info_put();
 
 	bch_moving_gc_stop(ca);
 
@@ -1291,8 +1295,12 @@ void bch_cache_read_only(struct cache *ca)
 const char *bch_cache_read_write(struct cache *ca)
 {
 	struct cache_set *c = ca->set;
-	struct cache_group *tier = &c->cache_tiers[CACHE_TIER(&ca->mi)];
+	struct cache_member_rcu *mi = cache_member_info_get(c);
+	struct cache_group *tier = &c->cache_tiers[
+		CACHE_TIER(&mi->m[ca->sb.nr_this_dev])];
 	const char *err;
+
+	cache_member_info_put();
 
 	err = bch_cache_allocator_start(ca);
 	if (err)

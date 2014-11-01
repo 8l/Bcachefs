@@ -455,7 +455,7 @@ static int bch_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	return ret < 0 ? ret : 0;
 }
 
-const struct file_operations bch_file_operations = {
+static const struct file_operations bch_file_operations = {
 	.llseek		= generic_file_llseek,
 	.read_iter	= generic_file_read_iter,
 	.write_iter	= generic_file_write_iter,
@@ -467,7 +467,7 @@ const struct file_operations bch_file_operations = {
 	.splice_write	= iter_file_splice_write,
 };
 
-const struct inode_operations bch_file_inode_operations = {
+static const struct inode_operations bch_file_inode_operations = {
 	.setattr	= bch_setattr,
 	.fiemap		= bch_fiemap,
 	.setxattr	= generic_setxattr,
@@ -1080,6 +1080,8 @@ static struct dentry *bch_mount(struct file_system_type *fs_type,
 	sb->s_magic		= BCACHE_SB_MAGIC;
 	sb->s_time_gran		= 1;
 	sb->s_fs_info		= c;
+
+	/* XXX */
 	sb->s_bdi		= &bdev_get_queue(c->cache[0]->bdev)->backing_dev_info;
 
 	inode = bch_vfs_inode_get(sb, BCACHE_ROOT_INO);

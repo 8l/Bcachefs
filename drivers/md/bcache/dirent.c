@@ -2,6 +2,7 @@
 #include "bcache.h"
 #include "btree.h"
 #include "extents.h"
+#include "dirent.h"
 
 #include "linux/cryptohash.h"
 

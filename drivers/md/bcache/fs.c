@@ -13,6 +13,8 @@
 #include "linux/statfs.h"
 #include "linux/xattr.h"
 
+static struct bio_set *bch_fs_bioset;
+
 struct bch_inode_info {
 	struct bch_inode	inode;
 	struct inode		vfs_inode;
@@ -659,7 +661,7 @@ static void bch_writepage_io_free(struct closure *cl)
 		end_page_writeback(page);
 	}
 
-	kfree(io);
+	bio_put(&io->bio.bio);
 }
 
 static void bch_writepage_do_io(struct bch_writepage_io *io)
@@ -699,18 +701,10 @@ static int __bch_writepage(struct page *page, struct writeback_control *wbc,
 
 again:
 	if (!w->io) {
-		w->io = kzalloc(sizeof(struct bch_writepage_io) +
-				sizeof(struct bio_vec) * BIO_MAX_PAGES,
-				GFP_NOFS);
-		BUG_ON(!w->io);
+		bio = bio_alloc_bioset(GFP_NOFS, BIO_MAX_PAGES, bch_fs_bioset);
+		w->io = container_of(bio, struct bch_writepage_io, bio.bio);
 
 		closure_init(&w->io->cl, NULL);
-
-		bio = &w->io->bio.bio;
-		bio_init(bio);
-		bio->bi_io_vec = bio->bi_inline_vecs;
-		bio->bi_max_vecs = BIO_MAX_PAGES;
-
 		bch_write_op_init(&w->io->op, w->c, bio, NULL,
 				  true, false, false,
 				  &KEY(w->inum, 0, 0), NULL);
@@ -1162,23 +1156,31 @@ static struct file_system_type bcache_fs_type = {
 void bch_fs_exit(void)
 {
 	unregister_filesystem(&bcache_fs_type);
+	if (bch_fs_bioset)
+		bioset_free(bch_fs_bioset);
 	if (bch_inode_cache)
 		kmem_cache_destroy(bch_inode_cache);
 }
 
 int __init bch_fs_init(void)
 {
-	int ret;
+	int ret = -ENOMEM;
 
 	bch_inode_cache = KMEM_CACHE(bch_inode_info, 0);
 	if (!bch_inode_cache)
-		return -ENOMEM;
+		goto err;
+
+	bch_fs_bioset = bioset_create(4,
+				offsetof(struct bch_writepage_io, bio.bio));
+	if (!bch_fs_bioset)
+		goto err;
 
 	ret = register_filesystem(&bcache_fs_type);
-	if (ret) {
-		kmem_cache_destroy(bch_inode_cache);
-		return ret;
-	}
+	if (ret)
+		goto err;
 
 	return 0;
+err:
+	bch_fs_exit();
+	return ret;
 }

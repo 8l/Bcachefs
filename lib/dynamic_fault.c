@@ -12,6 +12,8 @@
  *
  */
 
+#define pr_fmt(fmt) "%s(): " fmt "\n", __func__
+
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -30,32 +32,31 @@
 #include <linux/debugfs.h>
 #include <linux/slab.h>
 
+#undef kzalloc
+
 extern struct _dfault __start___faults[];
 extern struct _dfault __stop___faults[];
-
-/* dynamic_fault_enabled, and dynamic_fault_enabled2 are bitmasks in which
- * bit n is set to 1 if any modname hashes into the bucket n, 0 otherwise. They
- * use independent hash functions, to reduce the chance of false positives.
- */
-long long dynamic_fault_enabled;
-EXPORT_SYMBOL_GPL(dynamic_fault_enabled);
-long long dynamic_fault_enabled2;
-EXPORT_SYMBOL_GPL(dynamic_fault_enabled2);
 
 struct dfault_table {
 	struct list_head link;
 	char *mod_name;
 	unsigned int num_dfaults;
-	unsigned int num_enabled;
 	struct _dfault *dfaults;
 };
 
 struct dfault_query {
-	const char *filename;
-	const char *module;
-	const char *function;
-	unsigned int first_lineno, last_lineno;
-	unsigned int first_index, last_index;
+	const char	*filename;
+	const char	*module;
+	const char	*function;
+	const char	*class;
+	unsigned int	first_lineno, last_lineno;
+	unsigned int	first_index, last_index;
+
+	unsigned	set_enabled:1;
+	unsigned	enabled:2;
+
+	unsigned	set_frequency:1;
+	unsigned	frequency;
 };
 
 struct dfault_iter {
@@ -65,7 +66,33 @@ struct dfault_iter {
 
 static DEFINE_MUTEX(dfault_lock);
 static LIST_HEAD(dfault_tables);
-static int verbose;
+
+bool __dynamic_fault_enabled(struct _dfault *df)
+{
+	union dfault_state old, new;
+	unsigned v = df->state.v;
+	bool ret;
+
+	do {
+		old.v = new.v = v;
+
+		if (new.enabled == DFAULT_DISABLED)
+			return false;
+
+		ret = df->frequency
+			? ++new.count >= df->frequency
+			: true;
+		if (ret)
+			new.count = 0;
+		if (ret && new.enabled == DFAULT_ONESHOT)
+			new.enabled = DFAULT_DISABLED;
+	} while ((v = cmpxchg(&df->state.v, old.v, new.v)) != old.v);
+
+	if (ret)
+		pr_debug("returned true for %s:%u", df->filename, df->lineno);
+
+	return ret;
+}
 
 /* Return the last part of a pathname */
 static inline const char *basename(const char *path)
@@ -75,19 +102,21 @@ static inline const char *basename(const char *path)
 }
 
 /* format a string into buf[] which describes the _dfault's flags */
-static char *dfault_describe_flags(struct _dfault *df, char *buf,
-				    size_t maxlen)
+static char *dfault_describe_flags(struct _dfault *df, char *buf, size_t buflen)
 {
-	char *p = buf;
-
-	BUG_ON(maxlen < 4);
-	if (df->flags & _DFAULT_ON)
-		*p++ = 'f';
-	if (df->flags & _DFAULT_ONE_SHOT)
-		*p++ = 'o';
-	if (p == buf)
-		*p++ = '-';
-	*p = '\0';
+	switch (df->state.enabled) {
+	case DFAULT_DISABLED:
+		strlcpy(buf, "disabled", buflen);
+		break;
+	case DFAULT_ENABLED:
+		strlcpy(buf, "enabled", buflen);
+		break;
+	case DFAULT_ONESHOT:
+		strlcpy(buf, "oneshot", buflen);
+		break;
+	default:
+		BUG();
+	}
 
 	return buf;
 }
@@ -102,14 +131,12 @@ static char *dfault_describe_flags(struct _dfault *df, char *buf,
  * the user which dfault's were changed, or whether none
  * were matched.
  */
-static int dfault_change(const struct dfault_query *query,
-			 unsigned int flags, unsigned int mask)
+static int dfault_change(const struct dfault_query *query)
 {
 	int i;
 	struct dfault_table *dt;
-	unsigned int newflags;
 	unsigned int nfound = 0;
-	char flagbuf[8];
+	char flagbuf[16];
 
 	/* search for matching dfaults */
 	mutex_lock(&dfault_lock);
@@ -134,6 +161,17 @@ static int dfault_change(const struct dfault_query *query,
 			    strcmp(query->function, df->function))
 				continue;
 
+			/* match against the class */
+			if (query->class) {
+				size_t len = strlen(query->class);
+
+				if (strncmp(query->class, df->class, len))
+					continue;
+
+				if (df->class[len] && df->class[len] != ':')
+					continue;
+			}
+
 			/* match against the line number range */
 			if (query->first_lineno &&
 			    df->lineno < query->first_lineno)
@@ -152,36 +190,31 @@ static int dfault_change(const struct dfault_query *query,
 
 			nfound++;
 
-			newflags = (df->flags & mask) | flags;
-			if (newflags == df->flags)
-				continue;
+			if (query->set_enabled &&
+			    query->enabled != df->state.enabled) {
+				if (query->enabled != DFAULT_DISABLED)
+					static_key_slow_inc(&df->enabled);
+				else if (df->state.enabled != DFAULT_DISABLED)
+					static_key_slow_dec(&df->enabled);
 
-			if (!newflags)
-				dt->num_enabled--;
-			else if (!df->flags)
-				dt->num_enabled++;
+				df->state.enabled = query->enabled;
+			}
 
-			df->flags = newflags;
-			if (newflags)
-				static_key_slow_inc(&df->enabled);
+			if (query->set_frequency)
+				df->frequency = query->frequency;
 
-			if (verbose)
-				printk(KERN_INFO
-				       "dfault: changed %s:%d [%s]%s #%d %s\n",
-				       df->filename, df->lineno,
-				       dt->mod_name, df->function, df->index,
-				       dfault_describe_flags(df, flagbuf,
-							     sizeof(flagbuf)));
+			pr_debug("changed %s:%d [%s]%s #%d %s",
+				 df->filename, df->lineno,
+				 dt->mod_name, df->function, df->index,
+				 dfault_describe_flags(df, flagbuf,
+						       sizeof(flagbuf)));
 		}
 	}
 	mutex_unlock(&dfault_lock);
 
-	if (!nfound && verbose) {
-		printk(KERN_INFO "dfault: no matches for query\n");
-		return -ENOENT;
-	}
+	pr_debug("dfault: %u matches", nfound);
 
-	return 0;
+	return nfound ? 0 : -ENOENT;
 }
 
 /*
@@ -227,32 +260,7 @@ static int dfault_tokenize(char *buf, char *words[], int maxwords)
 		buf = end;
 	}
 
-	if (verbose) {
-		int i;
-		printk(KERN_INFO "%s: split into words:", __func__);
-		for (i = 0 ; i < nwords ; i++)
-			printk(" \"%s\"", words[i]);
-		printk("\n");
-	}
-
 	return nwords;
-}
-
-/*
- * Parse a single number.  Note that the empty string "" is
- * treated as a special case and converted to zero, which
- * is later treated as a "don't care" value.
- */
-static inline int parse_number(const char *str, unsigned int *val)
-{
-	char *end = NULL;
-	BUG_ON(str == NULL);
-	if (*str == '\0') {
-		*val = 0;
-		return 0;
-	}
-	*val = simple_strtoul(str, &end, 10);
-	return end == NULL || end == str || *end != '\0' ? -EINVAL : 0;
 }
 
 /*
@@ -267,17 +275,129 @@ static inline int parse_range(char *str,
 
 	if (last_str)
 		*last_str++ = '\0';
-	if (parse_number(first_str, first) < 0)
+
+	if (kstrtouint(first_str, 10, first))
 		return -EINVAL;
-	if (last_str != NULL) {
-		/* range <first>-<last> */
-		if (parse_number(last_str, last) < 0)
-			return -EINVAL;
-	} else {
+
+	if (!last_str)
 		*last = *first;
-	}
+	else if (kstrtouint(last_str, 10, last))
+		return -EINVAL;
 
 	return 0;
+}
+
+enum dfault_token {
+	TOK_INVALID,
+
+	/* Queries */
+	TOK_FUNC,
+	TOK_FILE,
+	TOK_LINE,
+	TOK_MODULE,
+	TOK_CLASS,
+	TOK_INDEX,
+
+	/* Commands */
+	TOK_DISABLE,
+	TOK_ENABLE,
+	TOK_ONESHOT,
+	TOK_FREQUENCY,
+};
+
+static const struct {
+	const char		*str;
+	enum dfault_token	tok;
+	unsigned		args_required;
+} dfault_token_strs[] = {
+	{ "func",	TOK_FUNC,	1,	},
+	{ "file",	TOK_FILE,	1,	},
+	{ "line",	TOK_LINE,	1,	},
+	{ "module",	TOK_MODULE,	1,	},
+	{ "class",	TOK_CLASS,	1,	},
+	{ "index",	TOK_INDEX,	1,	},
+	{ "disable",	TOK_DISABLE,	0,	},
+	{ "enable",	TOK_ENABLE,	0,	},
+	{ "oneshot",	TOK_ONESHOT,	0,	},
+	{ "frequency",	TOK_FREQUENCY,	1,	},
+};
+
+static enum dfault_token str_to_token(const char *word, unsigned nr_words)
+{
+	unsigned i;
+
+	for (i = 0; i < ARRAY_SIZE(dfault_token_strs); i++)
+		if (!strcmp(word, dfault_token_strs[i].str)) {
+			if (nr_words < dfault_token_strs[i].args_required) {
+				pr_debug("insufficient arguments to \"%s\"", word);
+				return TOK_INVALID;
+			}
+
+			return dfault_token_strs[i].tok;
+		}
+
+	pr_debug("unknown keyword \"%s\"", word);
+
+	return TOK_INVALID;
+}
+
+static int dfault_parse_command(struct dfault_query *query,
+				enum dfault_token tok,
+				char *words[], size_t nr_words)
+{
+	unsigned i = 0;
+	int ret;
+
+	switch (tok) {
+	case TOK_INVALID:
+		return -EINVAL;
+	case TOK_FUNC:
+		query->function = words[i++];
+	case TOK_FILE:
+		query->filename = words[i++];
+		return 1;
+	case TOK_LINE:
+		parse_range(words[i++],
+			    &query->first_lineno,
+			    &query->last_lineno);
+		break;
+	case TOK_MODULE:
+		query->module = words[i++];
+		break;
+	case TOK_CLASS:
+		query->class = words[i++];
+		break;
+	case TOK_INDEX:
+		parse_range(words[i++],
+			    &query->first_index,
+			    &query->last_index);
+		break;
+	case TOK_DISABLE:
+		query->set_enabled = 1;
+		query->enabled = DFAULT_DISABLED;
+		break;
+	case TOK_ENABLE:
+		query->set_enabled = 1;
+		query->enabled = DFAULT_ENABLED;
+		break;
+	case TOK_ONESHOT:
+		query->set_enabled = 1;
+		query->enabled = DFAULT_ONESHOT;
+		break;
+	case TOK_FREQUENCY:
+		query->set_frequency = 1;
+		ret = kstrtouint(words[i++], 10, &query->frequency);
+		if (ret)
+			return ret;
+
+		if (!query->set_enabled) {
+			query->set_enabled = 1;
+			query->enabled = DFAULT_ENABLED;
+		}
+		break;
+	}
+
+	return i;
 }
 
 /*
@@ -293,110 +413,29 @@ static inline int parse_range(char *str,
  * index <m>-<n>                     // dynamic faults numbered from <m>
  *                                   // to <n> inside each matching function
  */
-static int dfault_parse_query(char *words[], int nwords,
-			      struct dfault_query *query)
+static int dfault_parse_query(struct dfault_query *query,
+			      char *words[], size_t nr_words)
 {
-	unsigned int i;
+	unsigned i = 0;
 
-	/* check we have an even number of words */
-	if (nwords % 2 != 0)
-		return -EINVAL;
-	memset(query, 0, sizeof(*query));
+	while (i < nr_words) {
+		const char *tok_str = words[i++];
+		enum dfault_token tok = str_to_token(tok_str, nr_words - i);
+		int ret = dfault_parse_command(query, tok, words + i,
+					       nr_words - i);
 
-	for (i = 0 ; i < nwords ; i += 2) {
-		if (!strcmp(words[i], "func"))
-			query->function = words[i+1];
-		else if (!strcmp(words[i], "file"))
-			query->filename = words[i+1];
-		else if (!strcmp(words[i], "module"))
-			query->module = words[i+1];
-		else if (!strcmp(words[i], "line")) {
-			parse_range(words[i+1],
-				    &query->first_lineno,
-				    &query->last_lineno);
-		} else if (!strcmp(words[i], "index")) {
-			parse_range(words[i+1],
-				    &query->first_index,
-				    &query->last_index);
-		} else {
-			if (verbose)
-				printk(KERN_ERR "%s: unknown keyword \"%s\"\n",
-					__func__, words[i]);
-			return -EINVAL;
-		}
+		if (ret < 0)
+			return ret;
+		i += ret;
+		BUG_ON(i > nr_words);
 	}
 
-	if (verbose)
-		printk(KERN_INFO "%s: q->function=\"%s\" q->filename=\"%s\" "
-		       "q->module=\"%s\" q->lineno=%u-%u\n q->index=%u-%u",
-			__func__, query->function, query->filename,
-			query->module,
-			query->first_lineno, query->last_lineno,
-			query->first_index, query->last_index);
+	pr_debug("q->function=\"%s\" q->filename=\"%s\" "
+		 "q->module=\"%s\" q->lineno=%u-%u\n q->index=%u-%u",
+		 query->function, query->filename, query->module,
+		 query->first_lineno, query->last_lineno,
+		 query->first_index, query->last_index);
 
-	return 0;
-}
-
-/*
- * Parse `str' as a flags specification, format [-+=][p]+.
- * Sets up *maskp and *flagsp to be used when changing the
- * flags fields of matched _dfault's.  Returns 0 on success
- * or <0 on error.
- */
-static int dfault_parse_flags(const char *str, unsigned int *flagsp,
-			       unsigned int *maskp)
-{
-	unsigned flags = 0;
-	int op = '=';
-
-	switch (*str) {
-	case '+':
-	case '-':
-	case '=':
-		op = *str++;
-		break;
-	default:
-		return -EINVAL;
-	}
-	if (verbose)
-		printk(KERN_INFO "%s: op='%c', flag='%c'\n", __func__,
-		       op, *str);
-
-	for ( ; *str ; ++str) {
-		switch (*str) {
-		case 'f':
-			flags |= _DFAULT_ON;
-			break;
-		case 'o':
-			flags |= _DFAULT_ONE_SHOT;
-			break;
-		default:
-			return -EINVAL;
-		}
-	}
-	if (flags == 0)
-		return -EINVAL;
-	if (verbose)
-		printk(KERN_INFO "%s: flags=0x%x\n", __func__, flags);
-
-	/* calculate final *flagsp, *maskp according to mask and op */
-	switch (op) {
-	case '=':
-		*maskp = 0;
-		*flagsp = flags;
-		break;
-	case '+':
-		*maskp = ~0U;
-		*flagsp = flags;
-		break;
-	case '-':
-		*maskp = ~flags;
-		*flagsp = 0;
-		break;
-	}
-	if (verbose)
-		printk(KERN_INFO "%s: *flagsp=0x%x *maskp=0x%x\n",
-			__func__, *flagsp, *maskp);
 	return 0;
 }
 
@@ -407,13 +446,14 @@ static int dfault_parse_flags(const char *str, unsigned int *flagsp,
 static ssize_t dfault_proc_write(struct file *file, const char __user *ubuf,
 				  size_t len, loff_t *offp)
 {
-	unsigned int flags = 0, mask = 0;
 	struct dfault_query query;
 #define MAXWORDS 9
 	int nwords;
 	char *words[MAXWORDS];
 	char tmpbuf[256];
 	int ret;
+
+	memset(&query, 0, sizeof(query));
 
 	if (len == 0)
 		return 0;
@@ -423,26 +463,24 @@ static ssize_t dfault_proc_write(struct file *file, const char __user *ubuf,
 	if (copy_from_user(tmpbuf, ubuf, len))
 		return -EFAULT;
 	tmpbuf[len] = '\0';
-	if (verbose)
-		printk(KERN_INFO "%s: read %d bytes from userspace\n",
-			__func__, (int)len);
+	pr_debug("read %zu bytes from userspace", len);
 
 	nwords = dfault_tokenize(tmpbuf, words, MAXWORDS);
 	if (nwords < 0)
 		return -EINVAL;
-	if (dfault_parse_query(words, nwords-1, &query))
-		return -EINVAL;
-	if (dfault_parse_flags(words[nwords-1], &flags, &mask))
+	if (dfault_parse_query(&query, words, nwords))
 		return -EINVAL;
 
 	/* actually go and implement the change */
-	ret = dfault_change(&query, flags, mask);
+	ret = dfault_change(&query);
 	if (ret < 0)
 		return ret;
 
 	*offp += len;
 	return len;
 }
+
+/* Control file read code */
 
 /*
  * Set the iterator to point to the first _dfault object
@@ -496,18 +534,14 @@ static void *dfault_proc_start(struct seq_file *m, loff_t *pos)
 	struct _dfault *dp;
 	int n = *pos;
 
-	if (verbose)
-		printk(KERN_INFO "%s: called m=%p *pos=%lld\n",
-			__func__, m, (unsigned long long)*pos);
+	pr_debug("m=%p *pos=%lld", m, (unsigned long long)*pos);
 
 	mutex_lock(&dfault_lock);
 
-	if (!n)
-		return SEQ_START_TOKEN;
 	if (n < 0)
 		return NULL;
 	dp = dfault_iter_first(iter);
-	while (dp != NULL && --n > 0)
+	while (dp != NULL && --n >= 0)
 		dp = dfault_iter_next(iter);
 	return dp;
 }
@@ -522,9 +556,7 @@ static void *dfault_proc_next(struct seq_file *m, void *p, loff_t *pos)
 	struct dfault_iter *iter = m->private;
 	struct _dfault *dp;
 
-	if (verbose)
-		printk(KERN_INFO "%s: called m=%p p=%p *pos=%lld\n",
-			__func__, m, p, (unsigned long long)*pos);
+	pr_debug("m=%p p=%p *pos=%lld", m, p, (unsigned long long)*pos);
 
 	if (p == SEQ_START_TOKEN)
 		dp = dfault_iter_first(iter);
@@ -546,20 +578,14 @@ static int dfault_proc_show(struct seq_file *m, void *p)
 	struct _dfault *df = p;
 	char flagsbuf[8];
 
-	if (verbose)
-		printk(KERN_INFO "%s: called m=%p p=%p\n",
-			__func__, m, p);
+	pr_debug("m=%p p=%p", m, p);
 
-	if (p == SEQ_START_TOKEN) {
-		seq_puts(m,
-			"# filename:lineno [module]function index "
-			"flags format\n");
-		return 0;
-	}
-
-	seq_printf(m, "%s:%u [%s]%s %d %s \"",
+	seq_printf(m, "%s:%u class:%s module:%s func:%s index:%d %s \"",
 		   df->filename, df->lineno,
-		   iter->table->mod_name, df->function, df->index,
+		   df->class,
+		   iter->table->mod_name,
+		   df->function,
+		   df->index,
 		   dfault_describe_flags(df, flagsbuf, sizeof(flagsbuf)));
 	seq_puts(m, "\"\n");
 
@@ -572,9 +598,7 @@ static int dfault_proc_show(struct seq_file *m, void *p)
  */
 static void dfault_proc_stop(struct seq_file *m, void *p)
 {
-	if (verbose)
-		printk(KERN_INFO "%s: called m=%p p=%p\n",
-			__func__, m, p);
+	pr_debug("m=%p p=%p", m, p);
 	mutex_unlock(&dfault_lock);
 }
 
@@ -596,8 +620,7 @@ static int dfault_proc_open(struct inode *inode, struct file *file)
 	struct dfault_iter *iter;
 	int err;
 
-	if (verbose)
-		printk(KERN_INFO "%s: called\n", __func__);
+	pr_debug("called");
 
 	iter = kzalloc(sizeof(*iter), GFP_KERNEL);
 	if (iter == NULL)
@@ -644,7 +667,6 @@ int dfault_add_module(struct _dfault *tab, unsigned int n,
 	}
 	dt->mod_name = new_name;
 	dt->num_dfaults = n;
-	dt->num_enabled = 0;
 	dt->dfaults = tab;
 
 	mutex_lock(&dfault_lock);
@@ -663,9 +685,7 @@ int dfault_add_module(struct _dfault *tab, unsigned int n,
 		tab[i].index = index++;
 	}
 
-	if (verbose)
-		printk(KERN_INFO "%u debug prints in module %s\n",
-				 n, dt->mod_name);
+	pr_debug("%u debug prints in module %s", n, dt->mod_name);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(dfault_add_module);
@@ -686,9 +706,7 @@ int dfault_remove_module(char *mod_name)
 	struct dfault_table *dt, *nextdt;
 	int ret = -ENOENT;
 
-	if (verbose)
-		printk(KERN_INFO "%s: removing module \"%s\"\n",
-				__func__, mod_name);
+	pr_debug("removing module \"%s\"", mod_name);
 
 	mutex_lock(&dfault_lock);
 	list_for_each_entry_safe(dt, nextdt, &dfault_tables, link) {

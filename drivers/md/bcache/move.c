@@ -38,7 +38,8 @@ static void moving_io_destructor(struct closure *cl)
 	int i;
 
 	bio_for_each_segment_all(bv, bio, i)
-		__free_page(bv->bv_page);
+		if (bv->bv_page)
+			__free_page(bv->bv_page);
 
 	if (io->op.replace_collision)
 		trace_bcache_copy_collision(&io->w->key);

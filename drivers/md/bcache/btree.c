@@ -1803,19 +1803,36 @@ static unsigned btree_gc_count_keys(struct btree *b)
 #define BTREE_GC_RUN_QUANTUM		125
 #define BTREE_GC_IDLE_QUANTUM		1000
 
-static int btree_gc_run_long_enough(uint64_t last_start)
+static int btree_gc_run_long_enough(uint64_t last_start, struct cache_set *c)
 {
-	if (ENABLE_GC_TIMEOUTS) {
-		uint64_t now = local_clock();
-		uint64_t duration
-			= time_after64(now, last_start)
-			? (now - last_start)
-			: 0;
+	uint64_t now, duration;
 
-		return duration
-			>= (((uint64_t) BTREE_GC_RUN_QUANTUM) * 1000000);
-	} else
+	if (!ENABLE_GC_TIMEOUTS)
 		return 0;
+
+	/*
+	 * If some task is waiting for a free bucket, _and_ some task
+	 * is waiting for the gc lock, we don't stop since we may be
+	 * blocking all writes.
+	 *
+	 * Note that only two tasks wait for the gc lock at present:
+	 * - the allocator thread (the one we care about)
+	 * - device addition (super.c:bch_cache_add), which is very rare.
+	 *
+	 * Note that as the gc lock is a rw semaphore, and we are the
+	 * writer (bch_tree_gc calls down_write), any contention is
+	 * from readers, i.e. allocator threads.
+	 */
+
+	if ((!llist_empty(&c->bucket_wait.list))
+	    && (rwsem_is_contended(&c->gc_lock)))
+		return 0;
+
+	now = local_clock();
+	duration = time_after64(now, last_start) ? (now - last_start) : 0;
+
+	return duration
+		>= (((uint64_t) BTREE_GC_RUN_QUANTUM) * 1000000);
 }
 
 /**
@@ -1899,7 +1916,7 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 		/*
 		 * The run_long_enough term guarantees that btree_gc doesn't
 		 * hold a lock forever.
-		 * When a task needs a hold that btree_gc holds, it won't
+		 * When a task needs a lock that btree_gc holds, it won't
 		 * claim to need to be rescheduled until the lock is released,
 		 * so periodically release all locks by claiming that
 		 * we timed out, and let others get the locks.
@@ -1907,7 +1924,7 @@ static int btree_gc_recurse(struct btree *b, struct btree_op *op,
 
 		if (need_resched()
 		    || dynamic_fault()
-		    || btree_gc_run_long_enough(gc->last_start)) {
+		    || btree_gc_run_long_enough(gc->last_start, c)) {
 			ret = -ETIMEDOUT;
 			break;
 		}

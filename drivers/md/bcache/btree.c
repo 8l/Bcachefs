@@ -1396,7 +1396,7 @@ static int __btree_check_reserve(struct cache_set *c,
 					required, cl);
 
 			if (cl) {
-				closure_wait(&c->bucket_wait, cl);
+				closure_wait(&c->freelist_wait, cl);
 				ret = -EAGAIN;
 			} else {
 				ret = -ENOSPC;
@@ -1824,7 +1824,7 @@ static int btree_gc_run_long_enough(uint64_t last_start, struct cache_set *c)
 	 * from readers, i.e. allocator threads.
 	 */
 
-	if ((!llist_empty(&c->bucket_wait.list))
+	if ((!llist_empty(&c->buckets_available_wait.list))
 	    && (rwsem_is_contended(&c->gc_lock)))
 		return 0;
 

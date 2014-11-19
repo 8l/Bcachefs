@@ -14,7 +14,7 @@
 	for (b = (ca)->buckets + (ca)->sb.first_bucket;			\
 	     b < (ca)->buckets + (ca)->sb.nbuckets; b++)
 
-static inline struct cache *PTR_CACHE(struct cache_set *c,
+static inline struct cache *PTR_CACHE(const struct cache_set *c,
 				      const struct bkey *k,
 				      unsigned ptr)
 {
@@ -25,15 +25,15 @@ static inline struct cache *PTR_CACHE(struct cache_set *c,
 		: NULL;
 }
 
-static inline size_t PTR_BUCKET_NR(struct cache_set *c,
+static inline size_t PTR_BUCKET_NR(const struct cache_set *c,
 				   const struct bkey *k,
 				   unsigned ptr)
 {
 	return sector_to_bucket(c, PTR_OFFSET(k, ptr));
 }
 
-static inline u8 PTR_BUCKET_GEN(struct cache_set *c,
-				struct cache *ca,
+static inline u8 PTR_BUCKET_GEN(const struct cache_set *c,
+				const struct cache *ca,
 				const struct bkey *k,
 				unsigned ptr)
 {
@@ -54,7 +54,8 @@ static inline uint8_t gen_after(uint8_t a, uint8_t b)
 	return r > 128U ? 0 : r;
 }
 
-static inline uint8_t ptr_stale(struct cache_set *c, struct cache *ca,
+static inline uint8_t ptr_stale(const struct cache_set *c,
+				const struct cache *ca,
 				const struct bkey *k, unsigned ptr)
 {
 	return gen_after(PTR_BUCKET_GEN(c, ca, k, ptr), PTR_GEN(k, ptr));

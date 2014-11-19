@@ -8,7 +8,7 @@
 #include "btree.h"
 #include "buckets.h"
 #include "extents.h"
-#include "keybuf.h"
+#include "keylist.h"
 #include "move.h"
 #include "movinggc.h"
 
@@ -18,9 +18,9 @@
 
 /* Moving GC - IO loop */
 
-static bool moving_pred(struct keybuf *buf, struct bkey *k)
+static bool moving_pred(struct scan_keylist *kl, struct bkey *k)
 {
-	struct cache *ca = container_of(buf, struct cache,
+	struct cache *ca = container_of(kl, struct cache,
 					moving_gc_keys);
 	struct cache_set *c = ca->set;
 	bool ret = false;
@@ -38,8 +38,8 @@ static bool moving_pred(struct keybuf *buf, struct bkey *k)
 
 static void read_moving(struct cache *ca, struct moving_io_stats *stats)
 {
+	struct bkey *k;
 	struct cache_set *c = ca->set;
-	struct keybuf_key *w;
 	struct moving_io *io;
 	struct closure cl;
 	struct write_point *wp;
@@ -51,46 +51,53 @@ static void read_moving(struct cache *ca, struct moving_io_stats *stats)
 
 	/* XXX: if we error, background writeback could stall indefinitely */
 
-	while (!bch_ratelimit_wait_freezable_stoppable(&ca->moving_gc_pd.rate, &cl)) {
-		w = bch_keybuf_next_rescan(c, &ca->moving_gc_keys,
-					   &MAX_KEY, moving_pred);
-		if (!w)
+	while (!bch_ratelimit_wait_freezable_stoppable(&ca->moving_gc_pd.rate,
+						       &cl)) {
+		k = bch_scan_keylist_next_rescan(c,
+						 &ca->moving_gc_keys,
+						 &MAX_KEY,
+						 moving_pred);
+		if (k == NULL)
 			break;
 
-		for (ptr = 0; ptr < bch_extent_ptrs(&w->key); ptr++)
-			if ((ca->sb.nr_this_dev == PTR_DEV(&w->key, ptr)) &&
-			    (gen = PTR_BUCKET(c, ca, &w->key, ptr)->copygc_gen)) {
+		for (ptr = 0; ptr < bch_extent_ptrs(k); ptr++)
+			if ((ca->sb.nr_this_dev == PTR_DEV(k, ptr)) &&
+			    (gen = PTR_BUCKET(c, ca, k, ptr)->copygc_gen)) {
 				gen--;
 				BUG_ON(gen > ARRAY_SIZE(ca->gc_buckets));
 				wp = &ca->gc_buckets[gen];
 				goto found;
 			}
 
-		bch_keybuf_put(&ca->moving_gc_keys, w);
+		bch_scan_keylist_advance(&ca->moving_gc_keys);
 		continue;
 found:
-		io = moving_io_alloc(w);
+		io = moving_io_alloc(k);
 		if (!io) {
-			trace_bcache_moving_gc_alloc_fail(c, KEY_SIZE(&w->key));
-			bch_keybuf_put(&ca->moving_gc_keys, w);
+			trace_bcache_moving_gc_alloc_fail(c, KEY_SIZE(k));
 			break;
 		}
 
-		io->keybuf		= &ca->moving_gc_keys;
 		io->stats		= stats;
+		io->in_flight		= &ca->moving_gc_in_flight;
+		bkey_copy(&io->key, k);
+
+		/* This also copies k into both insert_key and replace_key */
 
 		bch_write_op_init(&io->op, c, &io->bio.bio, wp,
 				  false, false, false,
-				  &io->w->key, &io->w->key);
+				  k, k);
 		io->op.io_wq		= ca->moving_gc_write;
 		io->op.btree_alloc_reserve = RESERVE_MOVINGGC_BTREE;
 
 		bch_extent_drop_ptr(&io->op.insert_key, ptr);
 
-		trace_bcache_gc_copy(&w->key);
+		trace_bcache_gc_copy(k);
 
 		bch_ratelimit_increment(&ca->moving_gc_pd.rate,
-					KEY_SIZE(&w->key) << 9);
+					KEY_SIZE(k) << 9);
+
+		bch_scan_keylist_advance(&ca->moving_gc_keys);
 
 		closure_call(&io->cl, bch_data_move, NULL, &cl);
 	}
@@ -230,14 +237,6 @@ static int bch_moving_gc_thread(void *arg)
 	return 0;
 }
 
-void bch_moving_init_cache(struct cache *ca)
-{
-	bch_keybuf_init(&ca->moving_gc_keys, DFLT_MOVING_GC_KEYS_KEYBUF_NR);
-	bch_pd_controller_init(&ca->moving_gc_pd);
-
-	ca->moving_gc_pd.d_term = 0;
-}
-
 void bch_moving_gc_stop(struct cache *ca)
 {
 	ca->moving_gc_pd.rate.rate = UINT_MAX;
@@ -272,7 +271,12 @@ int bch_moving_gc_thread_start(struct cache *ca)
 
 void bch_moving_init_cache(struct cache *ca)
 {
-	bch_keybuf_init(&ca->moving_gc_keys);
+	unsigned max_in_flight = DFLT_MOVING_GC_IN_FLIGHT;
+
+	ca->max_moving_gc_in_flight = max_in_flight;
+	sema_init(&ca->moving_gc_in_flight, max_in_flight);
+	bch_scan_keylist_init(&ca->moving_gc_keys,
+			      DFLT_MOVING_GC_KEYS_MAX_SIZE);
 	bch_pd_controller_init(&ca->moving_gc_pd);
 
 	ca->moving_gc_pd.d_term = 0;

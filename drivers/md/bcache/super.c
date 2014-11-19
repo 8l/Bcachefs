@@ -18,7 +18,7 @@
 #include "movinggc.h"
 #include "stats.h"
 #include "super.h"
-#include "keybuf.h"
+#include "keylist.h"
 
 #include <linux/blkdev.h>
 #include <linux/crc32c.h>
@@ -699,7 +699,7 @@ static void cache_set_free(struct closure *cl)
 	list_del(&c->list);
 	mutex_unlock(&bch_register_lock);
 
-	bch_keybuf_free(&c->tiering_keys);
+	bch_scan_keylist_destroy(&c->tiering_keys);
 
 	pr_info("Cache set %pU unregistered", c->sb.set_uuid.b);
 
@@ -1486,7 +1486,7 @@ static void bch_cache_stop(struct cache *ca)
 
 	rcu_assign_pointer(c->cache[ca->sb.nr_this_dev], NULL);
 
-	bch_keybuf_free(&ca->moving_gc_keys);
+	bch_scan_keylist_destroy(&ca->moving_gc_keys);
 
 	call_rcu(&ca->kill_rcu, bch_cache_kill_rcu);
 }

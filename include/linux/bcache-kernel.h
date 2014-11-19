@@ -115,6 +115,11 @@ static inline size_t bch_keylist_size(struct keylist *l)
 	return l->top_p - l->start_keys_p;
 }
 
+static inline size_t bch_keylist_capacity(struct keylist *l)
+{
+	return l->end_keys_p - l->start_keys_p;
+}
+
 static inline size_t bch_keylist_offset(struct keylist *l)
 {
 	return l->bot_p - l->start_keys_p;
@@ -151,7 +156,8 @@ static inline void bch_keylist_pop_front(struct keylist *l)
 	}
 
 void bch_keylist_add_in_order(struct keylist *, struct bkey *);
-int bch_keylist_realloc(struct keylist *, unsigned);
+int bch_keylist_realloc(struct keylist *, unsigned need);
+int bch_keylist_realloc_max(struct keylist *, unsigned need, unsigned max);
 
 struct btree_op {
 	struct closure		cl;

@@ -4,7 +4,6 @@
 #include "buckets.h"
 #include "extents.h"
 #include "io.h"
-#include "keybuf.h"
 #include "move.h"
 #include "super.h"
 
@@ -44,8 +43,8 @@ static void moving_init(struct moving_io *io)
 	bio_get(bio);
 	bio_set_prio(bio, IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0));
 
-	bio->bi_iter.bi_size	= KEY_SIZE(&io->w->key) << 9;
-	bio->bi_max_vecs	= DIV_ROUND_UP(KEY_SIZE(&io->w->key),
+	bio->bi_iter.bi_size	= KEY_SIZE(&io->key) << 9;
+	bio->bi_max_vecs	= DIV_ROUND_UP(KEY_SIZE(&io->key),
 					       PAGE_SECTORS);
 	bio->bi_private		= &io->cl;
 	bio->bi_io_vec		= bio->bi_inline_vecs;
@@ -53,7 +52,7 @@ static void moving_init(struct moving_io *io)
 
 	if (io->stats) {
 		io->stats->keys_moved++;
-		io->stats->sectors_moved += KEY_SIZE(&io->w->key);
+		io->stats->sectors_moved += KEY_SIZE(&io->key);
 	}
 }
 
@@ -69,9 +68,9 @@ static void moving_io_destructor(struct closure *cl)
 			__free_page(bv->bv_page);
 
 	if (io->op.replace_collision)
-		trace_bcache_copy_collision(&io->w->key);
+		trace_bcache_copy_collision(&io->key);
 
-	bch_keybuf_put(io->keybuf, io->w);
+	up(io->in_flight);
 	kfree(io);
 }
 
@@ -95,7 +94,7 @@ static void write_moving(struct closure *cl)
 	else {
 		moving_init(io);
 
-		op->bio->bi_iter.bi_sector = KEY_START(&io->w->key);
+		op->bio->bi_iter.bi_sector = KEY_START(&io->key);
 
 		closure_call(&op->cl, bch_write, NULL, cl);
 		closure_return_with_destructor(cl, moving_io_after_write);
@@ -124,8 +123,10 @@ void bch_data_move(struct closure *cl)
 	struct cache *ca;
 	int ptr;
 
+	down(io->in_flight);
+
 	/* bail out if all pointers are stale */
-	ca = bch_extent_pick_ptr(io->op.c, &io->w->key, &ptr);
+	ca = bch_extent_pick_ptr(io->op.c, &io->key, &ptr);
 	if (!ca)
 		closure_return_with_destructor(cl, moving_io_destructor);
 
@@ -141,7 +142,7 @@ void bch_data_move(struct closure *cl)
 	io->bio.bio.bi_rw	= READ;
 	io->bio.bio.bi_end_io	= read_moving_endio;
 
-	bch_submit_bbio(&io->bio, ca, &io->w->key, ptr, false);
+	bch_submit_bbio(&io->bio, ca, &io->key, ptr, false);
 
 	continue_at(cl, write_moving, io->op.io_wq);
 }

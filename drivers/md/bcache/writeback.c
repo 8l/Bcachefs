@@ -363,8 +363,8 @@ static void refill_full_stripes(struct cached_dev *dc)
 				       next_stripe * dc->disk.stripe_size, 0),
 				  dirty_pred);
 
-		if (freelist_empty(&buf->freelist))
-			return;
+		if (bch_keybuf_full(buf))
+		    return;
 
 		stripe = next_stripe;
 next:
@@ -408,8 +408,8 @@ static void bch_writeback(struct cached_dev *dc)
 
 		if (dc->partial_stripes_expensive) {
 			refill_full_stripes(dc);
-			if (freelist_empty(&buf->freelist))
-				goto refill_done;
+			if (bch_keybuf_full(buf))
+			    goto refill_done;
 		}
 
 		searched_from_start = !bkey_cmp(&buf->last_scanned,
@@ -425,6 +425,7 @@ static void bch_writeback(struct cached_dev *dc)
 			SET_BDEV_STATE(&dc->sb, BDEV_STATE_CLEAN);
 			bch_write_bdev_super(dc, NULL);
 		}
+
 refill_done:
 		up_write(&dc->writeback_lock);
 
@@ -596,7 +597,9 @@ int bch_cached_dev_writeback_init(struct cached_dev *dc)
 		return -ENOMEM;
 
 	init_rwsem(&dc->writeback_lock);
-	bch_keybuf_init(&dc->writeback_keys, DFLT_WRITEBACK_KEYS_KEYBUF_NR);
+	bch_keybuf_init(&dc->writeback_keys,
+			DFLT_WRITEBACK_KEYS_KEYBUF_NR,
+			DFLT_KEYBUF_IN_FLIGHT);
 
 	dc->writeback_metadata		= true;
 	dc->writeback_running		= true;

@@ -3,7 +3,7 @@
 #include "btree.h"
 #include "buckets.h"
 #include "extents.h"
-#include "keybuf.h"
+#include "keylist.h"
 #include "move.h"
 
 #include <linux/delay.h>
@@ -11,9 +11,9 @@
 #include <linux/kthread.h>
 #include <trace/events/bcache.h>
 
-static bool tiering_pred(struct keybuf *buf, struct bkey *k)
+static bool tiering_pred(struct scan_keylist *kl, struct bkey *k)
 {
-	struct cache_set *c = container_of(buf, struct cache_set, tiering_keys);
+	struct cache_set *c = container_of(kl, struct cache_set, tiering_keys);
 	struct cache_member_rcu *mi;
 	unsigned dev;
 	bool ret;
@@ -35,7 +35,7 @@ static bool tiering_pred(struct keybuf *buf, struct bkey *k)
 
 static void read_tiering(struct cache_set *c)
 {
-	struct keybuf_key *w;
+	struct bkey *k;
 	struct moving_io *io;
 	struct closure cl;
 	struct moving_io_stats stats;
@@ -49,33 +49,40 @@ static void read_tiering(struct cache_set *c)
 
 	c->tiering_keys.last_scanned = ZERO_KEY;
 
-	while (!bch_ratelimit_wait_freezable_stoppable(&c->tiering_pd.rate, &cl)) {
-		w = bch_keybuf_next_rescan(c, &c->tiering_keys,
-					   &MAX_KEY, tiering_pred);
-		if (!w)
+	while (!bch_ratelimit_wait_freezable_stoppable(&c->tiering_pd.rate,
+						       &cl)) {
+		k = bch_scan_keylist_next_rescan(c,
+						 &c->tiering_keys,
+						 &MAX_KEY,
+						 tiering_pred);
+		if (k == NULL)
 			break;
 
-		io = moving_io_alloc(w);
+		io = moving_io_alloc(k);
 		if (!io) {
-			trace_bcache_tiering_alloc_fail(c, KEY_SIZE(&w->key));
-			bch_keybuf_put(&c->tiering_keys, w);
+			trace_bcache_tiering_alloc_fail(c, KEY_SIZE(k));
 			break;
 		}
 
-		io->keybuf = &c->tiering_keys;
 		io->stats = &stats;
+		io->in_flight = &c->tiering_in_flight;
+		bkey_copy(&io->key, k);
+
+		/* This also copies k into both insert_key and replace_key */
 
 		bch_write_op_init(&io->op, c, &io->bio.bio,
 				  &c->tier_write_points[1],
 				  true, false, false,
-				  &io->w->key, &io->w->key);
+				  k, k);
 		io->op.io_wq	= c->tiering_write;
 		io->op.btree_alloc_reserve = RESERVE_TIERING_BTREE;
 
-		trace_bcache_tiering_copy(&w->key);
+		trace_bcache_tiering_copy(k);
 
 		bch_ratelimit_increment(&c->tiering_pd.rate,
-					KEY_SIZE(&w->key) << 9);
+					KEY_SIZE(k) << 9);
+
+		bch_scan_keylist_advance(&c->tiering_keys);
 
 		closure_call(&io->cl, bch_data_move, NULL, &cl);
 	}
@@ -96,14 +103,20 @@ static int bch_tiering_thread(void *arg)
 			break;
 
 		read_tiering(c);
-	} while (!bch_kthread_loop_ratelimit(&last, c->btree_scan_ratelimit * HZ));
+	} while (!bch_kthread_loop_ratelimit(&last,
+					     c->btree_scan_ratelimit * HZ));
 
 	return 0;
 }
 
 void bch_tiering_init_cache_set(struct cache_set *c)
 {
-	bch_keybuf_init(&c->tiering_keys, DFLT_TIERING_KEYS_KEYBUF_NR);
+	unsigned max_in_flight = DFLT_TIERING_IN_FLIGHT;
+
+	c->max_tiering_in_flight = max_in_flight;
+	sema_init(&c->tiering_in_flight, max_in_flight);
+	bch_scan_keylist_init(&c->tiering_keys,
+			      DFLT_TIERING_KEYS_MAX_SIZE);
 	bch_pd_controller_init(&c->tiering_pd);
 }
 

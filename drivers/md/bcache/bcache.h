@@ -203,7 +203,7 @@
 #include "blockdev_types.h"
 #include "buckets_types.h"
 #include "journal_types.h"
-#include "keybuf_types.h"
+#include "keylist_types.h"
 #include "stats_types.h"
 #include "super_types.h"
 
@@ -290,10 +290,12 @@ struct cache {
 	struct task_struct	*moving_gc_read;
 	struct workqueue_struct	*moving_gc_write;
 
-#define DFLT_MOVING_GC_KEYS_KEYBUF_NR	 500
-#define MIN_MOVING_GC_KEYS_KEYBUF_NR	   1
-#define MAX_MOVING_GC_KEYS_KEYBUF_NR	4999
-	struct keybuf		moving_gc_keys;
+#define DFLT_MOVING_GC_IN_FLIGHT	250
+	unsigned		max_moving_gc_in_flight;
+	struct semaphore	moving_gc_in_flight;
+
+#define DFLT_MOVING_GC_KEYS_MAX_SIZE	DFLT_SCAN_KEYLIST_MAX_SIZE
+	struct scan_keylist	moving_gc_keys;
 	struct bch_pd_controller moving_gc_pd;
 
 	/*
@@ -524,10 +526,12 @@ struct cache_set {
 	struct task_struct	*tiering_read;
 	struct workqueue_struct	*tiering_write;
 
-#define DFLT_TIERING_KEYS_KEYBUF_NR	 500
-#define MIN_TIERING_KEYS_KEYBUF_NR	   1
-#define MAX_TIERING_KEYS_KEYBUF_NR	4999
-	struct keybuf		tiering_keys;
+#define DFLT_TIERING_IN_FLIGHT	250
+	unsigned		max_tiering_in_flight;
+	struct semaphore	tiering_in_flight;
+
+#define DFLT_TIERING_KEYS_MAX_SIZE	DFLT_SCAN_KEYLIST_MAX_SIZE
+	struct scan_keylist	tiering_keys;
 	struct bch_pd_controller tiering_pd;
 
 	/* DEBUG JUNK */

@@ -15,6 +15,7 @@
 #include "super.h"
 #include "writeback.h"
 #include "keybuf.h"
+#include "keylist.h"
 
 #include <linux/blkdev.h>
 #include <linux/sort.h>
@@ -175,13 +176,16 @@ rw_attribute(gc_sector_percent);
 rw_attribute(cache_reserve_percent);
 
 /* cache_set */
-rw_attribute(tiering_key_pairs);
+rw_attribute(tiering_keys);
+rw_attribute(tiering_ios);
 
 /* cached_dev */
-rw_attribute(writeback_key_pairs);
+rw_attribute(writeback_keys);
+rw_attribute(writeback_ios);
 
 /* cache */
-rw_attribute(copy_gc_key_pairs);
+rw_attribute(copy_gc_keys);
+rw_attribute(copy_gc_ios);
 
 static struct attribute sysfs_state_rw =
 	{ .name = "state", .mode = S_IRUGO|S_IWUSR };
@@ -228,7 +232,9 @@ SHOW(__bch_cached_dev)
 		return strlen(buf);
 	}
 
-	sysfs_printf(writeback_key_pairs,		"%i",
+	sysfs_printf(writeback_ios,		"%i",
+		     ((int) (bch_keybuf_ios(&dc->writeback_keys))));
+	sysfs_printf(writeback_keys,		"%i",
 		     ((int) (bch_keybuf_size(&dc->writeback_keys))));
 
 #undef var
@@ -331,7 +337,16 @@ STORE(__cached_dev)
 	if (attr == &sysfs_stop)
 		bcache_device_stop(&dc->disk);
 
-	if (attr == &sysfs_writeback_key_pairs) {
+	if (attr == &sysfs_writeback_ios) {
+		int nr = (strtoi_h_or_return(buf));
+		nr = (clamp(nr,
+			    1,
+			    ((int)
+			     ((bch_keybuf_size(&dc->writeback_keys)) - 2))));
+		bch_keybuf_resize_ios((&dc->writeback_keys), ((unsigned) nr));
+	}
+	
+	if (attr == &sysfs_writeback_keys) {
 		int nr = (strtoi_h_or_return(buf));
 		nr = (clamp(nr,
 			    MIN_WRITEBACK_KEYS_KEYBUF_NR,
@@ -388,7 +403,8 @@ static struct attribute *bch_cached_dev_files[] = {
 	&sysfs_bypass_torture_test,
 #endif
 
-	&sysfs_writeback_key_pairs,
+	&sysfs_writeback_keys,
+	&sysfs_writeback_ios,
 
 	NULL
 };
@@ -662,8 +678,10 @@ SHOW(__bch_cache_set)
 
 	sysfs_printf(gc_sector_percent,		"%i", c->gc_sector_percent);
 	sysfs_printf(cache_reserve_percent,	"%i", c->cache_reserve_percent);
-	sysfs_printf(tiering_key_pairs,		"%i",
-		     ((int) (bch_keybuf_size(&c->tiering_keys))));
+	sysfs_printf(tiering_ios,		"%i",
+		     ((int) c->max_tiering_in_flight));
+	sysfs_printf(tiering_keys,		"%i",
+		     ((int) bch_scan_keylist_size(&c->tiering_keys)));
 
 	return 0;
 }
@@ -873,12 +891,19 @@ STORE(__bch_cache_set)
 		c->cache_reserve_percent = ((unsigned) v);
 	}
 
-	if (attr == &sysfs_tiering_key_pairs) {
+	if (attr == &sysfs_tiering_ios) {
+		int nr = (strtoi_h_or_return(buf));
+		nr = (clamp(nr, 1, INT_MAX));
+		bch_semaphore_resize(&c->tiering_in_flight,
+				     (nr
+				      - ((int) c->max_tiering_in_flight)));
+		c->max_tiering_in_flight = (unsigned) nr;
+	}
+
+	if (attr == &sysfs_tiering_keys) {
 		int v = (strtoi_h_or_return(buf));
-		v = (clamp(v,
-			   MIN_TIERING_KEYS_KEYBUF_NR,
-			   MAX_TIERING_KEYS_KEYBUF_NR));
-		bch_keybuf_resize((&c->tiering_keys), ((unsigned) v));
+		v = (clamp(v, 2, KEYLIST_MAX));
+		bch_scan_keylist_resize((&c->tiering_keys), ((unsigned) v));
 	}
 
 	return size;
@@ -941,7 +966,8 @@ static struct attribute *bch_cache_set_files[] = {
 
 	&sysfs_gc_sector_percent,
 	&sysfs_cache_reserve_percent,
-	&sysfs_tiering_key_pairs,
+	&sysfs_tiering_keys,
+	&sysfs_tiering_ios,
 
 	NULL
 };
@@ -1117,8 +1143,10 @@ SHOW(__bch_cache)
 	if (attr == &sysfs_reserve_stats)
 		return show_reserve_stats(ca, buf);
 
-	sysfs_printf(copy_gc_key_pairs,		"%i",
-		     ((int) (bch_keybuf_size(&ca->moving_gc_keys))));
+	sysfs_printf(copy_gc_ios,		"%i",
+		     ca->max_moving_gc_in_flight);
+	sysfs_printf(copy_gc_keys,		"%i",
+		     ((int) (bch_scan_keylist_size(&ca->moving_gc_keys))));
 
 	return 0;
 }
@@ -1229,12 +1257,19 @@ STORE(__bch_cache)
 		atomic_set(&ca->io_errors, 0);
 	}
 
-	if (attr == &sysfs_copy_gc_key_pairs) {
+	if (attr == &sysfs_copy_gc_ios) {
 		int nr = (strtoi_h_or_return(buf));
-		nr = (clamp(nr,
-			    MIN_MOVING_GC_KEYS_KEYBUF_NR,
-			    MAX_MOVING_GC_KEYS_KEYBUF_NR));
-		bch_keybuf_resize((&ca->moving_gc_keys), ((unsigned) nr));
+		nr = (clamp(nr, 1, INT_MAX));
+		bch_semaphore_resize(&ca->moving_gc_in_flight,
+				     (nr
+				      - ((int) ca->max_moving_gc_in_flight)));
+		ca->max_moving_gc_in_flight = (unsigned) nr;
+	}
+
+	if (attr == &sysfs_copy_gc_keys) {
+		int nr = (strtoi_h_or_return(buf));
+		nr = (clamp(nr, 2, KEYLIST_MAX));
+		bch_scan_keylist_resize((&ca->moving_gc_keys), ((unsigned) nr));
 	}
 	return size;
 }
@@ -1273,7 +1308,8 @@ static struct attribute *bch_cache_files[] = {
 	&sysfs_state_rw,
 	sysfs_pd_controller_files(copy_gc),
 
-	&sysfs_copy_gc_key_pairs,
+	&sysfs_copy_gc_keys,
+	&sysfs_copy_gc_ios,
 
 	NULL
 };

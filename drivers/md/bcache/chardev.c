@@ -96,53 +96,99 @@ static int copy_array_from_user(const char __user *const __user *argv,
 	return ret;
 }
 
+static int ioctl_init(const char __user *const __user *argv,
+		char **path[], int *countret)
+{
+	int ret = 0, count = 0;
+
+	if (!try_module_get(THIS_MODULE))
+		return -EBUSY;
+
+	count = count_args(argv, MAX_ARG_STRINGS);
+	if (count <= 0)
+		return -EINVAL;
+
+	*path = kmalloc((sizeof(char *)) * (count + 1), GFP_KERNEL);
+	if (!*path) {
+		pr_err("Could not allocate memory to path");
+		return -ENOMEM;
+	}
+
+	ret = copy_array_from_user(argv, *path, count);
+	if (ret) {
+		pr_err("copy_array_from_user returned %d", ret);
+		return ret;
+	}
+
+	(*path)[count] = NULL;
+	*countret = count;
+
+	return 0;
+}
+
 static long bch_ioctl_register(const char __user *const __user *argv)
 {
-	int ret = 0;
-	int count, i;
+	int ret = 0, i = 0, count = 0;
 	const char *err;
 	char **path = NULL;
 	struct cache_set *c = NULL;
 
-	if (!try_module_get(THIS_MODULE))
-		return -EBUSY;
-	count = count_args(argv, MAX_ARG_STRINGS);
-	if (count <= 0) {
-		ret = -EINVAL;
-		goto err;
-	}
-
-	path = kmalloc((sizeof(char *)) * (count + 1), GFP_KERNEL);
-	if (!path) {
-		pr_err("Could not allocate memory to path");
-		ret = -ENOMEM;
-		goto err;
-	}
-
-	ret = copy_array_from_user(argv, path, count);
+	ret = ioctl_init(argv, &path, &count);
 	if (ret) {
-		pr_err("copy_array_from_user returned %d", ret);
+		pr_err("Unable to initialize register ioctl, "
+				"returned with %d", ret);
 		goto err;
 	}
-
-	path[count] = NULL;
 
 	err = register_bcache_devices(path, count, &c);
-	if (!err && c) {
-		mutex_lock(&bch_register_lock);
-		err = bch_run_cache_set(c);
-		mutex_unlock(&bch_register_lock);
-	}
-
 	if (err) {
 		pr_err("Could not register bcache devices: %s", err);
 		ret = -EINVAL;
+		goto err;
 	}
+
+	if (c) {
+		mutex_lock(&bch_register_lock);
+		err = bch_run_cache_set(c);
+		mutex_unlock(&bch_register_lock);
+		if (err) {
+			pr_err("Could not run cacheset: %s", err);
+			ret = -EINVAL;
+			goto err;
+		}
+	}
+
+err:
 	for (i = 0; i < count; i++)
 		kfree(path[i]);
-err:
 	kfree(path);
 	module_put(THIS_MODULE);
+	return ret;
+}
+
+static long bch_ioctl_unregister(const char __user *const __user *argv)
+{
+	int ret = 0, i = 0, count = 0;
+	char **path = NULL;
+	const char *err;
+
+	ret = ioctl_init(argv, &path, &count);
+	if (ret) {
+		pr_err("Unable to initialize unregister ioctl, "
+				"returned with %d", ret);
+		goto err;
+	}
+
+	err = unregister_bcache_devices(path, count);
+	if(err)
+		pr_err("Unable to unregister bcache_devices: %s", err);
+
+err:
+	for (i = 0; i < count; i++)
+		kfree(path[i]);
+	kfree(path);
+	module_put(THIS_MODULE);
+
 	return ret;
 }
 
@@ -155,6 +201,8 @@ static long bch_chardev_ioctl(struct file *filp, unsigned int cmd,
 	switch (cmd) {
 	case BCH_IOCTL_REGISTER:
 		return bch_ioctl_register(path);
+	case BCH_IOCTL_UNREGISTER:
+		return bch_ioctl_unregister(path);
 	case BCH_IOCTL_ADD_DISK:
 	case BCH_IOCTL_RM_DISK:
 	default:

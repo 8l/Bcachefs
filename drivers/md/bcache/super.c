@@ -1845,6 +1845,41 @@ err:
 	goto out;
 }
 
+const char *unregister_bcache_devices(char **path, int count)
+{
+	const char *err;
+	struct cache_set *c = NULL;
+	struct block_device *bdev = NULL;
+	struct bcache_superblock sb;
+	uuid_le uuid;
+	int i;
+
+	memset(&sb, 0, sizeof(sb));
+	memset(&uuid, 0, sizeof(uuid_le));
+
+	err = "module unloading";
+	if (!try_module_get(THIS_MODULE))
+		return err;
+
+	for (i = 0; i < count && path[i]; i++) {
+		bdev = lookup_bdev(strim(path[i]));
+
+		err = read_super(bdev, &sb);
+		if (err)
+			goto err;
+
+		uuid = sb.sb->set_uuid;
+		list_for_each_entry(c, &bch_cache_sets, list)
+			if (!memcmp(&c->sb.set_uuid, &uuid, sizeof(uuid)))
+				bch_cache_set_unregister(c);
+	}
+
+err:
+	free_super(&sb);
+	module_put(THIS_MODULE);
+	return err;
+}
+
 static int bcache_reboot(struct notifier_block *n, unsigned long code, void *x)
 {
 	if (code == SYS_DOWN ||

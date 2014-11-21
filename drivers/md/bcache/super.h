@@ -125,6 +125,7 @@ void bch_cache_set_unregister(struct cache_set *);
 void bch_cache_set_stop(struct cache_set *);
 
 const char *register_bcache_devices(char **, int, struct cache_set **);
+const char *unregister_bcache_devices(char **, int);
 const char *bch_run_cache_set(struct cache_set *);
 
 struct cache_set *bch_cache_set_open_by_uuid(uuid_le *);

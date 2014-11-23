@@ -204,6 +204,8 @@
 #include "buckets_types.h"
 #include "journal_types.h"
 #include "keylist_types.h"
+#include "keybuf_types.h"
+#include "move_types.h"
 #include "stats_types.h"
 #include "super_types.h"
 
@@ -290,12 +292,7 @@ struct cache {
 	struct task_struct	*moving_gc_read;
 	struct workqueue_struct	*moving_gc_write;
 
-#define DFLT_MOVING_GC_IN_FLIGHT	250
-	unsigned		max_moving_gc_in_flight;
-	struct semaphore	moving_gc_in_flight;
-
-#define DFLT_MOVING_GC_KEYS_MAX_SIZE	DFLT_SCAN_KEYLIST_MAX_SIZE
-	struct scan_keylist	moving_gc_keys;
+	struct moving_queue	moving_gc_queue;
 	struct bch_pd_controller moving_gc_pd;
 
 	/*
@@ -526,12 +523,7 @@ struct cache_set {
 	struct task_struct	*tiering_read;
 	struct workqueue_struct	*tiering_write;
 
-#define DFLT_TIERING_IN_FLIGHT	250
-	unsigned		max_tiering_in_flight;
-	struct semaphore	tiering_in_flight;
-
-#define DFLT_TIERING_KEYS_MAX_SIZE	DFLT_SCAN_KEYLIST_MAX_SIZE
-	struct scan_keylist	tiering_keys;
+	struct moving_queue	tiering_queue;
 	struct bch_pd_controller tiering_pd;
 
 	/* DEBUG JUNK */
@@ -711,8 +703,6 @@ do {									\
 
 int bch_extent_store_init_cache_set(struct cache_set *);
 void bch_extent_store_exit_cache_set(struct cache_set *);
-void bch_tiering_init_cache_set(struct cache_set *);
-int bch_tiering_thread_start(struct cache_set *c);
 
 void bch_debug_exit(void);
 int bch_debug_init(struct kobject *);

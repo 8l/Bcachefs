@@ -14,7 +14,7 @@ void bch_scan_keylist_reset(struct scan_keylist *kl);
 
 static inline unsigned bch_scan_keylist_size(struct scan_keylist *kl)
 {
-	return (kl->max_size);
+	return kl->max_size;
 }
 
 static inline uint64_t bch_scan_keylist_sectors(struct scan_keylist *kl)
@@ -40,6 +40,7 @@ struct bkey *bch_scan_keylist_next(struct scan_keylist *);
 
 struct bkey *bch_scan_keylist_next_rescan(struct cache_set *c,
 					  struct scan_keylist *kl,
+					  struct bkey *last_scanned,
 					  struct bkey *end,
 					  scan_keylist_pred_fn *pred);
 

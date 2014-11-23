@@ -58,10 +58,13 @@ static int dirent_cmp(const struct bch_dirent *d, const struct qstr *q)
 static bool bch_dirent_invalid(const struct btree_keys *bk,
 			       const struct bkey *k)
 {
-	if (bkey_bytes(k) < sizeof(struct bch_dirent))
+	if (KEY_SIZE(k))
 		return true;
 
-	if (KEY_SIZE(k))
+	if (KEY_DELETED(k))
+		return false;
+
+	if (bkey_bytes(k) < sizeof(struct bch_dirent))
 		return true;
 
 	return false;
@@ -217,8 +220,9 @@ static int bch_dirent_delete_fn(struct btree_op *b_op, struct btree *b,
 	 */
 
 	bch_keylist_init(&keys);
-	bkey_copy(keys.top, k);
+	*keys.top = *k;
 	SET_KEY_DELETED(keys.top, 1);
+	bch_set_val_u64s(keys.top, 0);
 	bch_keylist_push(&keys);
 
 	ret = bch_btree_insert_node(b, b_op, &keys, NULL, NULL);

@@ -157,9 +157,11 @@ rw_attribute(copy_gc_enabled);
 sysfs_queue_attribute(copy_gc);
 sysfs_pd_controller_attribute(copy_gc);
 rw_attribute(tiering_enabled);
-sysfs_queue_attribute(tiering);
 rw_attribute(tiering_percent);
 sysfs_pd_controller_attribute(tiering);
+
+sysfs_queue_attribute(tiering);
+rw_attribute(tiering_stripe_size);
 
 sysfs_pd_controller_attribute(foreground_write);
 
@@ -669,7 +671,6 @@ SHOW(__bch_cache_set)
 	sysfs_printf(cache_reserve_percent,	"%i", c->cache_reserve_percent);
 
 	sysfs_printf(tiering_enabled,		"%i", c->tiering_enabled);
-	sysfs_queue_show(tiering,		&c->tiering_queue);
 	sysfs_print(tiering_percent,		c->tiering_percent);
 	sysfs_pd_controller_show(tiering,	&c->tiering_pd);
 
@@ -881,7 +882,6 @@ STORE(__bch_cache_set)
 
 	sysfs_strtoul(tiering_percent,		c->tiering_percent);
 	sysfs_pd_controller_store(tiering,	&c->tiering_pd);
-	sysfs_queue_store(tiering,		&c->tiering_queue);
 
 	return size;
 }
@@ -982,7 +982,6 @@ static struct attribute *bch_cache_set_internal_files[] = {
 
 	&sysfs_tiering_enabled,
 	sysfs_pd_controller_files(tiering),
-	sysfs_queue_files(tiering),
 
 	NULL
 };
@@ -1120,6 +1119,8 @@ SHOW(__bch_cache)
 
 	sysfs_pd_controller_show(copy_gc, &ca->moving_gc_pd);
 	sysfs_queue_show(copy_gc, &ca->moving_gc_queue);
+	sysfs_queue_show(tiering, &ca->tiering_queue);
+	sysfs_print(tiering_stripe_size, ca->tiering_stripe_size);
 
 	return 0;
 }
@@ -1230,6 +1231,8 @@ STORE(__bch_cache)
 
 	sysfs_pd_controller_store(copy_gc, &ca->moving_gc_pd);
 	sysfs_queue_store(copy_gc, &ca->moving_gc_queue);
+	sysfs_queue_store(tiering, &ca->tiering_queue);
+	sysfs_strtoul(tiering_stripe_size, ca->tiering_stripe_size);
 
 	return size;
 }
@@ -1269,6 +1272,9 @@ static struct attribute *bch_cache_files[] = {
 
 	sysfs_pd_controller_files(copy_gc),
 	sysfs_queue_files(copy_gc),
+
+	sysfs_queue_files(tiering),
+	&sysfs_tiering_stripe_size,
 
 	NULL
 };

@@ -1488,10 +1488,11 @@ void bch_stop_new_data_writes(struct cache *ca)
 {
 	struct cache_set *c = ca->set;
 
-	bch_stop_write_points(ca, (&c->write_points[0]), WRITE_POINT_COUNT);
-	bch_stop_write_points(ca, (&c->tier_write_points[0]), CACHE_TIERS);
-	bch_stop_write_points(ca, (&ca->gc_buckets[0]), NUM_GC_GENS);
-	bch_stop_write_points(ca, (&c->migration_write_point), 1);
+	bch_stop_write_points(ca, &c->write_points[0], WRITE_POINT_COUNT);
+	bch_stop_write_points(ca, &c->promote_write_point, 1);
+	bch_stop_write_points(ca, &c->migration_write_point, 1);
+	bch_stop_write_points(ca, &ca->gc_buckets[0], NUM_GC_GENS);
+	bch_stop_write_points(ca, &ca->tiering_write_point, 1);
 	return;
 }
 

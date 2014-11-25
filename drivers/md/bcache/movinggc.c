@@ -80,7 +80,6 @@ found:
 
 		io->stats		= stats;
 		io->in_flight		= &ca->moving_gc_in_flight;
-		bkey_copy(&io->key, k);
 
 		/* This also copies k into both insert_key and replace_key */
 

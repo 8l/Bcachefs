@@ -66,7 +66,6 @@ static void read_tiering(struct cache_set *c)
 
 		io->stats = &stats;
 		io->in_flight = &c->tiering_in_flight;
-		bkey_copy(&io->key, k);
 
 		/* This also copies k into both insert_key and replace_key */
 

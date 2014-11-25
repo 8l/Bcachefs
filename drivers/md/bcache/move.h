@@ -13,9 +13,8 @@ struct moving_io {
 	struct bch_write_op	op;
 	/* Stats to update from submission context */
 	struct moving_io_stats	*stats;
-	bool			support_moving_error;
-	/* Must be last because it is variable size */
 	struct semaphore	*in_flight;
+	bool			support_moving_error;
 	BKEY_PADDED(key);
 	/* Must be last since it is variable size */
 	struct bbio		bio;

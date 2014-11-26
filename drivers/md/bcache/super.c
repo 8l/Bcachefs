@@ -922,6 +922,7 @@ const char *bch_run_cache_set(struct cache_set *c)
 	unsigned i, id;
 	int ret;
 
+	BUG_ON(test_bit(CACHE_SET_RUNNING, &c->flags));
 	lockdep_assert_held(&bch_register_lock);
 
 	closure_init_stack(&cl);

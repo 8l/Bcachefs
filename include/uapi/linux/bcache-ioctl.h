@@ -8,8 +8,8 @@ extern "C" {
 #endif
 
 #define BCH_IOCTL_REGISTER     _IOW('r', 1, char **)
-#define BCH_IOCTL_ADD_DISK     _IOW('a', 2, char *)
-#define BCH_IOCTL_RM_DISK      _IOW('r', 3, char *)
+#define BCH_IOCTL_ADD_DISKS    _IOW('a', 2, struct bch_ioctl_add_disks)
+#define BCH_IOCTL_RM_DISK      _IOW('r', 3, struct bch_ioctl_rm_disk)
 #define BCH_IOCTL_UNREGISTER   _IOW('r', 4, char *)
 
 /* Ioctl interface */
@@ -117,6 +117,16 @@ struct bch_ioctl_versioned_discard {
 	__u64			offset;		/* sectors */
 	__u64			sectors;
 	__u64			version;
+};
+
+struct bch_ioctl_add_disks {
+	char *const		*devs;
+	const char		*uuid;
+};
+
+struct bch_ioctl_rm_disk {
+	const char		*dev;
+	int			force;
 };
 
 #ifdef __cplusplus

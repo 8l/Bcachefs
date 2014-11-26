@@ -2221,7 +2221,10 @@ const char *unregister_bcache_devices(char **path, int count)
 		return err;
 
 	for (i = 0; i < count && path[i]; i++) {
+		err = "can't find bdev";
 		bdev = lookup_bdev(strim(path[i]));
+		if(!bdev)
+			goto err;
 
 		err = read_super(bdev, &sb);
 		if (err)
@@ -2232,6 +2235,49 @@ const char *unregister_bcache_devices(char **path, int count)
 			if (!memcmp(&c->sb.set_uuid, &uuid, sizeof(uuid)))
 				bch_cache_set_unregister(c);
 	}
+
+err:
+	free_super(&sb);
+	module_put(THIS_MODULE);
+	return err;
+}
+
+const char *remove_bcache_device(char *path, bool force)
+{
+	const char *err;
+	struct cache_set *c;
+	struct cache *ca = NULL;
+	struct block_device *bdev = NULL;
+	struct bcache_superblock sb;
+	uuid_le uuid;
+	int i;
+
+	memset(&sb, 0, sizeof(sb));
+	memset(&uuid, 0, sizeof(uuid_le));
+
+	err = "module unloading";
+	if (!try_module_get(THIS_MODULE))
+		return err;
+
+	bdev = lookup_bdev(strim(path));
+
+	err = read_super(bdev, &sb);
+	if (err)
+		goto err;
+
+	rcu_read_lock();
+	list_for_each_entry(c, &bch_cache_sets, list)
+		for_each_cache_rcu(ca, c, i)
+			if (ca->bdev == bdev) {
+				rcu_read_unlock();
+				if (!bch_cache_remove(ca, force))
+					err = "Unable to remove cache";
+				goto err;
+			}
+
+	rcu_read_unlock();
+
+	err = "Could not find cache for this path";
 
 err:
 	free_super(&sb);

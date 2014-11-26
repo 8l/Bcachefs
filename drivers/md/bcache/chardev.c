@@ -101,9 +101,6 @@ static int ioctl_init(const char __user *const __user *argv,
 {
 	int ret = 0, count = 0;
 
-	if (!try_module_get(THIS_MODULE))
-		return -EBUSY;
-
 	count = count_args(argv, MAX_ARG_STRINGS);
 	if (count <= 0)
 		return -EINVAL;
@@ -132,6 +129,9 @@ static long bch_ioctl_register(const char __user *const __user *argv)
 	const char *err;
 	char **path = NULL;
 	struct cache_set *c = NULL;
+
+	if (!try_module_get(THIS_MODULE))
+		return -EBUSY;
 
 	ret = ioctl_init(argv, &path, &count);
 	if (ret) {
@@ -172,6 +172,9 @@ static long bch_ioctl_unregister(const char __user *const __user *argv)
 	char **path = NULL;
 	const char *err;
 
+	if (!try_module_get(THIS_MODULE))
+		return -EBUSY;
+
 	ret = ioctl_init(argv, &path, &count);
 	if (ret) {
 		pr_err("Unable to initialize unregister ioctl, "
@@ -180,8 +183,10 @@ static long bch_ioctl_unregister(const char __user *const __user *argv)
 	}
 
 	err = unregister_bcache_devices(path, count);
-	if(err)
+	if(err) {
+		ret = -EINVAL;
 		pr_err("Unable to unregister bcache_devices: %s", err);
+	}
 
 err:
 	for (i = 0; i < count; i++)
@@ -192,19 +197,132 @@ err:
 	return ret;
 }
 
+static long bch_ioctl_add_devs(struct bch_ioctl_add_disks *ia)
+{
+	int ret = 0, i = 0, count = 0, len = 0;
+	char **path = NULL;
+	uuid_le uuid;
+	struct cache_set *c;
+	char *kstr = NULL;
+
+	if (!try_module_get(THIS_MODULE))
+		return -EBUSY;
+
+	ret = ioctl_init((const char __user *const __user *)ia->devs,
+			&path, &count);
+	if (ret) {
+		pr_err("Unable to initialize add_devs ioctl, "
+				"returned with %d", ret);
+		goto err;
+	}
+
+	len = strnlen_user(ia->uuid, MAX_PATH);
+
+	kstr = kmalloc(len, GFP_KERNEL);
+	if (!kstr) {
+		ret = -ENOMEM;
+		goto err;
+	}
+
+	if (copy_from_user(kstr, ia->uuid, len)) {
+		ret = -EFAULT;
+		goto err;
+	}
+
+	if (uuid_parse(kstr, &uuid)) {
+		ret = -EINVAL;
+		pr_err("unable to parse uuid");
+		goto err;
+	}
+
+	c = bch_cache_set_open_by_uuid(&uuid);
+	if (!c) {
+		ret = -EINVAL;
+		pr_err("Unable to open cacheset");
+		goto err;
+	}
+
+	for (i = 0; i < count; i++) {
+		mutex_lock(&bch_register_lock);
+		ret = bch_cache_add(c, path[i]);
+		mutex_unlock(&bch_register_lock);
+		if(ret)
+			goto err;
+	}
+
+err:
+	for (i = 0; i < count; i++)
+		kfree(path[i]);
+	kfree(path);
+	kfree(kstr);
+	module_put(THIS_MODULE);
+
+	return ret;
+}
+
+static long bch_ioctl_rm_dev(struct bch_ioctl_rm_disk *ir)
+{
+	int ret = 0, len = 0;
+	char *kstr = NULL;
+	const char *err;
+
+	if (!try_module_get(THIS_MODULE))
+		return -EBUSY;
+
+	len = strnlen_user(ir->dev, MAX_PATH);
+
+	kstr = kmalloc(len, GFP_KERNEL);
+	if (!kstr) {
+		ret = -ENOMEM;
+		goto err;
+	}
+
+	if (copy_from_user(kstr, ir->dev, len)) {
+		ret = -EFAULT;
+		goto err;
+	}
+
+	err = remove_bcache_device(kstr, ir->force);
+	if (err) {
+		ret = -EINVAL;
+		pr_err("Unable to remove bcache device: %s", err);
+	}
+
+err:
+	kfree(kstr);
+	module_put(THIS_MODULE);
+
+	return ret;
+}
+
 static long bch_chardev_ioctl(struct file *filp, unsigned int cmd,
 			 unsigned long arg)
 {
-	const char __user *const __user *path =
-				(void __user *)arg;
+	const char __user *const __user *path;
+	struct bch_ioctl_add_disks ia;
+	struct bch_ioctl_rm_disk ir;
+
+
 
 	switch (cmd) {
 	case BCH_IOCTL_REGISTER:
+		path = (void __user *)arg;
 		return bch_ioctl_register(path);
+
 	case BCH_IOCTL_UNREGISTER:
+		path = (void __user *)arg;
 		return bch_ioctl_unregister(path);
-	case BCH_IOCTL_ADD_DISK:
+
+	case BCH_IOCTL_ADD_DISKS:
+		if (copy_from_user(&ia, (struct bch_ioctl_add_disks *)arg,
+					sizeof(struct bch_ioctl_add_disks)))
+			return -EFAULT;
+		return bch_ioctl_add_devs(&ia);
 	case BCH_IOCTL_RM_DISK:
+		if (copy_from_user(&ir, (struct bch_ioctl_rm_disk *)arg,
+					sizeof(struct bch_ioctl_rm_disk)))
+			return -EFAULT;
+		return bch_ioctl_rm_dev(&ir);
 	default:
 		return -ENOTTY;
 	}

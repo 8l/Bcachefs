@@ -74,8 +74,8 @@
 
 static int __bch_btree_insert_node(struct btree *, struct btree_op *,
 				   struct keylist *, struct bkey *,
-				   struct closure *, struct keylist *,
-				   struct closure *);
+				   struct closure *, enum alloc_reserve,
+				   struct keylist *, struct closure *);
 
 #define MAX_NEED_GC		64
 #define MAX_SAVE_PRIO		72
@@ -1423,14 +1423,13 @@ static void bch_btree_set_root(struct btree *b)
 	}
 }
 
-static struct btree *bch_btree_node_alloc(struct cache_set *c,
-					  struct btree_op *op,
-					  int level, enum btree_id id,
-					  struct btree *parent)
+static struct btree *bch_btree_node_alloc(struct cache_set *c, int level,
+					  enum btree_id id,
+					  struct btree *parent,
+					  enum alloc_reserve reserve)
 {
 	BKEY_PADDED(key) k;
 	struct btree *b;
-	enum alloc_reserve reserve = (op ? op->reserve : id);
 
 	if (bch_bucket_alloc_set(c, reserve, &k.key,
 				 CACHE_SET_META_REPLICAS_WANT(&c->sb),
@@ -1455,11 +1454,12 @@ static struct btree *bch_btree_node_alloc(struct cache_set *c,
 }
 
 static struct btree *btree_node_alloc_replacement(struct btree *b,
-						  struct btree_op *op)
+						  enum alloc_reserve reserve)
 {
 	struct btree *n;
 
-	n = bch_btree_node_alloc(b->c, op, b->level, b->btree_id, b->parent);
+	n = bch_btree_node_alloc(b->c, b->level, b->btree_id,
+				 b->parent, reserve);
 	bch_btree_sort_into(&n->keys, &b->keys,
 			    b->keys.ops->key_normalize,
 			    &b->c->sort);
@@ -1513,10 +1513,10 @@ static int __btree_check_reserve(struct cache_set *c,
 }
 
 static int btree_check_reserve(struct btree *b, struct btree_op *op,
+			       enum alloc_reserve reserve,
 			       unsigned extra_nodes)
 {
 	unsigned depth = btree_node_root(b)->level - b->level;
-	enum alloc_reserve reserve = op ? op->reserve : b->btree_id;
 
 	return __btree_check_reserve(b->c, reserve,
 			btree_reserve_required_nodes(depth) + extra_nodes,
@@ -1534,7 +1534,7 @@ int bch_btree_root_alloc(struct cache_set *c, enum btree_id id,
 	while (__btree_check_reserve(c, id, 1, &op.cl))
 		closure_sync(&op.cl);
 
-	b = bch_btree_node_alloc(c, NULL, 0, id, NULL);
+	b = bch_btree_node_alloc(c, 0, id, NULL, id);
 
 	bkey_copy_key(&b->key, &MAX_KEY);
 	six_unlock_write(&b->lock);
@@ -1712,7 +1712,7 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 			 block_bytes(b->c)) > blocks)
 		return 0;
 
-	if (btree_check_reserve(b, NULL, nodes) ||
+	if (btree_check_reserve(b, NULL, op->id, nodes) ||
 	    bch_keylist_realloc(&keylist,
 			(BKEY_U64s + BKEY_EXTENT_MAX_U64s) * nodes)) {
 		trace_bcache_btree_gc_coalesce_fail(b->c);
@@ -1722,7 +1722,7 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 	trace_bcache_btree_gc_coalesce(b, nodes);
 
 	for (i = 0; i < nodes; i++) {
-		new_nodes[i] = btree_node_alloc_replacement(r[i].b, NULL);
+		new_nodes[i] = btree_node_alloc_replacement(r[i].b, op->id);
 		BUG_ON(!new_nodes[i]);
 	}
 
@@ -1808,7 +1808,7 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 		bch_keylist_add_in_order(&keylist, &new_nodes[i]->key);
 
 	/* Insert the newly coalesced nodes */
-	bch_btree_insert_node(b, op, &keylist, NULL, NULL);
+	bch_btree_insert_node(b, op, &keylist, NULL, NULL, op->id);
 	BUG_ON(!bch_keylist_empty(&keylist));
 
 	/* Free the old nodes and update our sliding window */
@@ -1838,19 +1838,20 @@ static int btree_gc_rewrite_node(struct btree *b, struct btree_op *op,
 {
 	struct btree *n;
 
-	if (btree_check_reserve(b, NULL, 1)) {
+	if (btree_check_reserve(b, NULL, op->id, 1)) {
 		trace_bcache_btree_gc_rewrite_node_fail(b);
 		return 0;
 	}
 
-	n = btree_node_alloc_replacement(replace, NULL);
+	n = btree_node_alloc_replacement(replace, op->id);
 	six_unlock_write(&n->lock);
 
 	trace_bcache_btree_gc_rewrite_node(b);
 
 	bch_btree_node_write_sync(n);
 
-	bch_btree_insert_node(b, op, &keylist_single(&n->key), NULL, NULL);
+	bch_btree_insert_node(b, op, &keylist_single(&n->key),
+			      NULL, NULL, op->id);
 
 	btree_node_free(replace);
 	six_unlock_intent(&n->lock);
@@ -1968,8 +1969,8 @@ static int bch_btree_gc_root(struct btree *b, struct btree_op *op,
 
 	should_rewrite = btree_gc_mark_node(b, gc);
 	if (should_rewrite &&
-	    btree_check_reserve(b, NULL, 1)) {
-		n = btree_node_alloc_replacement(b, NULL);
+	    btree_check_reserve(b, NULL, op->id, 1)) {
+		n = btree_node_alloc_replacement(b, op->id);
 
 		six_unlock_write(&n->lock);
 		bch_btree_node_write_sync(n);
@@ -2482,7 +2483,8 @@ static int btree_split(struct btree *b, struct btree_op *op,
 		       struct bkey *replace_key,
 		       struct closure *flush_cl,
 		       struct keylist *parent_keys,
-		       struct closure *stack_cl)
+		       struct closure *stack_cl,
+		       enum alloc_reserve reserve)
 {
 	struct btree *n1, *n2 = NULL, *n3 = NULL;
 	struct bset *set1, *set2;
@@ -2494,7 +2496,7 @@ static int btree_split(struct btree *b, struct btree_op *op,
 	BUG_ON(!btree_node_intent_locked(op, btree_node_root(b)->level));
 
 	/* After this check we cannot return -EAGAIN anymore */
-	ret = btree_check_reserve(b, op, 0);
+	ret = btree_check_reserve(b, op, reserve, 0);
 	if (ret) {
 		/* If splitting an interior node, we've already split a leaf,
 		 * so we should have checked for sufficient reserve. We can't
@@ -2506,7 +2508,7 @@ static int btree_split(struct btree *b, struct btree_op *op,
 			WARN(1, "insufficient reserve for split\n");
 	}
 
-	n1 = btree_node_alloc_replacement(b, op);
+	n1 = btree_node_alloc_replacement(b, reserve);
 	set1 = btree_bset_first(n1);
 
 	/*
@@ -2563,13 +2565,13 @@ static int btree_split(struct btree *b, struct btree_op *op,
 	if (set_blocks(set1, block_bytes(n1->c)) > btree_blocks(b->c) * 3 / 4) {
 		trace_bcache_btree_node_split(b, set1->keys);
 
-		n2 = bch_btree_node_alloc(b->c, op, b->level,
-					  b->btree_id, b->parent);
+		n2 = bch_btree_node_alloc(b->c, b->level, b->btree_id,
+					  b->parent, reserve);
 		set2 = btree_bset_first(n2);
 
 		if (!b->parent) {
-			n3 = bch_btree_node_alloc(b->c, op, b->level + 1,
-						  b->btree_id, NULL);
+			n3 = bch_btree_node_alloc(b->c, b->level + 1,
+						  b->btree_id, NULL, reserve);
 
 			bkey_copy_key(&n3->key, &MAX_KEY);
 			six_unlock_write(&n3->lock);
@@ -2645,7 +2647,7 @@ static int btree_split(struct btree *b, struct btree_op *op,
 		closure_sync(stack_cl);
 
 		__bch_btree_insert_node(b->parent, op, parent_keys, NULL,
-					NULL, parent_keys, stack_cl);
+					NULL, reserve, parent_keys, stack_cl);
 		BUG_ON(!bch_keylist_empty(parent_keys));
 
 		btree_node_free(b);
@@ -2675,6 +2677,7 @@ static int __bch_btree_insert_node(struct btree *b, struct btree_op *op,
 				   struct keylist *insert_keys,
 				   struct bkey *replace_key,
 				   struct closure *flush_cl,
+				   enum alloc_reserve reserve,
 				   struct keylist *split_keys,
 				   struct closure *stack_cl)
 {
@@ -2700,8 +2703,8 @@ static int __bch_btree_insert_node(struct btree *b, struct btree_op *op,
 				return -EINTR;
 			}
 
-		return btree_split(b, op, insert_keys, replace_key,
-				   flush_cl, split_keys, stack_cl);
+		return btree_split(b, op, insert_keys, replace_key, flush_cl,
+				   split_keys, stack_cl, reserve);
 	}
 
 	return 0;
@@ -2742,7 +2745,8 @@ static int __bch_btree_insert_node(struct btree *b, struct btree_op *op,
 int bch_btree_insert_node(struct btree *b, struct btree_op *op,
 			  struct keylist *insert_keys,
 			  struct bkey *replace_key,
-			  struct closure *flush_cl)
+			  struct closure *flush_cl,
+			  enum alloc_reserve reserve)
 {
 	struct closure stack_cl;
 	struct keylist split_keys;
@@ -2750,8 +2754,12 @@ int bch_btree_insert_node(struct btree *b, struct btree_op *op,
 	closure_init_stack(&stack_cl);
 	bch_keylist_init(&split_keys);
 
+	if (!reserve)
+		reserve = op->id;
+
 	return __bch_btree_insert_node(b, op, insert_keys, replace_key,
-				       flush_cl, &split_keys, &stack_cl);
+				       flush_cl, reserve,
+				       &split_keys, &stack_cl);
 }
 
 /**
@@ -2780,7 +2788,7 @@ int bch_btree_insert_check_key(struct btree *b, struct btree_op *op,
 	bkey_copy(&tmp.key, check_key);
 
 	return bch_btree_insert_node(b, op, &keylist_single(&tmp.key),
-				     NULL, NULL);
+				     NULL, NULL, op->id);
 }
 
 struct btree_insert_op {
@@ -2795,7 +2803,7 @@ static int btree_insert_fn(struct btree_op *b_op, struct btree *b)
 					struct btree_insert_op, op);
 
 	int ret = bch_btree_insert_node(b, &op->op, op->keys,
-					op->replace_key, NULL);
+					op->replace_key, NULL, b_op->id);
 	return bch_keylist_empty(op->keys) ? MAP_DONE : ret;
 }
 

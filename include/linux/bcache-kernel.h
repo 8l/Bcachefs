@@ -184,9 +184,6 @@ struct btree_op {
 
 	/* State used by btree insertion is also stored here for convenience */
 	unsigned		insert_collision:1;
-
-	/* For allocating new nodes */
-	u8			reserve;
 };
 
 struct bch_write_op {

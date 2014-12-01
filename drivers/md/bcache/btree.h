@@ -210,11 +210,9 @@ static inline unsigned btree_blocks(struct cache_set *c)
  * Does not initialize @op->cl -- you must do that yourself.
  */
 static inline void __bch_btree_op_init(struct btree_op *op, enum btree_id id,
-					enum alloc_reserve reserve,
 					int write_lock_level)
 {
 	op->id = id;
-	op->reserve = reserve;
 	op->locks_want = write_lock_level;
 	op->iterator_invalidated = 0;
 	op->insert_collision = 0;
@@ -227,7 +225,7 @@ static inline void bch_btree_op_init(struct btree_op *op, enum btree_id id,
 				     int write_lock_level)
 {
 	closure_init_stack(&op->cl);
-	__bch_btree_op_init(op, id, id, write_lock_level);
+	__bch_btree_op_init(op, id, write_lock_level);
 }
 
 #define btree_node_root(b)	((b)->c->btree_roots[(b)->btree_id])
@@ -245,7 +243,7 @@ int bch_btree_insert_check_key(struct btree *, struct btree_op *,
 int bch_btree_insert(struct cache_set *, enum btree_id, struct keylist *,
 		     struct bkey *);
 int bch_btree_insert_node(struct btree *, struct btree_op *, struct keylist *,
-			  struct bkey *, struct closure *);
+			  struct bkey *, struct closure *, enum alloc_reserve);
 
 int bch_gc_thread_start(struct cache_set *);
 int bch_initial_gc(struct cache_set *, struct list_head *);

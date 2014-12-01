@@ -694,7 +694,7 @@ static int bch_discard_fn(struct btree_op *b_op, struct btree *b, struct bkey *k
 		SET_KEY_VERSION(&erase_key, op->version);
 	}
 
-	ret = bch_btree_insert_node(b, b_op, &keylist_single(&erase_key), NULL, NULL);
+	ret = bch_btree_insert_node(b, b_op, &keylist_single(&erase_key), NULL, NULL, 0);
 
 	return ret ?: MAP_CONTINUE;
 }

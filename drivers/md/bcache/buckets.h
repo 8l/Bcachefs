@@ -54,11 +54,11 @@ static inline uint8_t gen_after(uint8_t a, uint8_t b)
 	return r > 128U ? 0 : r;
 }
 
-static inline uint8_t ptr_stale(const struct cache_set *c,
-				const struct cache *ca,
-				const struct bkey *k, unsigned ptr)
+static inline bool ptr_stale(const struct cache_set *c,
+			     const struct cache *ca,
+			     const struct bkey *k, unsigned ptr)
 {
-	return gen_after(PTR_BUCKET_GEN(c, ca, k, ptr), PTR_GEN(k, ptr));
+	return PTR_BUCKET_GEN(c, ca, k, ptr) != PTR_GEN(k, ptr);
 }
 
 /* bucket heaps */
@@ -229,9 +229,9 @@ static inline bool is_available_bucket(struct bucket_mark mark)
 void bch_mark_free_bucket(struct cache *, struct bucket *);
 void bch_mark_alloc_bucket(struct cache *, struct bucket *);
 void bch_mark_metadata_bucket(struct cache *, struct bucket *);
-uint8_t bch_mark_data_bucket(struct cache_set *, struct cache *,
-			     struct bkey *, unsigned, int,
-			     bool, bool);
+bool bch_mark_data_bucket(struct cache_set *, struct cache *,
+			  struct bkey *, unsigned, int,
+			  bool, bool);
 void bch_unmark_open_bucket(struct cache *, struct bucket *);
 
 #endif /* _BUCKETS_H */

@@ -162,14 +162,13 @@ void bch_mark_metadata_bucket(struct cache *ca, struct bucket *g)
 		}							\
 	} while(0)
 
-uint8_t bch_mark_data_bucket(struct cache_set *c, struct cache *ca,
-			     struct bkey *k, unsigned i, int sectors,
-			     bool dirty, bool gc)
+bool bch_mark_data_bucket(struct cache_set *c, struct cache *ca,
+			  struct bkey *k, unsigned i, int sectors,
+			  bool dirty, bool gc)
 {
 	struct bucket_mark old, new;
 	unsigned long bucket_nr = PTR_BUCKET_NR(c, k, i);
 	unsigned gen = PTR_GEN(k, i);
-	uint8_t stale;
 	unsigned saturated;
 
 	bucket_cmpxchg(&ca->buckets[bucket_nr], old, new, ({
@@ -187,9 +186,8 @@ uint8_t bch_mark_data_bucket(struct cache_set *c, struct cache *ca,
 		 * the allocator invalidating a bucket after we've already
 		 * checked the gen
 		 */
-		stale = gen_after(ca->bucket_gens[bucket_nr], gen);
-		if (stale)
-			return stale;
+		if (ca->bucket_gens[bucket_nr] != gen)
+			return 1;
 
 		/*
 		 * Check this after reading bucket mark to guard against

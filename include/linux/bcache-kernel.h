@@ -159,8 +159,17 @@ void bch_keylist_add_in_order(struct keylist *, struct bkey *);
 int bch_keylist_realloc(struct keylist *, unsigned need);
 int bch_keylist_realloc_max(struct keylist *, unsigned need, unsigned max);
 
+#define BTREE_MAX_DEPTH		4
+
 struct btree_op {
 	struct closure		cl;
+
+	/*
+	 * Sequence number of the corresponding btree node's six lock. Used so
+	 * that we can unlock, and then relock later iff the btree node hasn't
+	 * been modified in the meantime.
+	 */
+	u32			lock_seq[BTREE_MAX_DEPTH];
 
 	/* Bitmasks for intent/read locks held per level */
 	u8			locks_intent;

@@ -163,7 +163,7 @@ static int __bch_dirent_create(struct cache_set *c, u64 dir_inum,
 	BUG_ON(dirent_name_bytes(dirent) != name->len);
 	BUG_ON(dirent_cmp(dirent, name));
 
-	__bch_keylist_push(&op.keys);
+	bch_keylist_push(&op.keys);
 
 	ret = bch_btree_map_keys(&op.op, c, k, bch_dirent_create_fn, MAP_HOLES);
 

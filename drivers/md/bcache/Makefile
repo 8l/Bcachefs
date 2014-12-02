@@ -21,6 +21,7 @@ bcache-y		:= alloc.o\
 	move.o\
 	movinggc.o\
 	request.o\
+	six.o\
 	six_trace.o\
 	stats.o\
 	super.o\

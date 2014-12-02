@@ -47,6 +47,11 @@ DEFINE_EVENT(six, six_trylock,
 	TP_ARGS(lock, type)
 );
 
+DEFINE_EVENT(six, six_relock,
+	TP_PROTO(void *lock, const char *type),
+	TP_ARGS(lock, type)
+);
+
 DEFINE_EVENT(six, six_lock,
 	TP_PROTO(void *lock, const char *type),
 	TP_ARGS(lock, type)

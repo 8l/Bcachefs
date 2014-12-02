@@ -12,6 +12,7 @@
 #include <trace/events/six.h>
 #else
 #define trace_six_trylock(lock, type)
+#define trace_six_relock(lock, type)
 #define trace_six_lock(lock, type)
 #define trace_six_unlock(lock, type)
 #define trace_six_trylock_convert(lock, from, to)
@@ -35,18 +36,27 @@
 
 union six_lock_state {
 	struct {
-		atomic_long_t	counter;
+		atomic64_t	counter;
 	};
 
 	struct {
-		unsigned long	v;
+		u64		v;
 	};
 
 	struct {
-		unsigned long	waiters:(BITS_PER_LONG - 2) / 2;
-		unsigned long	read_lock:(BITS_PER_LONG - 2) / 2;
-		unsigned long	intent_lock:1;
-		unsigned long	write_lock:1;
+		/*
+		 * seq works much like in seqlocks: it's incremented every time
+		 * we lock and unlock for write.
+		 *
+		 * If it's odd write lock is held, even unlocked.
+		 *
+		 * Thus readers can unlock, and then lock again later iff it
+		 * hasn't been modified in the meantime.
+		 */
+		u32		seq;
+		u16		read_lock;
+		unsigned	intent_lock:1;
+		unsigned	waiters:15;
 	};
 };
 
@@ -61,7 +71,7 @@ struct six_lock {
 static inline void __six_lock_init(struct six_lock *lock, const char *name,
 				   struct lock_class_key *key)
 {
-	atomic_long_set(&lock->state.counter, 0);
+	atomic64_set(&lock->state.counter, 0);
 	init_waitqueue_head(&lock->wait);
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	debug_check_no_locks_freed((void *) lock, sizeof(*lock));
@@ -76,6 +86,15 @@ do {									\
 	__six_lock_init((lock), #lock, &__key);				\
 } while (0)
 
+bool __six_trylock_convert(struct six_lock *, unsigned long,
+			   unsigned long, unsigned long);
+void __six_lock_convert(struct six_lock *, unsigned long,
+			unsigned long, unsigned long);
+bool __six_trylock(struct six_lock *, unsigned long, unsigned long);
+bool __six_relock(struct six_lock *, unsigned long, unsigned long, unsigned);
+void __six_lock(struct six_lock *, unsigned long, unsigned long);
+void __six_unlock(struct six_lock *, unsigned long);
+
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 
 #define six_acquire(l)	lock_acquire(l, 0, 0, 0, 0, NULL, _THIS_IP_)
@@ -88,160 +107,78 @@ do {									\
 
 #endif
 
-#define __SIX_VAL(type)	(((union six_lock_state) { .type##_lock = 1 }).v)
-#define __SIX_WAIT_VAL	(((union six_lock_state) { .waiters = 1 }).v)
+#define __SIX_VAL(field, _v)	(((union six_lock_state) { .field = _v }).v)
 
-#define six_trylock_convert(lock, from, to)				\
-({									\
-	union six_lock_state _old = (lock)->state, _new;		\
-	unsigned long v;						\
-	bool _ret = false;						\
-									\
-	trace_six_trylock_convert(lock, #from, #to);			\
-									\
-	while (1) {							\
-		EBUG_ON(!_old.from##_lock);				\
-									\
-		_new = _old;						\
-		_new.v -= __SIX_VAL(from);				\
-									\
-		if (!__six_trylock_##to(&_new))				\
-			break;						\
-									\
-		v = cmpxchg((&(lock)->state.v), _old.v, _new.v);	\
-		if (v == _old.v) {					\
-			_ret = true;					\
-			if (!list_empty_careful(&(lock)->wait.task_list))\
-				wake_up(&(lock)->wait);			\
-			break;						\
-		}							\
-									\
-		_old.v = v;						\
-	}								\
-									\
-	_ret;								\
-})
+#define __SIX_VAL_WAIT			__SIX_VAL(waiters, 1)
 
-#define six_lock_convert(lock, from, to)				\
-do {									\
-	if (!six_trylock_convert((lock), from, to)) {			\
-		DEFINE_WAIT(_wait);					\
-									\
-		prepare_to_wait(&(lock)->wait, &_wait,			\
-				TASK_UNINTERRUPTIBLE);			\
-		atomic_long_add(__SIX_WAIT_VAL, &(lock)->state.counter);\
-									\
-		while (!six_trylock_convert((lock), from, to)) {	\
-			schedule();					\
-			prepare_to_wait(&(lock)->wait, &_wait,		\
-					TASK_UNINTERRUPTIBLE);		\
-		}							\
-									\
-		atomic_long_sub(__SIX_WAIT_VAL, &(lock)->state.counter);\
-		finish_wait(&(lock)->wait, &_wait);			\
-	}								\
-									\
-	trace_six_lock_convert(lock, #from, #to);			\
-} while (0)
+#define __SIX_LOCK_HELD_read		__SIX_VAL(read_lock, ~0)
+#define __SIX_LOCK_HELD_intent		__SIX_VAL(intent_lock, 1)
+#define __SIX_LOCK_HELD_write		__SIX_VAL(seq, 1)
+
+#define __SIX_LOCK_FAIL_read		__SIX_LOCK_HELD_write
+#define __SIX_LOCK_VAL_read		__SIX_VAL(read_lock, 1)
+#define __SIX_UNLOCK_VAL_read		(-__SIX_VAL(read_lock, 1))
+
+#define __SIX_LOCK_FAIL_intent		__SIX_LOCK_HELD_intent
+#define __SIX_LOCK_VAL_intent		__SIX_VAL(intent_lock, 1)
+#define __SIX_UNLOCK_VAL_intent		(-__SIX_VAL(intent_lock, 1))
+
+#define __SIX_LOCK_FAIL_write		__SIX_LOCK_HELD_read
+#define __SIX_LOCK_VAL_write		__SIX_VAL(seq, 1)
+#define __SIX_UNLOCK_VAL_write		__SIX_VAL(seq, 1)
 
 #define __SIX_LOCK(type)						\
 	static inline bool six_trylock_##type(struct six_lock *lock)	\
 	{								\
-		union six_lock_state old = lock->state;			\
-									\
-		while (1) {						\
-			union six_lock_state new = old;			\
-			unsigned long v;				\
-									\
-			if (!__six_trylock_##type(&new))		\
-				return false;				\
-									\
-			v = cmpxchg((&lock->state.v), old.v, new.v);	\
-			if (v == old.v) {				\
-				six_acquire(&(lock)->dep_map);		\
-				return true;				\
-			}						\
-									\
-			old.v = v;					\
-		}							\
+		trace_six_trylock(lock, #type);				\
+		return __six_trylock(lock,				\
+				     __SIX_LOCK_VAL_##type,		\
+				     __SIX_LOCK_FAIL_##type);		\
 	}								\
 									\
-	static inline void six_lock_slowpath_##type(struct six_lock *lock)\
+	static inline bool six_relock_##type(struct six_lock *lock, u32 seq)\
 	{								\
-		DEFINE_WAIT(wait);					\
-									\
-		prepare_to_wait(&lock->wait, &wait, TASK_UNINTERRUPTIBLE);\
-		atomic_long_add(__SIX_WAIT_VAL, &lock->state.counter);	\
-									\
-		while (!six_trylock_##type(lock)) {			\
-			schedule();					\
-			prepare_to_wait(&lock->wait, &wait,		\
-					TASK_UNINTERRUPTIBLE);		\
-		}							\
-									\
-		atomic_long_sub(__SIX_WAIT_VAL, &lock->state.counter);	\
-		finish_wait(&lock->wait, &wait);			\
+		trace_six_relock(lock, #type);				\
+		return __six_relock(lock,				\
+				    __SIX_LOCK_VAL_##type,		\
+				    __SIX_LOCK_FAIL_##type,		\
+				    seq);				\
 	}								\
 									\
 	static inline void six_lock_##type(struct six_lock *lock)	\
 	{								\
-		trace_six_trylock(lock, #type);				\
-									\
-		if (!six_trylock_##type(lock))				\
-			six_lock_slowpath_##type(lock);			\
-									\
+		__six_lock(lock,					\
+			   __SIX_LOCK_VAL_##type,			\
+			   __SIX_LOCK_FAIL_##type);			\
 		trace_six_lock(lock, #type);				\
 	}								\
 									\
 	static inline void six_unlock_##type(struct six_lock *lock)	\
 	{								\
-		union six_lock_state state;				\
-									\
 		trace_six_unlock(lock, #type);				\
-									\
-		EBUG_ON(!lock->state.type##_lock);			\
-		six_release(&(lock)->dep_map);				\
-									\
-		smp_wmb();						\
-		state.v = atomic_long_sub_return(__SIX_VAL(type),	\
-						 &lock->state.counter);	\
-		if (state.waiters)					\
-			wake_up(&(lock)->wait);				\
+		__six_unlock(lock, __SIX_UNLOCK_VAL_##type);		\
 	}
 
-static inline bool __six_trylock_read(union six_lock_state *lock)
-{
-	if (lock->write_lock)
-		return false;
-
-	lock->read_lock++;
-	return true;
-}
-
 __SIX_LOCK(read)
-
-static inline bool __six_trylock_intent(union six_lock_state *lock)
-{
-	if (lock->intent_lock)
-		return false;
-
-	lock->intent_lock = 1;
-	return true;
-}
-
 __SIX_LOCK(intent)
-
-static inline bool __six_trylock_write(union six_lock_state *lock)
-{
-	EBUG_ON(lock->write_lock);
-	EBUG_ON(!lock->intent_lock);
-	if (lock->read_lock)
-		return false;
-
-	lock->write_lock = 1;
-	return true;
-}
-
 __SIX_LOCK(write)
+
+#define six_trylock_convert(lock, from, to)				\
+({									\
+	trace_six_trylock_convert(lock, #from, #to);			\
+	__six_trylock_convert(lock,					\
+			      __SIX_UNLOCK_VAL_##from,			\
+			      __SIX_LOCK_VAL_##to,			\
+			      __SIX_LOCK_FAIL_##to);			\
+})
+
+#define six_lock_convert(lock, from, to)				\
+do {									\
+	__six_lock_convert(lock,					\
+			   __SIX_UNLOCK_VAL_##from,			\
+			   __SIX_LOCK_VAL_##to,				\
+			   __SIX_LOCK_FAIL_##to);			\
+	trace_six_lock_convert(lock, #from, #to);			\
+} while (0)
 
 #endif /* _BCACHE_SIX_H */

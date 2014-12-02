@@ -900,9 +900,12 @@ err:
 	return NULL;
 }
 
+static const char *bch_cache_read_write_internal(struct cache *ca);
+
 static const char *run_cache_set(struct cache_set *c)
 {
 	const char *err = "cannot allocate memory";
+	struct cache_member_rcu *mi;
 	struct cached_dev *dc, *t;
 	struct cache *ca;
 	struct closure cl;
@@ -915,6 +918,22 @@ static const char *run_cache_set(struct cache_set *c)
 
 	/* We don't want bch_cache_set_error() to free underneath us */
 	closure_get(&c->caching);
+
+	/*
+	 * Make sure that each cache object's mi is up to date before
+	 * we start testing it.
+	 */
+
+	mi = cache_member_info_get(c);
+	for_each_cache(ca, c, i)
+		ca->mi = mi->m[ca->sb.nr_this_dev];
+	cache_member_info_put();
+
+	/*
+	 * CACHE_SYNC is true if the cache set has already been run
+	 * and potentially has data.
+	 * It is false if it is the first time it is run.
+	 */
 
 	if (CACHE_SYNC(&c->sb)) {
 		LIST_HEAD(journal);
@@ -1006,7 +1025,7 @@ static const char *run_cache_set(struct cache_set *c)
 
 		for_each_cache(ca, c, i)
 			if (CACHE_STATE(&ca->mi) == CACHE_ACTIVE &&
-			    (err = bch_cache_read_write(ca))) {
+			    (err = bch_cache_read_write_internal(ca))) {
 				percpu_ref_put(&ca->ref);
 				goto err;
 			}
@@ -1027,7 +1046,7 @@ static const char *run_cache_set(struct cache_set *c)
 
 		for_each_cache(ca, c, i)
 			if (CACHE_STATE(&ca->mi) == CACHE_ACTIVE &&
-			    (err = bch_cache_read_write(ca))) {
+			    (err = bch_cache_read_write_internal(ca))) {
 				percpu_ref_put(&ca->ref);
 				goto err;
 			}
@@ -1262,7 +1281,7 @@ void bch_cache_read_only(struct cache *ca)
 	pr_notice("%s read only", bdevname(ca->bdev, buf));
 }
 
-const char *bch_cache_read_write(struct cache *ca)
+static const char *bch_cache_read_write_internal(struct cache *ca)
 {
 	struct cache_set *c = ca->set;
 	struct cache_member_rcu *mi = cache_member_info_get(c);
@@ -1286,6 +1305,20 @@ const char *bch_cache_read_write(struct cache *ca)
 	trace_bcache_cache_read_write_done(ca);
 
 	return NULL;
+}
+
+const char *bch_cache_read_write(struct cache *ca)
+{
+	const char *err = bch_cache_read_write_internal(ca);
+
+	if (err != NULL)
+		return err;
+
+	err = "error starting gc thread";
+	if (!bch_moving_gc_thread_start(ca))
+		err = NULL;
+
+	return err;
 }
 
 void bch_cache_release(struct kobject *kobj)

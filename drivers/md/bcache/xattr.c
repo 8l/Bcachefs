@@ -101,91 +101,85 @@ static int bch_xattr_get(struct dentry *dentry, const char *name,
 	return -ENOENT;
 }
 
-struct xattr_set_op {
-	struct btree_op		op;
-	unsigned		type;
-	struct qstr		name;
-	const void		*buffer;
-	size_t			size;
-	int			flags;
-};
-
-static int bch_xattr_set_fn(struct btree_op *b_op, struct btree *b,
-			    struct bkey *k)
-{
-	struct xattr_set_op *op = container_of(b_op, struct xattr_set_op, op);
-	struct bch_xattr *xattr = key_to_xattr(k);
-	struct keylist keys;
-	int ret;
-
-	/* hole, not found */
-	if (!bch_val_u64s(k)) {
-		if (op->flags & XATTR_REPLACE)
-			return -ENODATA;
-	} else {
-		/* collision? */
-		if (xattr_cmp(xattr, &op->name))
-			return MAP_CONTINUE;
-
-		if (op->flags & XATTR_CREATE)
-			return -EEXIST;
-	}
-
-	bch_keylist_init(&keys);
-
-	bkey_init(keys.top);
-	bkey_copy_key(keys.top, k);
-
-	if (op->size) {
-		unsigned u64s = DIV_ROUND_UP(sizeof(struct bch_xattr) +
-					     op->name.len + op->size,
-					     sizeof(u64));
-
-		if (bch_keylist_realloc(&keys, u64s))
-			return -ENOMEM;
-
-		SET_KEY_U64s(keys.top, u64s);
-
-		xattr = key_to_xattr(keys.top);
-
-		memcpy(xattr->x_name, op->name.name, op->name.len);
-		memcpy(xattr_val(xattr), op->buffer, op->size);
-
-		BUG_ON(xattr_cmp(xattr, &op->name));
-	} else {
-		/* removing */
-		SET_KEY_DELETED(keys.top, 1);
-	}
-
-	bch_keylist_enqueue(&keys);
-
-	ret = bch_btree_insert_node(b, b_op, &keys, NULL, NULL, 0);
-	BUG_ON(!ret && !bch_keylist_empty(&keys));
-
-	bch_keylist_free(&keys);
-
-	return ret ?: MAP_DONE;
-}
-
 static int bch_xattr_set(struct dentry *dentry, const char *name,
 			 const void *value, size_t size,
 			 int flags, int type)
 {
 	struct cache_set *c = dentry->d_inode->i_sb->s_fs_info;
-	struct xattr_set_op op;
-	int ret;
+	struct btree_iter iter;
+	struct bkey *k;
+	struct qstr qname = (struct qstr) QSTR_INIT((char *) name, strlen(name));
+	int ret = -ENODATA;
 
-	bch_btree_op_init(&op.op, BTREE_ID_XATTRS, 0);
-	op.type		= type;
-	op.name		= (struct qstr) QSTR_INIT((char *) name, strlen(name));
-	op.buffer	= value;
-	op.size		= size;
-	op.flags	= flags;
+	bch_btree_iter_init(&iter, c, BTREE_ID_XATTRS,
+			    &KEY(dentry->d_inode->i_ino,
+				 bch_xattr_hash(&qname), 0));
 
-	ret = bch_btree_map_keys(&op.op, c,
-				 &KEY(dentry->d_inode->i_ino,
-				      bch_xattr_hash(&op.name), 0),
-				 bch_xattr_set_fn, MAP_HOLES);
+	while ((k = bch_btree_iter_peek_with_holes(&iter))) {
+		struct bch_xattr *xattr = key_to_xattr(k);
+		struct keylist keys;
+		int ret;
+
+		/* hole, not found */
+		if (!bch_val_u64s(k)) {
+			if (flags & XATTR_REPLACE) {
+				ret = -ENODATA;
+				break;
+			}
+		} else {
+			/* collision? */
+			if (xattr_cmp(xattr, &qname)) {
+				bch_btree_iter_advance_pos(&iter);
+				continue;
+			}
+
+			if (flags & XATTR_CREATE) {
+				ret = -EEXIST;
+				break;
+			}
+		}
+
+		bch_keylist_init(&keys);
+
+		bkey_init(keys.top);
+		bkey_copy_key(keys.top, k);
+
+		if (size) {
+			unsigned u64s = DIV_ROUND_UP(sizeof(struct bch_xattr) +
+						     qname.len + size,
+						     sizeof(u64));
+
+			if (bch_keylist_realloc(&keys, u64s)) {
+				ret = -ENOMEM;
+				break;
+			}
+
+			SET_KEY_U64s(keys.top, u64s);
+
+			xattr = key_to_xattr(keys.top);
+
+			memcpy(xattr->x_name, qname.name, qname.len);
+			memcpy(xattr_val(xattr), value, size);
+
+			BUG_ON(xattr_cmp(xattr, &qname));
+		} else {
+			/* removing */
+			SET_KEY_DELETED(keys.top, 1);
+		}
+
+		bch_keylist_enqueue(&keys);
+
+		ret = bch_btree_insert_node(iter.nodes[0], &iter.op,
+					    &keys, NULL, NULL, 0);
+		btree_iter_unlock(&iter);
+		bch_keylist_free(&keys);
+
+		if (!ret) {
+			BUG_ON(!bch_keylist_empty(&keys));
+			break;
+		}
+	}
+	btree_iter_unlock(&iter);
 
 	return ret;
 }

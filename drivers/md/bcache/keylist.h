@@ -17,6 +17,11 @@ static inline unsigned bch_scan_keylist_size(struct scan_keylist *kl)
 	return (kl->max_size);
 }
 
+static inline uint64_t bch_scan_keylist_sectors(struct scan_keylist *kl)
+{
+	return atomic64_read(&kl->sectors);
+}
+
 void bch_scan_keylist_resize(struct scan_keylist *kl,
 			     unsigned max_size);
 

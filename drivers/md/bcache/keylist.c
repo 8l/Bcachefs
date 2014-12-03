@@ -198,6 +198,7 @@ static int refill_scan_keylist_fn(struct btree_op *op,
 			spin_unlock(&kl->lock);
 
 			refill->nr_found += 1;
+			atomic64_add(KEY_SIZE(k), &kl->sectors);
 		}
 	}
 
@@ -279,7 +280,12 @@ struct bkey *bch_scan_keylist_next_rescan(struct cache_set *c,
 
 void bch_scan_keylist_dequeue(struct scan_keylist *kl)
 {
+	uint64_t sectors;
+
 	spin_lock(&kl->lock);
+	sectors = KEY_SIZE(kl->list.bot);
 	bch_keylist_dequeue(&kl->list);
 	spin_unlock(&kl->lock);
+
+	BUG_ON(atomic64_sub_return(sectors, &kl->sectors) < 0);
 }

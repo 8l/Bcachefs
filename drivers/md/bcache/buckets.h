@@ -58,7 +58,13 @@ static inline bool ptr_stale(const struct cache_set *c,
 			     const struct cache *ca,
 			     const struct bkey *k, unsigned ptr)
 {
-	return PTR_BUCKET_GEN(c, ca, k, ptr) != PTR_GEN(k, ptr);
+	uint8_t bucket_gen = PTR_BUCKET_GEN(c, ca, k, ptr);
+	uint8_t ptr_gen = PTR_GEN(k, ptr);
+	if (bucket_gen != ptr_gen) {
+		BUG_ON(!gen_after(bucket_gen, ptr_gen));
+		return true;
+	}
+	return false;
 }
 
 /* bucket heaps */

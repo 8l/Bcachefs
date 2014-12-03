@@ -19,10 +19,10 @@ struct bkey;
 /*
  * Keylists are growable FIFOs storing bkeys.
  *
- * New keys are added via bch_keylist_push(), which increments @top until
+ * New keys are added via bch_keylist_enqueue(), which increments @top until
  * it wraps around.
  *
- * Old keys are removed via bch_keylist_pop_front() which increments @bot
+ * Old keys are removed via bch_keylist_dequeue() which increments @bot
  * until it wraps around.
  *
  * If @top == @bot, the keylist is empty.
@@ -30,7 +30,7 @@ struct bkey;
  * We always ensure there is room for a maximum-sized extent key at @top;
  * that is, @top_p + BKEY_EXTENT_MAX_U64s <= @end_keys_p.
  *
- * If this invariant does not hold after pushing a key, we wrap @top back
+ * If this invariant does not hold after enqueuing a key, we wrap @top back
  * to @start_keys_p.
  *
  * If at any time, @top_p + BKEY_EXTENT_MAX_U64s >= @bot_p, the keylist is
@@ -43,12 +43,12 @@ struct keylist {
 		struct bkey		*start_keys;
 		uint64_t		*start_keys_p;
 	};
-	/* This is a pointer to the next to enqueue (push) */
+	/* This is a pointer to the next to enqueue */
 	union {
 		struct bkey		*top;
 		uint64_t		*top_p;
 	};
-	/* This is a pointer to the next to dequeue (pop_front) */
+	/* This is a pointer to the next to dequeue */
 	union {
 		struct bkey		*bot;
 		uint64_t		*bot_p;
@@ -108,7 +108,7 @@ static inline uint64_t *__bch_keylist_next(struct keylist *l, uint64_t *p)
 	return p;
 }
 
-static inline void bch_keylist_push(struct keylist *l)
+static inline void bch_keylist_enqueue(struct keylist *l)
 {
 	BUG_ON(!bch_keylist_fits(l, KEY_U64s(l->top)));
 	l->top_p = __bch_keylist_next(l, l->top_p);
@@ -117,7 +117,7 @@ static inline void bch_keylist_push(struct keylist *l)
 static inline void bch_keylist_add(struct keylist *l, struct bkey *k)
 {
 	bkey_copy(l->top, k);
-	bch_keylist_push(l);
+	bch_keylist_enqueue(l);
 }
 
 static inline bool bch_keylist_empty(struct keylist *l)
@@ -160,7 +160,7 @@ static inline struct bkey *bch_keylist_front(struct keylist *l)
 	return l->bot;
 }
 
-static inline void bch_keylist_pop_front(struct keylist *l)
+static inline void bch_keylist_dequeue(struct keylist *l)
 {
 	BUG_ON(bch_keylist_empty(l));
 	l->bot_p = __bch_keylist_next(l, l->bot_p);

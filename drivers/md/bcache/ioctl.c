@@ -495,7 +495,7 @@ static int bch_copy_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 		SET_KEY_VERSION(copy, (op->version));
 	}
 
-	bch_keylist_push(&op->keys);
+	bch_keylist_enqueue(&op->keys);
 	op->src_loc = *k;
 
 	return MAP_CONTINUE;

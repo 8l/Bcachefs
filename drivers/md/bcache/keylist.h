@@ -38,11 +38,7 @@ struct bkey *bch_scan_keylist_next_rescan(struct cache_set *c,
 					  struct bkey *end,
 					  scan_keylist_pred_fn *pred);
 
-static inline void bch_scan_keylist_advance(struct scan_keylist *kl)
-{
-	bch_keylist_pop_front(&kl->list);
-	return;
-}
+void bch_scan_keylist_dequeue(struct scan_keylist *);
 
 void bch_mark_scan_keylist_keys(struct cache_set *, struct scan_keylist *);
 

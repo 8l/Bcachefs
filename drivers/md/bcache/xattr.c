@@ -180,7 +180,7 @@ static int bch_xattr_set_fn(struct btree_op *b_op, struct btree *b,
 		SET_KEY_DELETED(keys.top, 1);
 	}
 
-	bch_keylist_push(&keys);
+	bch_keylist_enqueue(&keys);
 
 	ret = bch_btree_insert_node(b, b_op, &keys, NULL, NULL, 0);
 	BUG_ON(!ret && !bch_keylist_empty(&keys));

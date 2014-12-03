@@ -163,7 +163,7 @@ static int __bch_dirent_create(struct cache_set *c, u64 dir_inum,
 	BUG_ON(dirent_name_bytes(dirent) != name->len);
 	BUG_ON(dirent_cmp(dirent, name));
 
-	bch_keylist_push(&op.keys);
+	bch_keylist_enqueue(&op.keys);
 
 	ret = bch_btree_map_keys(&op.op, c, k, bch_dirent_create_fn, MAP_HOLES);
 
@@ -222,7 +222,7 @@ static int bch_dirent_delete_fn(struct btree_op *b_op, struct btree *b,
 	*keys.top = *k;
 	SET_KEY_DELETED(keys.top, 1);
 	bch_set_val_u64s(keys.top, 0);
-	bch_keylist_push(&keys);
+	bch_keylist_enqueue(&keys);
 
 	ret = bch_btree_insert_node(b, b_op, &keys, NULL, NULL, 0);
 	BUG_ON(!ret && !bch_keylist_empty(&keys));

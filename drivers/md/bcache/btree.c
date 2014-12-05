@@ -1517,7 +1517,7 @@ int bch_btree_root_read(struct cache_set *c, enum btree_id id,
 
 uint8_t bch_btree_mark_last_gc(struct cache_set *c, struct bkey *k)
 {
-	uint8_t stale, max_stale = 0;
+	uint8_t max_stale = 0;
 	struct cache *ca;
 	unsigned i;
 
@@ -1531,9 +1531,7 @@ uint8_t bch_btree_mark_last_gc(struct cache_set *c, struct bkey *k)
 			if (gen_after(g->last_gc, PTR_GEN(k, i)))
 				g->last_gc = PTR_GEN(k, i);
 
-			stale = gen_after(PTR_BUCKET_GEN(c, ca, k, i),
-					  PTR_GEN(k, i));
-			max_stale = max(max_stale, stale);
+			max_stale = max(max_stale, ptr_stale(c, ca, k, i));
 		}
 	}
 

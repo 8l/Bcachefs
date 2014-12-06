@@ -1019,6 +1019,16 @@ TRACE_EVENT(bcache_moving_gc_end,
 		__entry->buckets_moved)
 );
 
+DEFINE_EVENT(cache, bcache_moving_gc_reserve_empty,
+	TP_PROTO(struct cache *ca),
+	TP_ARGS(ca)
+);
+
+DEFINE_EVENT(cache, bcache_moving_gc_no_work,
+	TP_PROTO(struct cache *ca),
+	TP_ARGS(ca)
+);
+
 DEFINE_EVENT(bkey, bcache_gc_copy,
 	TP_PROTO(struct bkey *k),
 	TP_ARGS(k)

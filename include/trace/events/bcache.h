@@ -948,6 +948,40 @@ DEFINE_EVENT(open_bucket_alloc, bcache_open_bucket_alloc_fail,
 	TP_ARGS(c, cl)
 );
 
+/* Keylists */
+
+DECLARE_EVENT_CLASS(keylist,
+	TP_PROTO(struct keylist *keys),
+	TP_ARGS(keys),
+
+	TP_STRUCT__entry(
+		__field(struct keylist *,	keys		)
+		__field(size_t,			capacity	)
+	),
+
+	TP_fast_assign(
+		__entry->keys		= keys;
+		__entry->capacity	= bch_keylist_capacity(keys);
+	),
+
+	TP_printk("%p capacity %zu", __entry->keys, __entry->capacity)
+);
+
+DEFINE_EVENT(keylist, bcache_keylist_realloc,
+	TP_PROTO(struct keylist *keys),
+	TP_ARGS(keys)
+);
+
+DEFINE_EVENT(keylist, bcache_keylist_realloc_full,
+	TP_PROTO(struct keylist *keys),
+	TP_ARGS(keys)
+);
+
+DEFINE_EVENT(keylist, bcache_keylist_realloc_fail,
+	TP_PROTO(struct keylist *keys),
+	TP_ARGS(keys)
+);
+
 /* Copy GC */
 
 DEFINE_EVENT(page_alloc_fail, bcache_moving_gc_alloc_fail,

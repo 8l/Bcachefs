@@ -1119,54 +1119,30 @@ static struct open_bucket *bch_open_bucket_alloc(struct cache_set *c,
 {
 	int ret;
 	struct open_bucket *b;
+	unsigned n_replicas;
 
 	b = bch_open_bucket_get(c, cl);
 	if (IS_ERR_OR_NULL(b))
 		return b;
 
+	n_replicas = wp->n_replicas;
+	if (n_replicas == 0)
+		n_replicas = CACHE_SET_DATA_REPLICAS_WANT(&c->sb);
+
+	BUG_ON(!wp->group);
+	BUG_ON(!wp->reserve);
+
 	spin_lock(&b->lock);
+	ret = bch_bucket_alloc_set(c, wp->reserve, &b->key,
+				   n_replicas, wp->group, cl);
 
-	if (wp->ca) {
-		size_t bucket;
-
-		if (CACHE_STATE(&wp->ca->mi) != CACHE_ACTIVE) {
-			ret = -ENOSPC;
-			goto err;
-		}
-
-		bucket = bch_bucket_alloc(wp->ca, RESERVE_MOVINGGC);
-		if (!bucket) {
-			ret = -ENOSPC;
-			goto err;
-		}
-
-		b->key.val[0] = PTR(wp->ca->bucket_gens[bucket],
-				    bucket_to_sector(wp->ca->set, bucket),
-				    wp->ca->sb.nr_this_dev);
-		bch_set_extent_ptrs(&b->key, 1);
-	} else if (wp->tier) {
-		ret = bch_bucket_alloc_set(c, RESERVE_NONE, &b->key, 1,
-					   wp->tier, cl);
-		if (ret)
-			goto err;
-	} else {
-		unsigned n_replicas = wp->n_replicas;
-
-		if (n_replicas == 0)
-			n_replicas = CACHE_SET_DATA_REPLICAS_WANT(&c->sb);
-
-		ret = bch_bucket_alloc_set(c, RESERVE_NONE, &b->key,
-					   n_replicas,
-					   &c->cache_all, cl);
-		if (ret)
-			goto err;
+	if (ret) {
+		spin_unlock(&b->lock);
+		bch_open_bucket_put(c, b);
+		return ERR_PTR(ret);
 	}
 
 	return b;
-err:
-	spin_unlock(&b->lock);
-	bch_open_bucket_put(c, b);
-	return ERR_PTR(ret);
 }
 
 /* Sector allocator */
@@ -1346,8 +1322,11 @@ void bch_open_buckets_init(struct cache_set *c)
 		list_add(&c->open_buckets[i].list, &c->open_buckets_free);
 	}
 
-	for (i = 0; i < ARRAY_SIZE(c->write_points); i++)
+	for (i = 0; i < ARRAY_SIZE(c->write_points); i++) {
 		c->write_points[i].throttle = true;
+		c->write_points[i].reserve = RESERVE_NONE;
+		c->write_points[i].group = &c->cache_tiers[0];
+	}
 
 	c->pd_controllers_update_seconds = 5;
 	INIT_DELAYED_WORK(&c->pd_controllers_update, pd_controllers_update);

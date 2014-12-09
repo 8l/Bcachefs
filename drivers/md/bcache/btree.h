@@ -276,8 +276,6 @@ void bch_btree_iter_advance_pos(struct btree_iter *);
 	     ((k) = bch_btree_iter_peek_with_holes(iter));		\
 	     bch_btree_iter_advance_pos(iter))
 
-/* Recursing down the btree */
-
 /**
  * __bch_btree_op_init - initialize btree op
  *
@@ -337,24 +335,6 @@ uint8_t __bch_btree_mark_key(struct cache_set *, int, struct bkey *);
 
 void bch_btree_cache_free(struct cache_set *);
 int bch_btree_cache_alloc(struct cache_set *);
-
-/* Return values from @fn parameter to map_keys and map_nodes */
-#define MAP_DONE	0  /* We're done */
-#define MAP_CONTINUE	1  /* Continue and advance the iterator */
-
-/* Values for @flags parameter to map_nodes and map_keys */
-#define MAP_HOLES	1  /* Only map_keys */
-#define MAP_ASYNC	2
-#define MAP_ALL_NODES	4  /* Meaningfull only for bch_btree_map_nodes */
-
-typedef int (btree_map_nodes_fn)(struct btree_op *, struct btree *);
-int bch_btree_map_nodes(struct btree_op *, struct cache_set *,
-			struct bkey *, btree_map_nodes_fn *, int);
-
-typedef int (btree_map_keys_fn)(struct btree_op *, struct btree *,
-				struct bkey *);
-int bch_btree_map_keys(struct btree_op *, struct cache_set *, struct bkey *,
-		       btree_map_keys_fn *, int);
 
 /**
  * __gc_will_visit_node - for checking GC marks while holding a btree read lock

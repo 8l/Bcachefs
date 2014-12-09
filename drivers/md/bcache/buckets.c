@@ -173,16 +173,17 @@ void bch_mark_metadata_bucket(struct cache *ca, struct bucket *g,
 	} while(0)
 
 uint8_t bch_mark_data_bucket(struct cache_set *c, struct cache *ca,
-			     struct bkey *k, unsigned i, int sectors,
-			     bool dirty, bool gc)
+			     struct btree *b, struct bkey *k, unsigned i,
+			     int sectors, bool dirty)
 {
 	struct bucket_mark old, new;
 	unsigned long bucket_nr = PTR_BUCKET_NR(c, k, i);
 	unsigned gen = PTR_GEN(k, i);
 	uint8_t stale;
 	unsigned saturated;
+	bool is_gc = !b;
 
-	bucket_cmpxchg(&ca->buckets[bucket_nr], old, new, gc, ({
+	bucket_cmpxchg(&ca->buckets[bucket_nr], old, new, is_gc, ({
 		saturated = 0;
 		/*
 		 * cmpxchg() only implies a full barrier on success, not
@@ -206,7 +207,7 @@ uint8_t bch_mark_data_bucket(struct cache_set *c, struct cache *ca,
 		 * GC starting between when we check gc_cur_key and when
 		 * the GC zeroes out marks
 		 */
-		if (!gc && gc_will_visit_key(c, BTREE_ID_EXTENTS, k))
+		if (!is_gc && gc_will_visit_node(c, b))
 			return 0;
 
 		/*
@@ -214,8 +215,7 @@ uint8_t bch_mark_data_bucket(struct cache_set *c, struct cache *ca,
 		 * operation is racing; just treat it like the pointer was
 		 * already stale
 		 */
-		if (!gc && dirty &&
-		    is_available_bucket(old))
+		if (!is_gc && dirty && is_available_bucket(old))
 			return 1;
 
 		BUG_ON(old.is_metadata);

@@ -2221,10 +2221,11 @@ const char *unregister_bcache_devices(char **path, int count)
 		return err;
 
 	for (i = 0; i < count && path[i]; i++) {
-		err = "can't find bdev";
 		bdev = lookup_bdev(strim(path[i]));
-		if(!bdev)
+		if (IS_ERR(bdev)) {
+			err = "failed to open device, bad device name";
 			goto err;
+		}
 
 		err = read_super(bdev, &sb);
 		if (err)
@@ -2260,6 +2261,10 @@ const char *remove_bcache_device(char *path, bool force)
 		return err;
 
 	bdev = lookup_bdev(strim(path));
+	if (IS_ERR(bdev)) {
+		err = "failed to open device, bad device name";
+		goto err;
+	}
 
 	err = read_super(bdev, &sb);
 	if (err)

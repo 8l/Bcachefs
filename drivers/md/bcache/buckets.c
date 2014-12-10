@@ -236,8 +236,10 @@ uint8_t bch_mark_data_bucket(struct cache_set *c, struct cache *ca,
 	    atomic_long_add_return(saturated,
 				   &ca->saturated_count) >=
 	    ca->free_inc.size << c->bucket_bits) {
-		if (c->gc_thread)
+		if (c->gc_thread) {
+			trace_bcache_gc_sectors_saturated(c);
 			wake_up_process(c->gc_thread);
+		}
 	}
 
 

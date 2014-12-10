@@ -1854,7 +1854,7 @@ static int btree_gc_run_long_enough(uint64_t last_start, struct cache_set *c)
 	 * from readers, i.e. allocator threads.
 	 */
 
-	if ((!llist_empty(&c->buckets_available_wait.list))
+	if ((!llist_empty(&c->freelist_wait.list))
 	    && (rwsem_is_contended(&c->gc_lock)))
 		return 0;
 

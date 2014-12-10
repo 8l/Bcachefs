@@ -1592,8 +1592,6 @@ uint8_t __bch_btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 
 static u8 btree_mark_key(struct btree *b, struct bkey *k)
 {
-	bkey_debugcheck(&b->keys, k);
-
 	return __bch_btree_mark_key(b->c, b->level, k);
 }
 
@@ -1617,6 +1615,8 @@ static bool btree_gc_mark_node(struct btree *b, struct gc_stat *gc)
 		return 0;
 
 	for_each_btree_node_key(&b->keys, k, &iter) {
+		bkey_debugcheck(&b->keys, k);
+
 		stale = max(stale, btree_mark_key(b, k));
 		keys++;
 

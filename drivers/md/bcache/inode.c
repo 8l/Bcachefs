@@ -3,6 +3,7 @@
 #include "btree.h"
 #include "extents.h"
 #include "inode.h"
+#include "io.h"
 
 #define key_to_inode(k)	container_of(k, struct bch_inode, i_key)
 
@@ -187,49 +188,10 @@ int bch_inode_update(struct cache_set *c, struct bch_inode *inode)
 }
 EXPORT_SYMBOL(bch_inode_update);
 
-struct inode_rm_op {
-	struct btree_op		op;
-	u64			inode_nr;
-	u64			new_size;
-};
-
-/* XXX: this is slow, due to writes and sequential lookups */
-static int inode_truncate_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
-{
-	struct inode_rm_op *op = container_of(b_op, struct inode_rm_op, op);
-	struct bkey erase_key;
-
-	if (KEY_INODE(k) > op->inode_nr)
-		return MAP_DONE;
-
-	if (KEY_INODE(k) < op->inode_nr)
-		BUG();
-
-	erase_key = KEY(op->inode_nr,
-			max(op->new_size, KEY_START(k)) + KEY_SIZE_MAX,
-			KEY_SIZE_MAX);
-	SET_KEY_DELETED(&erase_key, 1);
-
-	return bch_btree_insert_node(b, b_op,
-			&keylist_single(&erase_key), NULL, NULL, 0)
-		?: MAP_CONTINUE;
-}
-
 int bch_inode_truncate(struct cache_set *c, u64 inode_nr, u64 new_size)
 {
-	struct inode_rm_op op;
-	int ret;
-
-	bch_btree_op_init(&op.op, BTREE_ID_EXTENTS, 0);
-	op.inode_nr	= inode_nr;
-	op.new_size	= new_size;
-
-	ret = bch_btree_map_keys(&op.op, c,
-				 &KEY(inode_nr, new_size, 0),
-				 inode_truncate_fn, 0);
-	if (ret < 0)
-		return ret;
-	return 0;
+	return bch_discard(c, &KEY(inode_nr, new_size, 0),
+			   &KEY(inode_nr + 1, 0, 0), 0);
 }
 
 int bch_inode_rm(struct cache_set *c, u64 inode_nr)

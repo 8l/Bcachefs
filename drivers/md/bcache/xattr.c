@@ -62,7 +62,6 @@ static bool bch_xattr_invalid(const struct btree_keys *bk, const struct bkey *k)
 
 const struct btree_keys_ops bch_xattr_ops = {
 	.sort_fixup	= bch_generic_sort_fixup,
-	.insert_fixup	= bch_generic_insert_fixup,
 	.key_invalid	= bch_xattr_invalid,
 };
 

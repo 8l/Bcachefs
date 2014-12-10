@@ -80,7 +80,6 @@ static void bch_dirent_to_text(const struct btree_keys *bk, char *buf,
 
 const struct btree_keys_ops bch_dirent_ops = {
 	.sort_fixup	= bch_generic_sort_fixup,
-	.insert_fixup	= bch_generic_insert_fixup,
 	.key_invalid	= bch_dirent_invalid,
 	.val_to_text	= bch_dirent_to_text,
 };

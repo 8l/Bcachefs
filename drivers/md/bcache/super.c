@@ -904,6 +904,8 @@ static struct cache_set *bch_cache_set_alloc(struct cache *ca)
 	c->copy_gc_enabled = 1;
 	c->tiering_enabled = 1;
 
+	c->gc_timeouts_enabled = 1;
+
 	c->foreground_target_percent = 20;
 	c->bucket_reserve_percent = 10;
 	c->sector_reserve_percent = 20;

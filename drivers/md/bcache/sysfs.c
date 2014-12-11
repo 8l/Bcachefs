@@ -147,6 +147,7 @@ rw_attribute(verify);
 rw_attribute(bypass_torture_test);
 rw_attribute(key_merging_disabled);
 rw_attribute(gc_always_rewrite);
+rw_attribute(gc_timeouts_enabled);
 rw_attribute(expensive_debug_checks);
 rw_attribute(version_stress_test);
 rw_attribute(cache_replacement_policy);
@@ -641,6 +642,7 @@ SHOW(__bch_cache_set)
 		     "%i", c->expensive_debug_checks);
 	sysfs_printf(version_stress_test,	"%i", c->version_stress_test);
 	sysfs_printf(gc_always_rewrite,		"%i", c->gc_always_rewrite);
+	sysfs_printf(gc_timeouts_enabled,	"%i", c->gc_timeouts_enabled);
 	sysfs_printf(btree_shrinker_disabled,	"%i", c->shrinker_disabled);
 	sysfs_printf(copy_gc_enabled,		"%i", c->copy_gc_enabled);
 	sysfs_pd_controller_show(foreground_write, &c->foreground_write_pd);
@@ -749,6 +751,7 @@ STORE(__bch_cache_set)
 	sysfs_strtoul(expensive_debug_checks,	c->expensive_debug_checks);
 	sysfs_strtoul(version_stress_test,	c->version_stress_test);
 	sysfs_strtoul(gc_always_rewrite,	c->gc_always_rewrite);
+	sysfs_strtoul(gc_timeouts_enabled,	c->gc_timeouts_enabled);
 	sysfs_strtoul(btree_shrinker_disabled,	c->shrinker_disabled);
 
 	if (attr == &sysfs_copy_gc_enabled) {
@@ -976,6 +979,7 @@ static struct attribute *bch_cache_set_internal_files[] = {
 	&sysfs_version_stress_test,
 #endif
 	&sysfs_gc_always_rewrite,
+	&sysfs_gc_timeouts_enabled,
 	&sysfs_btree_shrinker_disabled,
 	&sysfs_copy_gc_enabled,
 	sysfs_pd_controller_files(foreground_write),

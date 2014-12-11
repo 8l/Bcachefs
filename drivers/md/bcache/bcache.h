@@ -587,6 +587,7 @@ struct cache_set {
 	unsigned		shrinker_disabled:1;
 	unsigned		copy_gc_enabled:1;
 	unsigned		tiering_enabled:1;
+	unsigned		gc_timeouts_enabled:1;
 	unsigned		tiering_percent;
 	unsigned		btree_scan_ratelimit;
 

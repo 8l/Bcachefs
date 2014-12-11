@@ -1827,8 +1827,6 @@ static int btree_gc_rewrite_node(struct btree *b, struct btree_op *op,
 	return -EINTR;
 }
 
-#define ENABLE_GC_TIMEOUTS		1
-
 /* Time is in nsec, use msec here */
 #define BTREE_GC_RUN_QUANTUM		125
 #define BTREE_GC_IDLE_QUANTUM		1000
@@ -1837,7 +1835,7 @@ static int btree_gc_run_long_enough(uint64_t last_start, struct cache_set *c)
 {
 	uint64_t now, duration;
 
-	if (!ENABLE_GC_TIMEOUTS)
+	if (!c->gc_timeouts_enabled)
 		return 0;
 
 	/*
@@ -2127,7 +2125,7 @@ static void bch_btree_gc(struct cache_set *c)
 			ret = btree_root(gc_root, c, &op, false, &stats);
 
 		if (ret == -ETIMEDOUT) {
-			if (!ENABLE_GC_TIMEOUTS
+			if (!c->gc_timeouts_enabled
 			    || need_resched()
 			    || dynamic_fault())
 				cond_resched();

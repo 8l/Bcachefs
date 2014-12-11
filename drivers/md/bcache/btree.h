@@ -241,9 +241,10 @@ int bch_btree_root_read(struct cache_set *, enum btree_id,
 int bch_btree_insert_check_key(struct btree *, struct btree_op *,
 			       struct bkey *);
 int bch_btree_insert(struct cache_set *, enum btree_id, struct keylist *,
-		     struct bkey *);
+		     struct bch_replace_info *);
 int bch_btree_insert_node(struct btree *, struct btree_op *, struct keylist *,
-			  struct bkey *, struct closure *, enum alloc_reserve);
+			  struct bch_replace_info *,
+			  struct closure *, enum alloc_reserve);
 
 int bch_gc_thread_start(struct cache_set *);
 int bch_initial_gc(struct cache_set *, struct list_head *);

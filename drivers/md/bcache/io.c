@@ -274,14 +274,17 @@ static void bio_csum(struct bio *bio, struct bkey *k)
 
 static int btree_insert_fn(struct btree_op *b_op, struct btree *b)
 {
+	int ret;
 	struct bch_write_op *op = container_of(b_op,
 					struct bch_write_op, op);
-	struct bkey *replace_key = op->replace ? &op->replace_key : NULL;
+	struct bch_replace_info *replace = (op->replace
+					    ? &op->replace_info
+					    : NULL);
 
-	int ret = bch_btree_insert_node(b, &op->op, &op->insert_keys,
-					replace_key,
-					op->flush ? &op->cl : NULL,
-					op->btree_alloc_reserve);
+	ret = bch_btree_insert_node(b, &op->op, &op->insert_keys,
+				    replace,
+				    op->flush ? &op->cl : NULL,
+				    op->btree_alloc_reserve);
 	return bch_keylist_empty(&op->insert_keys) ? MAP_DONE : ret;
 }
 
@@ -682,7 +685,7 @@ void bch_write_op_init(struct bch_write_op *op, struct cache_set *c,
 
 	if (replace_key) {
 		op->replace = true;
-		bkey_copy(&op->replace_key, replace_key);
+		bkey_copy(&op->replace_info.key, replace_key);
 	}
 }
 
@@ -780,7 +783,7 @@ static void cache_promote_done(struct closure *cl)
 	struct bio_vec *bv;
 
 	if (op->iop.replace_collision) {
-		trace_bcache_promote_collision(&op->iop.replace_key);
+		trace_bcache_promote_collision(&op->iop.replace_info.key);
 		atomic_inc(&c->accounting.collector.cache_miss_collisions);
 	}
 

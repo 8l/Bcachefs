@@ -214,7 +214,7 @@ static inline u64 cache_sectors_used(struct cache *ca)
 		stats.sectors_dirty;
 }
 
-static inline bool cache_set_can_write(struct cache_set *c)
+static inline bool cache_set_full(struct cache_set *c)
 {
 	struct cache *ca;
 	unsigned i;
@@ -225,7 +225,7 @@ static inline bool cache_set_can_write(struct cache_set *c)
 		used += cache_sectors_used(ca);
 	rcu_read_unlock();
 
-	return used < c->capacity;
+	return used >= c->capacity;
 }
 
 static inline bool is_available_bucket(struct bucket_mark mark)

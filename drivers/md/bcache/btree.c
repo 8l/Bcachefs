@@ -636,7 +636,9 @@ static void __bch_btree_node_write(struct btree *b, struct closure *parent)
 
 	change_bit(BTREE_NODE_write_idx, &b->flags);
 
-	do_btree_node_write(b);
+	b->written += blocks_to_write;
+
+	do_btree_node_write(b); /* will drop b->io_mutex */
 
 	rcu_read_lock();
 	for (ptr = 0; ptr < bch_extent_ptrs(&b->key); ptr++) {
@@ -646,8 +648,6 @@ static void __bch_btree_node_write(struct btree *b, struct closure *parent)
 					&ca->btree_sectors_written);
 	}
 	rcu_read_unlock();
-
-	b->written += blocks_to_write;
 }
 
 static void bch_btree_node_write(struct btree *b, struct closure *parent)

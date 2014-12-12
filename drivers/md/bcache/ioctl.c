@@ -552,7 +552,7 @@ int bch_copy(struct cache_set *c, struct bkey *src_start, struct bkey *dst_start
 		if (ret == MAP_CONTINUE)
 			op.src_loc = op.src_end;
 
-		ret = bch_btree_insert(c, BTREE_ID_EXTENTS, &op.keys, NULL);
+		ret = bch_btree_insert(c, BTREE_ID_EXTENTS, &op.keys, NULL, NULL);
 		if (ret < 0)
 			break;
 

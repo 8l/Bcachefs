@@ -386,8 +386,10 @@ static inline uint8_t bucket_gc_gen(struct cache *ca, size_t r)
  *
  * If there aren't enough available buckets to fill up free_inc, wait until
  * there are.
+ * However, if we are buzzing in bch_allocator_thread and btree_gc is waiting
+ * on the gc_lock, let it run.
  */
-static int wait_buckets_available(struct cache *ca)
+static int wait_buckets_available(struct cache *ca, bool first_time)
 {
 	int ret = 0;
 
@@ -399,7 +401,8 @@ static int wait_buckets_available(struct cache *ca)
 		}
 
 		if (!test_bit(CACHE_SET_GC_FAILURE, &ca->set->flags) &&
-		    buckets_available_cache(ca) >= fifo_free(&ca->free_inc))
+		    buckets_available_cache(ca) >= fifo_free(&ca->free_inc) &&
+		    (first_time || !rwsem_is_contended(&ca->set->gc_lock)))
 			break;
 
 		up_read(&ca->set->gc_lock);
@@ -718,6 +721,7 @@ static bool bch_allocator_push(struct cache *ca, long bucket)
  */
 static int bch_allocator_thread(void *arg)
 {
+	bool first_time;
 	struct cache *ca = arg;
 	struct cache_set *c = ca->set;
 
@@ -760,8 +764,10 @@ static int bch_allocator_thread(void *arg)
 
 		down_read(&c->gc_lock);
 
-		do {
-			if (wait_buckets_available(ca)) {
+		for (first_time = true;
+		     first_time || !fifo_full(&ca->free_inc);
+		     first_time = false) {
+			if (wait_buckets_available(ca, first_time)) {
 				up_read(&c->gc_lock);
 				goto out;
 			}
@@ -776,7 +782,7 @@ static int bch_allocator_thread(void *arg)
 			invalidate_buckets(ca);
 			trace_bcache_alloc_batch(ca, fifo_used(&ca->free_inc),
 						 ca->free_inc.size);
-		} while (!fifo_full(&ca->free_inc));
+		}
 
 		up_read(&c->gc_lock);
 

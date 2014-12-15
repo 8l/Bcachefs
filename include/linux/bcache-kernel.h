@@ -201,8 +201,6 @@ struct btree_op {
 
 	enum btree_id		id:8;
 
-	unsigned		iterator_invalidated:1;
-
 	/* State used by btree insertion is also stored here for convenience */
 	unsigned		insert_collision:1;
 };

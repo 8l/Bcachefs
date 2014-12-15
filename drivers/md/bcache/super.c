@@ -1128,19 +1128,26 @@ const char *bch_run_cache_set(struct cache_set *c)
 	if (bch_gc_thread_start(c))
 		goto err;
 
-	err = "error starting moving GC or tiering threads";
-	for_each_cache(ca, c, i)
-		if (CACHE_STATE(&ca->mi) == CACHE_ACTIVE &&
-		    (bch_moving_gc_thread_start(ca) ||
-		     bch_tiering_write_start(ca))) {
+	for_each_cache(ca, c, i) {
+		if (CACHE_STATE(&ca->mi) != CACHE_ACTIVE)
+			continue;
+
+		err = "error starting moving GC thread";
+		if (bch_moving_gc_thread_start(ca)) {
 			percpu_ref_put(&ca->ref);
 			goto err;
 		}
 
+		err = "error starting tiering write workqueue";
+		if (bch_tiering_write_start(ca)) {
+			percpu_ref_put(&ca->ref);
+			goto err;
+		}
+	}
+
 	err = "error starting tiering thread";
 	if (bch_tiering_read_start(c))
 		goto err;
-
 
 	schedule_delayed_work(&c->pd_controllers_update, 5 * HZ);
 
@@ -1511,8 +1518,12 @@ const char *bch_cache_read_write(struct cache *ca)
 	if (err != NULL)
 		return err;
 
-	err = "error starting gc thread";
+	err = "error starting moving GC thread";
 	if (!bch_moving_gc_thread_start(ca))
+		err = NULL;
+
+	err = "error starting tiering write workqueue";
+	if (!bch_tiering_write_start(ca))
 		err = NULL;
 
 	return err;

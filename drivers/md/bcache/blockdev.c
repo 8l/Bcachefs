@@ -685,37 +685,33 @@ err:
 	return ret;
 }
 
-static int flash_dev_map_fn(struct btree_op *op, struct btree *b,
-			    struct bkey *k)
-{
-	int ret = 0;
-	struct bch_inode_blockdev *inode =
-		container_of(k, struct bch_inode_blockdev, i_inode.i_key);
-
-	if (KEY_INODE(k) >= BLOCKDEV_INODE_MAX)
-		return MAP_DONE;
-
-	if (INODE_FLASH_ONLY(inode))
-		ret = flash_dev_run(b->c, inode);
-
-	return ret ? ret : MAP_CONTINUE;
-}
-
 int flash_devs_run(struct cache_set *c)
 {
-	struct btree_op op;
-	int ret;
+	struct btree_iter iter;
+	struct bkey *k;
+	int ret = 0;
 
 	if (test_bit(CACHE_SET_STOPPING, &c->flags))
 		return -EINVAL;
 
-	bch_btree_op_init(&op, BTREE_ID_INODES, -1);
+	for_each_btree_key(&iter, c, BTREE_ID_INODES, k, NULL) {
+		struct bch_inode_blockdev *inode =
+			container_of(k, struct bch_inode_blockdev, i_inode.i_key);
 
-	ret = bch_btree_map_keys(&op, c, NULL, flash_dev_map_fn, 0);
-	if (ret < 0)
-		bch_cache_set_error(c, "can't bring up flash volumes: %i", ret);
+		if (KEY_INODE(k) >= BLOCKDEV_INODE_MAX)
+			break;
 
-	return 0;
+		if (INODE_FLASH_ONLY(inode)) {
+			ret = flash_dev_run(c, inode);
+			if (ret) {
+				bch_cache_set_error(c, "can't bring up flash volumes: %i", ret);
+				break;
+			}
+		}
+	}
+	btree_iter_unlock(&iter);
+
+	return ret;
 }
 
 int bch_flash_dev_create(struct cache_set *c, u64 size)

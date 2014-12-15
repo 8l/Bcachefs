@@ -252,132 +252,64 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 	return ret;
 }
 
-struct lookup_op {
-	struct btree_op		op;
-	const struct qstr	*name;
-	u64			inum;
-};
-
-static int bch_dirent_lookup_fn(struct btree_op *b_op, struct btree *b,
-				struct bkey *k)
-{
-	struct lookup_op *op = container_of(b_op, struct lookup_op, op);
-	struct bch_dirent *dirent = key_to_dirent(k);
-
-	/* hole, not found */
-	if (!bch_val_u64s(k))
-		return -ENOENT;
-
-	/* collision? */
-	if (dirent_cmp(dirent, op->name))
-		return MAP_CONTINUE;
-
-	op->inum = dirent->d_inum;
-
-	return MAP_DONE;
-}
-
 u64 bch_dirent_lookup(struct cache_set *c, u64 dir_inum,
 		      const struct qstr *name)
 {
-	struct lookup_op op;
+	struct btree_iter iter;
+	struct bkey *k;
 	u64 hash = bch_dirent_hash(name);
-	int ret;
-
-	bch_btree_op_init(&op.op, BTREE_ID_DIRENTS, -1);
-	op.name = name;
 
 	pr_debug("searching for %llu:%llu (%s)",
 		 dir_inum, hash, name->name);
 
-	ret = bch_btree_map_keys(&op.op, c,
-				 &KEY(dir_inum, bch_dirent_hash(name), 0),
-				 bch_dirent_lookup_fn, MAP_HOLES);
+	for_each_btree_key_with_holes(&iter, c, BTREE_ID_DIRENTS, k,
+				 &KEY(dir_inum, bch_dirent_hash(name), 0)) {
+		struct bch_dirent *dirent = key_to_dirent(k);
 
-	pr_debug("%s %sfound", name->name, ret ? "not " : "");
+		/* hole, not found */
+		if (!bch_val_u64s(k))
+			break;
 
-	if (!ret)
-		return op.inum;
+		/* collision? */
+		if (!dirent_cmp(dirent, name)) {
+			u64 inum = dirent->d_inum;
 
+			btree_iter_unlock(&iter);
+			pr_debug("found %s: %llu", name->name, inum);
+			return inum;
+		}
+	}
+	btree_iter_unlock(&iter);
+
+	pr_debug("%s not found", name->name);
 	return 0;
-}
-
-struct empty_dir_op {
-	struct btree_op		op;
-	u64			dir_inum;
-};
-
-static int bch_empty_dir_fn(struct btree_op *b_op, struct btree *b,
-			    struct bkey *k)
-{
-	struct empty_dir_op *op = container_of(b_op, struct empty_dir_op, op);
-	struct bch_dirent *dirent = key_to_dirent(k);
-
-	pr_debug("saw %llu:%llu (%s) -> %llu (checking for %llu)",
-		 KEY_INODE(k), KEY_OFFSET(k),
-		 dirent->d_name, dirent->d_inum, op->dir_inum);
-
-	if (KEY_INODE(k) > op->dir_inum)
-		return MAP_DONE;
-
-	if (KEY_INODE(k) < op->dir_inum)
-		return MAP_CONTINUE;
-
-	return -ENOTEMPTY;
 }
 
 int bch_empty_dir(struct cache_set *c, u64 dir_inum)
 {
-	struct empty_dir_op op;
-	int ret;
+	struct btree_iter iter;
+	struct bkey *k;
 
-	bch_btree_op_init(&op.op, BTREE_ID_DIRENTS, -1);
-	op.dir_inum = dir_inum;
+	for_each_btree_key(&iter, c, BTREE_ID_DIRENTS, k,
+			   &KEY(dir_inum, 0, 0)) {
+		struct bch_dirent *dirent = key_to_dirent(k);
 
-	ret = bch_btree_map_keys(&op.op, c,
-				 &KEY(dir_inum, 0, 0),
-				 bch_empty_dir_fn, 0);
+		pr_debug("saw %llu:%llu (%s) -> %llu (checking for %llu)",
+			 KEY_INODE(k), KEY_OFFSET(k),
+			 dirent->d_name, dirent->d_inum, dir_inum);
 
-	return ret == -ENOTEMPTY ? ret : 0;
-}
+		if (KEY_INODE(k) > dir_inum)
+			break;
 
-struct readdir_op {
-	struct btree_op		op;
-	struct dir_context	*ctx;
-	u64			inum;
-};
+		if (KEY_INODE(k) == dir_inum) {
+			btree_iter_unlock(&iter);
+			return -ENOTEMPTY;
+		}
 
-static int bch_readdir_fn(struct btree_op *b_op, struct btree *b,
-			  struct bkey *k)
-{
-	struct readdir_op *op = container_of(b_op, struct readdir_op, op);
-	struct bch_dirent *dirent = key_to_dirent(k);
-	unsigned len;
+	}
+	btree_iter_unlock(&iter);
 
-	pr_debug("saw %llu:%llu (%s) -> %llu",
-		 KEY_INODE(k), KEY_OFFSET(k),
-		 dirent->d_name, dirent->d_inum);
-
-	if (bkey_cmp(k, &KEY(op->inum, op->ctx->pos, 0)) < 0)
-		return MAP_CONTINUE;
-
-	if (KEY_INODE(k) > op->inum)
-		return MAP_DONE;
-
-	len = dirent_name_bytes(dirent);
-
-	pr_debug("emitting %s", dirent->d_name);
-
-	/*
-	 * XXX: dir_emit() can fault and block, while we're holding locks
-	 */
-	if (!dir_emit(op->ctx, dirent->d_name, len,
-		      dirent->d_inum, DT_UNKNOWN))
-		return MAP_DONE;
-
-	op->ctx->pos = KEY_OFFSET(k) + 1;
-
-	return MAP_CONTINUE;
+	return 0;
 }
 
 int bch_readdir(struct file *file, struct dir_context *ctx)
@@ -385,20 +317,43 @@ int bch_readdir(struct file *file, struct dir_context *ctx)
 	struct inode *inode = file_inode(file);
 	struct super_block *sb = inode->i_sb;
 	struct cache_set *c = sb->s_fs_info;
-	struct readdir_op op;
-	int ret;
+	struct btree_iter iter;
+	struct bkey *k;
 
 	if (!dir_emit_dots(file, ctx))
 		return 0;
 
-	bch_btree_op_init(&op.op, BTREE_ID_DIRENTS, -1);
-	op.ctx = ctx;
-	op.inum = inode->i_ino;
+	pr_debug("listing for %lu from %llu", inode->i_ino, ctx->pos);
 
-	pr_debug("listing for %llu from %llu", op.inum, ctx->pos);
+	for_each_btree_key(&iter, c, BTREE_ID_DIRENTS, k,
+			   &KEY(inode->i_ino, ctx->pos, 0)) {
+		struct bch_dirent *dirent = key_to_dirent(k);
+		unsigned len;
 
-	ret = bch_btree_map_keys(&op.op, c,
-				 &KEY(op.inum, ctx->pos, 0),
-				 bch_readdir_fn, 0);
-	return ret < 0 ? ret : 0;
+		pr_debug("saw %llu:%llu (%s) -> %llu",
+			 KEY_INODE(k), KEY_OFFSET(k),
+			 dirent->d_name, dirent->d_inum);
+
+		if (bkey_cmp(k, &KEY(inode->i_ino, ctx->pos, 0)) < 0)
+			continue;
+
+		if (KEY_INODE(k) > inode->i_ino)
+			break;
+
+		len = dirent_name_bytes(dirent);
+
+		pr_debug("emitting %s", dirent->d_name);
+
+		/*
+		 * XXX: dir_emit() can fault and block, while we're holding locks
+		 */
+		if (!dir_emit(ctx, dirent->d_name, len,
+			      dirent->d_inum, DT_UNKNOWN))
+			break;
+
+		ctx->pos = KEY_OFFSET(k) + 1;
+	}
+	btree_iter_unlock(&iter);
+
+	return 0;
 }

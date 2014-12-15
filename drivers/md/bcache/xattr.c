@@ -65,63 +65,40 @@ const struct btree_keys_ops bch_xattr_ops = {
 	.key_invalid	= bch_xattr_invalid,
 };
 
-struct xattr_get_op {
-	struct btree_op		op;
-	unsigned		type;
-	struct qstr		name;
-	void			*buffer;
-	size_t			size;
-};
-
-static int bch_xattr_get_fn(struct btree_op *b_op, struct btree *b,
-			    struct bkey *k)
-{
-	struct xattr_get_op *op = container_of(b_op, struct xattr_get_op, op);
-	struct bch_xattr *xattr = key_to_xattr(k);
-
-	/* hole, not found */
-	if (!bch_val_u64s(k))
-		return -ENOENT;
-
-	/* collision? */
-	if (xattr_cmp(xattr, &op->name))
-		return MAP_CONTINUE;
-
-	if (xattr->x_val_len > op->size)
-		return -ERANGE;
-
-	memcpy(op->buffer, xattr_val(xattr), xattr->x_val_len);
-
-	return MAP_DONE;
-}
-
 static int bch_xattr_get(struct dentry *dentry, const char *name,
 			 void *buffer, size_t size, int type)
 {
 	struct cache_set *c = dentry->d_inode->i_sb->s_fs_info;
-	struct xattr_get_op op;
-	int ret;
+	struct qstr qname = (struct qstr) QSTR_INIT(name, strlen(name));
+	struct btree_iter iter;
+	struct bkey *k;
 
 	if (strcmp(name, "") == 0)
 		return -EINVAL;
 
-	bch_btree_op_init(&op.op, BTREE_ID_XATTRS, -1);
-	op.type		= type;
-	op.name		= (struct qstr) QSTR_INIT(name, strlen(name));
-	op.buffer	= buffer;
-	op.size		= size;
+	for_each_btree_key_with_holes(&iter, c, BTREE_ID_XATTRS, k,
+				      &KEY(dentry->d_inode->i_ino,
+					   bch_xattr_hash(&qname), 0)) {
+		struct bch_xattr *xattr = key_to_xattr(k);
 
-	ret = bch_btree_map_keys(&op.op, c,
-				 &KEY(dentry->d_inode->i_ino,
-				      bch_xattr_hash(&op.name), 0),
-				 bch_xattr_get_fn, MAP_HOLES);
+		/* hole, not found */
+		if (!bch_val_u64s(k))
+			break;
 
-	pr_debug("%s %sfound", name, ret ? "not " : "");
+		/* collision? */
+		if (!xattr_cmp(xattr, &qname)) {
+			if (xattr->x_val_len > size) {
+				btree_iter_unlock(&iter);
+				return -ERANGE;
+			}
 
-	if (ret < 0)
-		return ret;
-
-	return 0;
+			memcpy(buffer, xattr_val(xattr), xattr->x_val_len);
+			btree_iter_unlock(&iter);
+			return 0;
+		}
+	}
+	btree_iter_unlock(&iter);
+	return -ENOENT;
 }
 
 struct xattr_set_op {
@@ -228,54 +205,38 @@ static size_t bch_xattr_emit(struct dentry *dentry, struct bch_xattr *xattr,
 		: 0;
 }
 
-struct xattr_list_op {
-	struct btree_op		op;
-	struct dentry		*dentry;
-	u64			inum;
-	char			*buffer;
-	size_t			buffer_size;
-};
-
-static int bch_xattr_list_fn(struct btree_op *b_op, struct btree *b,
-			     struct bkey *k)
-{
-	struct xattr_list_op *op = container_of(b_op, struct xattr_list_op, op);
-	struct bch_xattr *xattr = key_to_xattr(k);
-	size_t len;
-
-	BUG_ON(KEY_INODE(k) < op->inum);
-
-	if (KEY_INODE(k) > op->inum)
-		return MAP_DONE;
-
-	len = bch_xattr_emit(op->dentry, xattr, op->buffer, op->buffer_size);
-	if (len > op->buffer_size)
-		return -ERANGE;
-
-	op->buffer += len;
-	op->buffer_size -= len;
-
-	return MAP_CONTINUE;
-}
-
 ssize_t bch_xattr_list(struct dentry *dentry, char *buffer, size_t buffer_size)
 {
 	struct cache_set *c = dentry->d_sb->s_fs_info;
-	struct xattr_list_op op;
-	int ret;
+	struct btree_iter iter;
+	struct bkey *k;
+	u64 inum = dentry->d_inode->i_ino;
+	ssize_t ret = 0;
 
-	bch_btree_op_init(&op.op, BTREE_ID_XATTRS, -1);
-	op.dentry	= dentry;
-	op.inum		= dentry->d_inode->i_ino;
-	op.buffer	= buffer;
-	op.buffer_size	= buffer_size;
+	for_each_btree_key(&iter, c, BTREE_ID_XATTRS, k,
+			   &KEY(inum, 0, 0)) {
+		struct bch_xattr *xattr = key_to_xattr(k);
+		size_t len;
 
-	pr_debug("listing for %llu", op.inum);
+		BUG_ON(KEY_INODE(k) < inum);
 
-	ret = bch_btree_map_keys(&op.op, c,
-				 &KEY(op.inum, 0, 0),
-				 bch_xattr_list_fn, 0);
-	return ret < 0 ? ret : buffer_size - op.buffer_size;
+		if (KEY_INODE(k) > inum)
+			break;
+
+		len = bch_xattr_emit(dentry, xattr, buffer, buffer_size);
+		if (len > buffer_size) {
+			btree_iter_unlock(&iter);
+			return -ERANGE;
+		}
+
+		ret += len;
+		buffer += len;
+		buffer_size -= len;
+
+	}
+	btree_iter_unlock(&iter);
+
+	return ret;
 }
 
 static size_t bch_vfs_xattr_list(struct dentry *dentry, char *list,

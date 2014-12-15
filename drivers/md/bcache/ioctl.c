@@ -198,80 +198,72 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 
 /* list_keys ioctl */
 
-struct bch_ioctl_list_keys_op {
-	struct bch_ioctl_list_keys	i;
-	struct btree_op			op;
-
-	BKEY_PADDED(prev_key);
-};
-
-static int bch_ioctl_list_keys_fn(struct btree_op *b_op, struct btree *b,
-				  struct bkey *k)
+static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 {
-	struct bch_ioctl_list_keys_op *op = container_of(b_op,
-				struct bch_ioctl_list_keys_op, op);
-	BKEY_PADDED(k) tmp;
+	struct btree_iter iter;
+	struct bkey *k;
+	int ret = 0;
+	BKEY_PADDED(k) prev_key;
 
-	if (bkey_cmp(&START_KEY(k), &op->i.end) >= 0)
-		return MAP_DONE;
-
-	if (!(op->i.flags & BCH_IOCTL_LIST_VALUES)) {
-		tmp.k = *k;
-		k = &tmp.k;
-		bch_set_val_u64s(k, 0);
-	}
-
-	if (b->keys.ops->is_extents) {
-		if (k != &tmp.k) {
-			bkey_copy(&tmp.k, k);
-			k = &tmp.k;
-		}
-
-		if (bkey_cmp(&op->i.start, &START_KEY(k)) > 0)
-			bch_cut_front(&op->i.start, k);
-
-		if (bkey_cmp(&op->i.end, k) <= 0)
-			bch_cut_back(&op->i.end, k);
-
-		if (!KEY_SIZE(k))
-			return MAP_CONTINUE;
-
-		if (op->i.keys_found &&
-		    bch_bkey_try_merge(&b->keys, &op->prev_key, k)) {
-			op->i.keys_found -= KEY_U64s(&op->prev_key);
-			k = &op->prev_key;
-		} else {
-			bkey_copy(&op->prev_key, k);
-		}
-	}
-
-	if (op->i.keys_found + KEY_U64s(k) >
-	    op->i.buf_size / sizeof(u64))
-		return -ENOSPC;
-
-	if (copy_to_user(((u64 __user *) (unsigned long)
-			  op->i.buf) + op->i.keys_found,
-			 k, bkey_bytes(k)))
-		return -EFAULT;
-
-	op->i.keys_found += KEY_U64s(k);
-	return MAP_CONTINUE;
-}
-
-static int __bch_list_keys(struct cache_set *c,
-			   struct bch_ioctl_list_keys_op *op)
-{
-	int ret;
-
-	if (op->i.btree_id != BTREE_ID_EXTENTS &&
-	    op->i.btree_id != BTREE_ID_INODES)
+	if (i->btree_id != BTREE_ID_EXTENTS &&
+	    i->btree_id != BTREE_ID_INODES)
 		return -EINVAL;
 
-	bch_btree_op_init(&op->op, op->i.btree_id, -1);
-	ret = bch_btree_map_keys(&op->op, c, &op->i.start,
-				 bch_ioctl_list_keys_fn, 0);
+	for_each_btree_key(&iter, c, i->btree_id, k, &i->start) {
+		BKEY_PADDED(k) tmp;
 
-	return ret < 0 ? ret : 0;
+		if (bkey_cmp(&START_KEY(k), &i->end) >= 0)
+			break;
+
+		if (!(i->flags & BCH_IOCTL_LIST_VALUES)) {
+			tmp.k = *k;
+			k = &tmp.k;
+			bch_set_val_u64s(k, 0);
+		}
+
+		if (i->btree_id == BTREE_ID_EXTENTS) {
+			if (k != &tmp.k) {
+				bkey_copy(&tmp.k, k);
+				k = &tmp.k;
+			}
+
+			if (bkey_cmp(&i->start, &START_KEY(k)) > 0)
+				bch_cut_front(&i->start, k);
+
+			if (bkey_cmp(&i->end, k) <= 0)
+				bch_cut_back(&i->end, k);
+
+			if (!KEY_SIZE(k))
+				continue;
+
+			if (i->keys_found &&
+			    bch_bkey_try_merge(&iter.nodes[0]->keys,
+					       &prev_key.k, k)) {
+				i->keys_found -= KEY_U64s(&prev_key.k);
+				k = &prev_key.k;
+			} else {
+				bkey_copy(&prev_key.k, k);
+			}
+		}
+
+		if (i->keys_found + KEY_U64s(k) >
+		    i->buf_size / sizeof(u64)) {
+			ret = -ENOSPC;
+			break;
+		}
+
+		if (copy_to_user(((u64 __user *) (unsigned long)
+				  i->buf) + i->keys_found,
+				 k, bkey_bytes(k))) {
+			ret = -EFAULT;
+			break;
+		}
+
+		i->keys_found += KEY_U64s(k);
+	}
+	btree_iter_unlock(&iter);
+
+	return ret;
 }
 
 int bch_list_keys(struct cache_set *c, unsigned btree_id,
@@ -279,24 +271,24 @@ int bch_list_keys(struct cache_set *c, unsigned btree_id,
 		  struct bkey *buf, size_t buf_size,
 		  unsigned flags, unsigned *keys_found)
 {
-	struct bch_ioctl_list_keys_op op;
+	struct bch_ioctl_list_keys i;
 	mm_segment_t fs;
 	int ret;
 
 	fs = get_fs();
 	set_fs(KERNEL_DS);
 
-	memset(&op, 0, sizeof(op));
+	memset(&i, 0, sizeof(i));
 
-	op.i.btree_id	= btree_id;
-	op.i.flags	= flags;
-	op.i.start	= *start;
-	op.i.end	= *end;
-	op.i.buf	= (unsigned long) buf;
-	op.i.buf_size	= buf_size;
+	i.btree_id	= btree_id;
+	i.flags	= flags;
+	i.start	= *start;
+	i.end	= *end;
+	i.buf	= (unsigned long) buf;
+	i.buf_size	= buf_size;
 
-	ret = __bch_list_keys(c, &op);
-	*keys_found = op.i.keys_found;
+	ret = __bch_list_keys(c, &i);
+	*keys_found = i.keys_found;
 
 	set_fs(fs);
 
@@ -307,18 +299,16 @@ EXPORT_SYMBOL(bch_list_keys);
 static long bch_ioctl_list_keys(struct cache_set *c, unsigned long arg)
 {
 	struct bch_ioctl_list_keys __user *user_i = (void __user *) arg;
-	struct bch_ioctl_list_keys_op op;
+	struct bch_ioctl_list_keys i;
 	int ret;
 
-	memset(&op, 0, sizeof(op));
-
-	if (copy_from_user(&op.i, user_i, sizeof(op.i)))
+	if (copy_from_user(&i, user_i, sizeof(i)))
 		return -EFAULT;
 
-	op.i.keys_found = 0;
+	i.keys_found = 0;
 
-	ret = __bch_list_keys(c, &op);
-	if (put_user(op.i.keys_found, &user_i->keys_found))
+	ret = __bch_list_keys(c, &i);
+	if (put_user(i.keys_found, &user_i->keys_found))
 		return -EFAULT;
 
 	return ret;
@@ -447,61 +437,8 @@ static long bch_query_uuid(struct cache_set *c, unsigned long arg)
 
 /* copy ioctl */
 
-struct bch_copy_op {
-	struct btree_op		op;
-	struct keylist		keys;
-
-	struct bkey		src_loc;
-	struct bkey		src_end;
-	u64			dst_inode;
-	u64			dst_shift;
-	u64			version;
-};
-
-static int bch_copy_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
-{
-	struct bch_copy_op *op = container_of(b_op, struct bch_copy_op, op);
-	struct bkey *copy;
-
-	/* Note: It is caller (client) responsibility to clear
-	   the destination by doing discards.
-	   Hence this doesn't map holes!
-	*/
-
-	BUG_ON(bkey_cmp(k, &op->src_loc) <= 0);
-
-	if (bkey_cmp(&START_KEY(k), &op->src_end) >= 0) {
-		op->src_loc = *k;
-		return MAP_DONE;
-	}
-
-	/* If memory alloc fails, just insert what we've slurped up so far */
-	if (bch_keylist_realloc(&op->keys, KEY_U64s(k)))
-		return MAP_DONE;
-
-	/* cut pointers to size */
-	copy = op->keys.top;
-	bkey_copy(copy, k);
-	bch_cut_front(&op->src_loc, copy);
-	bch_cut_back(&op->src_end, copy);
-
-	/* modify copy to reference destination */
-	SET_KEY_INODE(copy, op->dst_inode);
-	SET_KEY_OFFSET(copy, KEY_OFFSET(copy) + op->dst_shift);
-
-	if (op->version != ((u64) 0ULL)) {
-		/* Version 0 means retain the source version */
-		/* Else use the new version */
-		SET_KEY_VERSION(copy, (op->version));
-	}
-
-	bch_keylist_enqueue(&op->keys);
-	op->src_loc = *k;
-
-	return MAP_CONTINUE;
-}
-
-/* bch_copy - copy a range of size @sectors beginning @src_begin
+/**
+ * bch_copy - copy a range of size @sectors beginning @src_begin
  *	      to a destination beginning @dst_begin.
  * @c		cache set
  * @src_start	pointer to start location the copy source
@@ -514,22 +451,22 @@ static int bch_copy_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
  *	 0 on success
  *	<0 on error
  *
+ * Note: It is caller (client) responsibility to clear the destination by doing
+ * discards.  Hence this doesn't map holes!
+ *
  * XXX: this needs to be moved to generic io code
  */
 int bch_copy(struct cache_set *c, struct bkey *src_start, struct bkey *dst_start,
 	     unsigned long sectors, unsigned long version)
 {
-	struct bch_copy_op op;
+	struct keylist keys;
+	struct bkey src_loc = START_KEY(src_start);
+	struct bkey src_end = KEY(KEY_INODE(src_start), KEY_START(src_start) + sectors, 0);
+	u64 dst_inode = KEY_INODE(dst_start);
+	u64 dst_shift = KEY_START(dst_start) - KEY_START(src_start);
 	int ret = 0;
 
-	bch_btree_op_init(&op.op, BTREE_ID_EXTENTS, -1);
-	bch_keylist_init(&op.keys);
-	op.src_loc = START_KEY(src_start);
-	op.src_end = KEY(KEY_INODE(src_start), KEY_START(src_start) + sectors, 0);
-	op.dst_inode = KEY_INODE(dst_start);
-	op.dst_shift = KEY_START(dst_start) - KEY_START(src_start);
-
-	op.version = version;
+	bch_keylist_init(&keys);
 
 	/* XXX: probably deserves input validation and errors here */
 
@@ -538,33 +475,62 @@ int bch_copy(struct cache_set *c, struct bkey *src_start, struct bkey *dst_start
 	 * size, so we loop until the full range is covered. op->src_loc keeps
 	 * track of our current location in the copy operation.
 	 */
-	while (bkey_cmp(&op.src_loc, &op.src_end) < 0) {
-		ret = bch_btree_map_keys(&op.op, c, &op.src_loc, bch_copy_fn, 0);
+	while (bkey_cmp(&src_loc, &src_end) < 0) {
+		struct btree_iter iter;
+		struct bkey *k;
 
+		for_each_btree_key(&iter, c, BTREE_ID_EXTENTS, k, &src_loc) {
+			struct bkey *copy;
+
+			BUG_ON(bkey_cmp(k, &src_loc) <= 0);
+
+			if (bkey_cmp(&START_KEY(k), &src_end) >= 0) {
+				src_loc = *k;
+				goto unlock;
+			}
+
+			/*
+			 * If memory alloc fails, just insert what we've slurped
+			 * up so far
+			 */
+			if (bch_keylist_realloc(&keys, KEY_U64s(k)))
+				goto unlock;
+
+			/* cut pointers to size */
+			copy = keys.top;
+			bkey_copy(copy, k);
+			bch_cut_front(&src_loc, copy);
+			bch_cut_back(&src_end, copy);
+
+			/* modify copy to reference destination */
+			SET_KEY_INODE(copy, dst_inode);
+			SET_KEY_OFFSET(copy, KEY_OFFSET(copy) + dst_shift);
+
+			if (version != ((u64) 0ULL)) {
+				/* Version 0 means retain the source version */
+				/* Else use the new version */
+				SET_KEY_VERSION(copy, version);
+			}
+
+			bch_keylist_enqueue(&keys);
+			src_loc = *k;
+		}
+
+		/* If we get here, we're done: */
+		src_loc = src_end;
+unlock:
+		btree_iter_unlock(&iter);
+
+		ret = bch_btree_insert(c, BTREE_ID_EXTENTS, &keys, NULL, NULL);
 		if (ret < 0)
 			break;
 
-		/*
-		 * when MAP_CONTINUE is returned from
-		 * bch_btree_map_keys, we know the map function was
-		 * expecting more keys where there weren't any.
-		 */
-		if (ret == MAP_CONTINUE)
-			op.src_loc = op.src_end;
-
-		ret = bch_btree_insert(c, BTREE_ID_EXTENTS, &op.keys, NULL, NULL);
-		if (ret < 0)
-			break;
-
-		BUG_ON(!bch_keylist_empty(&op.keys));
+		BUG_ON(!bch_keylist_empty(&keys));
 	}
 
-	bch_keylist_free(&op.keys);
+	bch_keylist_free(&keys);
 
-	if (ret < 0)
-		return ret;
-
-	return 0;
+	return ret;
 }
 
 struct bch_ioctl_copy_op {

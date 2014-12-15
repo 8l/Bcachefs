@@ -211,88 +211,69 @@ int bch_inode_rm(struct cache_set *c, u64 inode_nr)
 				NULL, NULL);
 }
 
-struct find_by_inum_op {
-	struct btree_op		op;
-	struct bch_inode	*ret;
-};
-
-static int find_by_inum_fn(struct btree_op *b_op, struct btree *b,
-			   struct bkey *k)
-{
-	struct find_by_inum_op *op = container_of(b_op,
-			struct find_by_inum_op, op);
-
-	/* hole, not found */
-	if (!bch_val_u64s(k))
-		return -ENOENT;
-
-	bkey_copy(op->ret, k);
-	return MAP_DONE;
-}
-
 int bch_inode_find_by_inum(struct cache_set *c, u64 inode_nr,
 			   struct bch_inode *ret)
 {
-	struct find_by_inum_op op;
+	struct btree_iter iter;
+	struct bkey *k;
 
-	bch_btree_op_init(&op.op, BTREE_ID_INODES, 0);
-	op.ret = ret;
+	for_each_btree_key_with_holes(&iter, c, BTREE_ID_INODES, k,
+				      &KEY(inode_nr, 0, 0)) {
+		/* hole, not found */
+		if (!bch_val_u64s(k))
+			break;
 
-	return bch_btree_map_keys(&op.op, c,
-				  &KEY(inode_nr, 0, 0),
-				  find_by_inum_fn, MAP_HOLES);
+		bkey_copy(ret, k);
+		btree_iter_unlock(&iter);
+		return 0;
+
+	}
+	btree_iter_unlock(&iter);
+	return -ENOENT;
 }
 
-struct find_op {
-	struct btree_op			op;
-	uuid_le				*uuid;
-	struct bch_inode_blockdev	*ret;
-	u64				max;
-};
-
-static int blockdev_inode_find_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
+static int __bch_blockdev_inode_find_by_uuid(struct cache_set *c, uuid_le *uuid,
+					     struct bch_inode_blockdev *ret,
+					     u64 start_inode, u64 end_inode)
 {
-	struct find_op *op = container_of(b_op, struct find_op, op);
-	struct bch_inode *inode = key_to_inode(k);
+	struct btree_iter iter;
+	struct bkey *k;
 
-	if (KEY_INODE(k) >= op->max)
-		return -ENOENT;
+	for_each_btree_key(&iter, c, BTREE_ID_INODES, k,
+			   &KEY(start_inode, 0, 0)) {
+		struct bch_inode *inode = key_to_inode(k);
 
-	if (inode->i_inode_format == BCH_INODE_BLOCKDEV) {
-		struct bch_inode_blockdev *binode =
-			container_of(inode, struct bch_inode_blockdev, i_inode);
+		if (KEY_INODE(k) >= end_inode)
+			break;
 
-		pr_debug("found inode %llu: %pU (u64s %llu)",
-			 KEY_INODE(k), binode->i_uuid.b, KEY_U64s(k));
+		if (inode->i_inode_format == BCH_INODE_BLOCKDEV) {
+			struct bch_inode_blockdev *binode =
+				container_of(inode, struct bch_inode_blockdev, i_inode);
 
-		if (!memcmp(op->uuid, &binode->i_uuid, 16)) {
-			memcpy(op->ret, binode, sizeof(*binode));
-			return MAP_DONE;
+			pr_debug("found inode %llu: %pU (u64s %llu)",
+				 KEY_INODE(k), binode->i_uuid.b, KEY_U64s(k));
+
+			if (!memcmp(uuid, &binode->i_uuid, 16)) {
+				memcpy(ret, binode, sizeof(*binode));
+				btree_iter_unlock(&iter);
+				return 0;
+			}
 		}
 	}
-
-	return MAP_CONTINUE;
+	btree_iter_unlock(&iter);
+	return -ENOENT;
 }
 
 int bch_blockdev_inode_find_by_uuid(struct cache_set *c, uuid_le *uuid,
 				    struct bch_inode_blockdev *ret)
 {
-	struct find_op op;
-
-	bch_btree_op_init(&op.op, BTREE_ID_INODES, -1);
-	op.uuid = uuid;
-	op.ret = ret;
-	op.max = BLOCKDEV_INODE_MAX;
-
-	if (bch_btree_map_keys(&op.op, c, NULL,
-			       blockdev_inode_find_fn, 0) == MAP_DONE)
+	if (!__bch_blockdev_inode_find_by_uuid(c, uuid, ret,
+					       0, BLOCKDEV_INODE_MAX))
 		return 0;
 
-	op.max = ULLONG_MAX;
-
-	if (bch_btree_map_keys(&op.op, c,
-			       &KEY(BCACHE_USER_INODE_RANGE, 0, 0),
-			       blockdev_inode_find_fn, 0) == MAP_DONE)
+	if (!__bch_blockdev_inode_find_by_uuid(c, uuid, ret,
+					       BCACHE_USER_INODE_RANGE,
+					       ULLONG_MAX))
 		return 0;
 
 	return -ENOENT;

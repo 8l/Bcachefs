@@ -410,52 +410,36 @@ static int bch_tmpfile(struct inode *dir, struct dentry *dentry, umode_t mode)
 	return 0;
 }
 
-struct fiemap_op {
-	struct btree_op			op;
-	struct fiemap_extent_info	*fieinfo;
-	struct bkey			end;
-};
-
-static int bch_fiemap_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
-{
-	struct fiemap_op *op = container_of(b_op, struct fiemap_op, op);
-	unsigned ptr;
-	int ret;
-
-	if (bkey_cmp(&START_KEY(k), &op->end) >= 0)
-		return MAP_DONE;
-
-	for (ptr = 0; ptr < bch_extent_ptrs(k); ptr++) {
-		ret = fiemap_fill_next_extent(op->fieinfo,
-					      KEY_START(k),
-					      PTR_OFFSET(k, ptr),
-					      KEY_SIZE(k), 0);
-		if (ret < 0)
-			return ret;
-	}
-
-	return MAP_CONTINUE;
-}
-
 static int bch_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		      u64 start, u64 len)
 {
 	struct cache_set *c = inode->i_sb->s_fs_info;
-	struct fiemap_op op;
-	int ret;
+	struct btree_iter iter;
+	struct bkey *k;
+	unsigned ptr;
+	int ret = 0;
 
 	if (start + len < start)
 		return -EINVAL;
 
-	bch_btree_op_init(&op.op, BTREE_ID_EXTENTS, -1);
-	op.fieinfo = fieinfo;
-	op.end = KEY(inode->i_ino, start + len, 0);
+	for_each_btree_key(&iter, c, BTREE_ID_EXTENTS, k,
+			   &KEY(inode->i_ino, start, 0)) {
+		if (bkey_cmp(&START_KEY(k),
+			     &KEY(inode->i_ino, start + len, 0)) >= 0)
+			break;
 
-	ret = bch_btree_map_keys(&op.op, c,
-				 &KEY(inode->i_ino, start, 0),
-				 bch_fiemap_fn, 0);
-
-	return ret < 0 ? ret : 0;
+		for (ptr = 0; ptr < bch_extent_ptrs(k); ptr++) {
+			ret = fiemap_fill_next_extent(fieinfo,
+						      KEY_START(k),
+						      PTR_OFFSET(k, ptr),
+						      KEY_SIZE(k), 0);
+			if (ret < 0)
+				goto out;
+		}
+	}
+out:
+	btree_iter_unlock(&iter);
+	return ret;
 }
 
 static const struct file_operations bch_file_operations = {
@@ -982,31 +966,18 @@ static void bch_evict_inode(struct inode *inode)
 		bch_inode_rm(c, inode->i_ino);
 }
 
-struct count_inodes_op {
-	struct btree_op op;
-	u64 inodes;
-};
-
-static int bch_count_inodes_fn(struct btree_op *b_op, struct btree *b,
-			       struct bkey *k)
-{
-	struct count_inodes_op *op = container_of(b_op,
-					struct count_inodes_op, op);
-
-	op->inodes++;
-	return MAP_CONTINUE;
-}
-
 static u64 bch_count_inodes(struct cache_set *c)
 {
-	struct count_inodes_op op;
+	struct btree_iter iter;
+	struct bkey *k;
+	u64 inodes = 0;
 
-	bch_btree_op_init(&op.op, BTREE_ID_INODES, -1);
-	op.inodes = 0;
+	for_each_btree_key(&iter, c, BTREE_ID_INODES, k, NULL)
+		inodes++;
 
-	bch_btree_map_keys(&op.op, c, NULL, bch_count_inodes_fn, 0);
+	btree_iter_unlock(&iter);
 
-	return op.inodes;
+	return inodes;
 }
 
 static int bch_statfs(struct dentry *dentry, struct kstatfs *buf)

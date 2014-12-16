@@ -269,9 +269,23 @@ struct bbio {
 	unsigned int            bi_bvec_done;	/* number of bytes completed in
 						   current bvec */
 	unsigned		submit_time_us;
+
+	/*
+	 * The following is a bkey header followed by space for a
+	 * single pointer, namely the one that we are doing I/O
+	 * to/from. These fields must be contiguous!
+	 */
 	struct bkey		key;
-	uint64_t		pad;
-	/* Only ever have a single pointer (the one we're doing io to/from) */
+	uint64_t		pad; /* The pointer */
+
+	/*
+	 * extent_info is used to capture extent information for reads,
+	 * including for retried reads.
+	 * The field is usually NULL.
+	 */
+	void			*extent_info;
+
+	/* The bio must be the last field in the bbio, as it is variable-size */
 	struct bio		bio;
 };
 

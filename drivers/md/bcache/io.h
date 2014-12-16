@@ -25,4 +25,30 @@ void bch_wake_delayed_writes(unsigned long data);
 
 extern struct workqueue_struct *bcache_io_wq;
 
+/*
+ * The result buffer is unordered.
+ */
+
+struct bch_versions_result {
+	spinlock_t lock;
+	unsigned size;		/* In bch_version_records */
+	unsigned found;		/* In bch_version_records */
+	struct bch_version_record * __user buf;
+};
+
+/*
+ * This returns the versions out of order!
+ */
+
+int bch_read_with_versions(struct cache_set *,
+			   struct bio *,
+			   u64 inode,
+			   struct bch_versions_result *versions);
+
+
+static inline u64 sector_bytes(u64 sectors)
+{
+	return sectors << BCH_SECTOR_SHIFT;
+}
+
 #endif /* _BCACHE_IO_H */

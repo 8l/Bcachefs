@@ -819,7 +819,7 @@ move:
 			}
 
 			moved++;
-			iter.op.locks_want = -1;
+			iter.locks_want = -1;
 		}
 		ret = btree_iter_unlock(&iter);
 		if (ret)

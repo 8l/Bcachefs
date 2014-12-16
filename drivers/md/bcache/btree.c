@@ -1199,8 +1199,7 @@ static struct btree *bch_btree_node_get(struct cache_set *c,
 	BUG_ON(level < 0);
 retry:
 	b = mca_find(c, k);
-
-	if (!b) {
+	if (unlikely(!b)) {
 		b = mca_alloc(c, k, level, op->id, &op->cl);
 		if (!b)
 			goto retry;

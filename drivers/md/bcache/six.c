@@ -17,10 +17,8 @@ bool __six_trylock(struct six_lock *lock,
 			return false;
 
 		v = cmpxchg(&lock->state.v, old.v, old.v + lock_val);
-		if (v == old.v) {
-			six_acquire(&lock->dep_map);
+		if (v == old.v)
 			return true;
-		}
 
 		old.v = v;
 	}
@@ -40,10 +38,8 @@ bool __six_relock(struct six_lock *lock,
 			return false;
 
 		v = cmpxchg(&lock->state.v, old.v, old.v + lock_val);
-		if (v == old.v) {
-			six_acquire(&lock->dep_map);
+		if (v == old.v)
 			return true;
-		}
 
 		old.v = v;
 	}
@@ -74,8 +70,6 @@ void __six_unlock(struct six_lock *lock,
 		  unsigned long unlock_val)
 {
 	union six_lock_state state;
-
-	six_release(&lock->dep_map);
 
 	smp_wmb();
 	state.v = atomic64_add_return(unlock_val, &lock->state.counter);

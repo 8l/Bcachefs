@@ -131,18 +131,26 @@ void __six_unlock(struct six_lock *, unsigned long);
 	static inline bool six_trylock_##type(struct six_lock *lock)	\
 	{								\
 		trace_six_trylock(lock, #type);				\
-		return __six_trylock(lock,				\
-				     __SIX_LOCK_VAL_##type,		\
-				     __SIX_LOCK_FAIL_##type);		\
+		if (__six_trylock(lock,					\
+				  __SIX_LOCK_VAL_##type,		\
+				  __SIX_LOCK_FAIL_##type)) {		\
+			six_acquire(&lock->dep_map);			\
+			return true;					\
+		}							\
+		return false;						\
 	}								\
 									\
 	static inline bool six_relock_##type(struct six_lock *lock, u32 seq)\
 	{								\
 		trace_six_relock(lock, #type);				\
-		return __six_relock(lock,				\
-				    __SIX_LOCK_VAL_##type,		\
-				    __SIX_LOCK_FAIL_##type,		\
-				    seq);				\
+		if (__six_relock(lock,					\
+				 __SIX_LOCK_VAL_##type,			\
+				 __SIX_LOCK_FAIL_##type,		\
+				 seq)) {				\
+			six_acquire(&lock->dep_map);			\
+			return true;					\
+		}							\
+		return false;						\
 	}								\
 									\
 	static inline void six_lock_##type(struct six_lock *lock)	\
@@ -150,12 +158,15 @@ void __six_unlock(struct six_lock *, unsigned long);
 		__six_lock(lock,					\
 			   __SIX_LOCK_VAL_##type,			\
 			   __SIX_LOCK_FAIL_##type);			\
+		six_acquire(&lock->dep_map);				\
 		trace_six_lock(lock, #type);				\
 	}								\
 									\
 	static inline void six_unlock_##type(struct six_lock *lock)	\
 	{								\
 		trace_six_unlock(lock, #type);				\
+		six_release(&lock->dep_map);				\
+									\
 		__six_unlock(lock, __SIX_UNLOCK_VAL_##type);		\
 	}
 

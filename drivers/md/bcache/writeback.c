@@ -62,6 +62,7 @@ struct dirty_io {
 	struct cached_dev	*dc;
 	struct cache		*ca;
 	struct keybuf_key	*w;
+	unsigned		ptr;
 	int			error;
 	bool			from_mempool;
 	/* Must be last */
@@ -168,7 +169,7 @@ static void read_dirty_endio(struct bio *bio, int error)
 
 	bch_count_io_errors(io->ca, error, "reading dirty data from cache");
 
-	if (ptr_stale(c, io->ca, &io->key, 0))
+	if (ptr_stale(c, io->ca, &io->key, io->ptr))
 		error = -EINTR;
 
 	percpu_ref_put(&io->ca->ref);
@@ -236,6 +237,7 @@ static void read_dirty(struct cached_dev *dc)
 			io->dc		= dc;
 			io->ca		= ca;
 			io->w		= w;
+			io->ptr		= ptr;
 			atomic_inc(&w->ref);
 
 			dirty_init(io);

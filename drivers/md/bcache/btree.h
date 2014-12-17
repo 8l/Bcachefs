@@ -198,6 +198,84 @@ static inline unsigned btree_blocks(struct cache_set *c)
 	     iter++)							\
 		hlist_for_each_entry_rcu((b), (c)->bucket_hash + iter, hash)
 
+struct btree_iter {
+	struct btree_op		op;
+
+	/* Current btree depth */
+	u8			level;
+
+	/*
+	 * Used in bch_btree_iter_traverse(), to indicate whether we're
+	 * searching for @pos or the first key strictly greater than @pos
+	 */
+	u8			is_extents;
+
+	s8			error;
+
+	struct cache_set	*c;
+
+	/* Current position of the iterator */
+	struct bkey		pos;
+
+	/*
+	 * Previous key returned - so that bch_btree_iter_next()/
+	 * bch_btree_iter_next_with_holes() can correctly advance pos.
+	 *
+	 * NOTE: KEY_DELETED(&iter->k) is used to remember whether or not the
+	 * previous key returned was a hole, so bch_btree_iter_advance_pos()
+	 * knows whether or not to advance the btree_node_iter.
+	 */
+	struct bkey		k;
+
+	/*
+	 * NOTE: Never set iter->nodes to NULL except in btree_iter_lock_root().
+	 *
+	 * This is because iter->nodes[iter->level] == NULL is how
+	 * btree_iter_next_node() knows that it's finished with a depth first
+	 * traversal. Just unlocking a node (with btree_node_unlock()) is fine,
+	 * and if you really don't want that node used again (e.g. btree_split()
+	 * freed it) decrementing lock_seq will cause btree_node_relock() to
+	 * always fail (but since freeing a btree node takes a write lock on the
+	 * node, which increments the node's lock seq, that's not actually
+	 * necessary in that example).
+	 *
+	 * One extra slot for a sentinel NULL:
+	 */
+	struct btree		*nodes[BTREE_MAX_DEPTH + 1];
+
+	struct btree_node_iter	node_iters[BTREE_MAX_DEPTH];
+};
+
+int btree_iter_unlock(struct btree_iter *);
+void bch_btree_iter_init(struct btree_iter *, struct cache_set *,
+			 enum btree_id, struct bkey *);
+
+void bch_btree_iter_traverse(struct btree_iter *);
+struct btree *bch_btree_iter_peek_node(struct btree_iter *);
+struct btree *bch_btree_iter_next_node(struct btree_iter *);
+
+struct bkey *bch_btree_iter_peek(struct btree_iter *);
+struct bkey *bch_btree_iter_peek_with_holes(struct btree_iter *);
+void bch_btree_iter_set_pos(struct btree_iter *, struct bkey *);
+void bch_btree_iter_advance_pos(struct btree_iter *);
+
+#define for_each_btree_node(iter, c, btree_id, b, start)		\
+	for (bch_btree_iter_init((iter), (c), (btree_id), start),	\
+	     (iter)->is_extents = false,				\
+	     b = bch_btree_iter_peek_node(iter);			\
+	     (b);							\
+	     (b) = bch_btree_iter_next_node(iter))
+
+#define for_each_btree_key(iter, c, btree_id, k, start)			\
+	for (bch_btree_iter_init((iter), (c), (btree_id), start);	\
+	     ((k) = bch_btree_iter_peek(iter));				\
+	     bch_btree_iter_advance_pos(iter))
+
+#define for_each_btree_key_with_holes(iter, c, btree_id, k, start)	\
+	for (bch_btree_iter_init((iter), (c), (btree_id), start);	\
+	     ((k) = bch_btree_iter_peek_with_holes(iter));		\
+	     bch_btree_iter_advance_pos(iter))
+
 /* Recursing down the btree */
 
 /**

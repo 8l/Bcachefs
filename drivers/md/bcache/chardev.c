@@ -243,9 +243,7 @@ static long bch_ioctl_add_devs(struct bch_ioctl_add_disks *ia)
 	}
 
 	for (i = 0; i < count; i++) {
-		mutex_lock(&bch_register_lock);
 		ret = bch_cache_add(c, path[i]);
-		mutex_unlock(&bch_register_lock);
 		if(ret)
 			goto err;
 	}

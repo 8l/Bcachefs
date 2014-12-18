@@ -100,7 +100,7 @@
  */
 
 struct closure;
-struct completion;
+struct closure_sleeper;
 typedef void (closure_fn) (struct closure *);
 
 struct closure_waitlist {
@@ -140,7 +140,7 @@ struct closure {
 	union {
 		struct {
 			struct workqueue_struct *wq;
-			struct completion	*complete;
+			struct closure_sleeper	*complete;
 			struct llist_node	list;
 			closure_fn		*fn;
 		};
@@ -166,6 +166,7 @@ void closure_sub(struct closure *cl, int v);
 void closure_put(struct closure *cl);
 void __closure_wake_up(struct closure_waitlist *list);
 bool closure_wait(struct closure_waitlist *list, struct closure *cl);
+
 void __closure_sync(struct closure *cl);
 
 /**
@@ -178,6 +179,30 @@ static inline void closure_sync(struct closure *cl)
 {
 	if ((atomic_read(&cl->remaining) & CLOSURE_REMAINING_MASK) != 1)
 		__closure_sync(cl);
+}
+
+int __closure_sync_interruptible_hrtimeout(struct closure *,
+					   struct closure_waitlist *,
+					   ktime_t);
+
+/**
+ * closure_sync_hrtimeout - like closure_sync() but with a timeout
+ *
+ * The closure must have been added to the given waitlist. If the timeout
+ * expires, we wake up every closure on the waitlist (possibly including this
+ * closure). This is an artifact of how closure_sync() sets the closure's fn
+ * to wake up an on-stack completion. Otherwise, if the closure waitlist is
+ * woken up after the timeout, the fn will reference a dead completion.
+ *
+ * Returns -ETIME if the timeout expired, -ERESTARTSYS if interrupted, else 0
+ */
+static inline int closure_sync_interruptible_hrtimeout(struct closure *cl,
+				struct closure_waitlist *waitlist,
+				ktime_t until)
+{
+	return ((atomic_read(&cl->remaining) & CLOSURE_REMAINING_MASK) != 1)
+		?  __closure_sync_interruptible_hrtimeout(cl, waitlist, until)
+		: 0;
 }
 
 #ifdef CONFIG_CLOSURE_DEBUG
@@ -369,5 +394,65 @@ static inline void closure_call(struct closure *cl, closure_fn fn,
 	closure_init(cl, parent);
 	continue_at_nobarrier(cl, fn, wq);
 }
+
+/**
+ * closure_wait_event - wait for a condition to become true
+ *
+ * We wait for @condition to become true, waiting on @waitlist to be woken up
+ * until it does.
+ */
+#define closure_wait_event(waitlist, condition)					\
+	do {									\
+		struct closure __cl;						\
+		closure_init_stack(&__cl);					\
+		while (1) {							\
+			if (condition)						\
+				break;						\
+			closure_wait(waitlist, &__cl);				\
+			if (condition) {					\
+				closure_wake_up(waitlist);			\
+				closure_sync(&__cl);				\
+				break;						\
+			}							\
+			closure_sync(&__cl);					\
+		}								\
+	} while (0)
+
+#define __closure_wait_event_hrtimeout(waitlist, condition, until)	\
+({									\
+	struct closure _cl;						\
+	int _ret;							\
+									\
+	closure_init_stack(&_cl);					\
+									\
+	do {								\
+		closure_wait(waitlist, &_cl);				\
+									\
+		if (condition) {					\
+			closure_wake_up(waitlist);			\
+			closure_sync(&_cl);				\
+			_ret = 0;					\
+			break;						\
+		}							\
+	} while (!(_ret = closure_sync_interruptible_hrtimeout(&_cl,	\
+							    waitlist,	\
+							    until)));	\
+									\
+	_ret;								\
+})
+
+/**
+ * closure_wait_event_timeout - wait for a condition to become true
+ *
+ * We wait for @condition to become true, waiting for @waitlist to be woken up
+ * until it does.
+ *
+ * Returns -ETIME if @condition did not become true before @until,
+ * -ERESTARTSYS if interrupted, else 0
+ */
+#define closure_wait_event_hrtimeout(waitlist, condition, until)	\
+	(condition)							\
+		? 0							\
+		: __closure_wait_event_hrtimeout(waitlist, condition, until)
 
 #endif /* _LINUX_CLOSURE_H */

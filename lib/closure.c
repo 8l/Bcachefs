@@ -105,19 +105,99 @@ bool closure_wait(struct closure_waitlist *waitlist, struct closure *cl)
 }
 EXPORT_SYMBOL(closure_wait);
 
+struct closure_sleeper {
+	struct hrtimer		timer;
+	struct task_struct	*task;
+	struct closure_waitlist	*waitlist;
+
+	int			ret;
+	int			done;
+};
+
 static void closure_sync_fn(struct closure *cl)
 {
-	complete(cl->complete);
+	struct closure_sleeper *s = cl->complete;
+
+	s->done = 1;
+	wake_up_process(s->task);
 }
+
+static void do_closure_sync(struct closure *cl,
+			    struct closure_sleeper *s,
+			    long state)
+{
+	cl->complete = s;
+	continue_at_noreturn(cl, closure_sync_fn, NULL);
+
+	while (1) {
+		set_current_state(state);
+		if (signal_pending_state(state, current)) {
+			s->ret = -ERESTARTSYS;
+			closure_wake_up(s->waitlist);
+		}
+
+		if (s->done)
+			break;
+		schedule();
+
+	}
+	__set_current_state(TASK_RUNNING);
+}
+
+static enum hrtimer_restart closure_sync_timeout_fn(struct hrtimer *timer)
+{
+	struct closure_sleeper *s =
+		container_of(timer, struct closure_sleeper, timer);
+
+	s->ret = -ETIME;
+	closure_wake_up(s->waitlist);
+
+	return HRTIMER_NORESTART;
+}
+
+int __closure_sync_interruptible_hrtimeout(struct closure *cl,
+					   struct closure_waitlist *waitlist,
+					   ktime_t until)
+{
+	struct closure_sleeper s;
+
+	s.task		= current;
+	s.waitlist	= waitlist;
+	s.ret		= 0;
+	s.done		= 0;
+
+	if (until.tv64 != KTIME_MAX) {
+		hrtimer_init_on_stack(&s.timer,
+				      CLOCK_MONOTONIC,
+				      HRTIMER_MODE_ABS);
+		s.timer.function = closure_sync_timeout_fn;
+
+		hrtimer_start_range_ns(&s.timer, until,
+				       current->timer_slack_ns,
+				       HRTIMER_MODE_ABS);
+	}
+
+	do_closure_sync(cl, &s, TASK_INTERRUPTIBLE);
+
+	if (until.tv64 != KTIME_MAX) {
+		hrtimer_cancel(&s.timer);
+		destroy_hrtimer_on_stack(&s.timer);
+	}
+
+	return s.ret;
+}
+EXPORT_SYMBOL(__closure_sync_interruptible_hrtimeout);
 
 void __closure_sync(struct closure *cl)
 {
-	DECLARE_COMPLETION_ONSTACK(wait);
+	struct closure_sleeper s;
 
-	cl->complete = &wait;
-	continue_at_noreturn(cl, closure_sync_fn, NULL);
+	s.task		= current;
+	s.waitlist	= NULL;
+	s.ret		= 0;
+	s.done		= 0;
 
-	wait_for_completion(&wait);
+	do_closure_sync(cl, &s, TASK_UNINTERRUPTIBLE);
 }
 EXPORT_SYMBOL(__closure_sync);
 

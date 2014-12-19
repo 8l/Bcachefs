@@ -142,9 +142,8 @@ again:
 				 KEY_INODE(&inode->i_key),
 				 KEY_U64s(&inode->i_key));
 
-			ret = bch_btree_insert_node(iter.nodes[0], &iter.op,
-						    &keylist_single(&inode->i_key),
-						    NULL, NULL, 0);
+			ret = bch_btree_insert_at(&iter, &keylist_single(&inode->i_key),
+						  NULL, NULL, 0, BTREE_INSERT_ATOMIC);
 			btree_iter_unlock(&iter);
 
 			if (!ret)

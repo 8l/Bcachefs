@@ -169,8 +169,8 @@ static int bch_xattr_set(struct dentry *dentry, const char *name,
 
 		bch_keylist_enqueue(&keys);
 
-		ret = bch_btree_insert_node(iter.nodes[0], &iter.op,
-					    &keys, NULL, NULL, 0);
+		ret = bch_btree_insert_at(&iter, &keys, NULL, NULL,
+					  0, BTREE_INSERT_ATOMIC);
 		btree_iter_unlock(&iter);
 		bch_keylist_free(&keys);
 

@@ -5,6 +5,7 @@
 #include "inode.h"
 #include "io.h"
 #include "request.h"
+#include "keylist.h"
 
 #include <linux/aio.h>
 #include <linux/bcache-ioctl.h>
@@ -514,17 +515,22 @@ static long bch_query_uuid(struct cache_set *c, unsigned long arg)
  *
  * XXX: this needs to be moved to generic io code
  */
-int bch_copy(struct cache_set *c, struct bkey *src_start, struct bkey *dst_start,
-	     unsigned long sectors, unsigned long version)
+int bch_copy(struct cache_set *c,
+	     struct bkey *src_start,
+	     struct bkey *dst_start,
+	     unsigned long sectors,
+	     unsigned long version)
 {
-	struct keylist keys;
+	struct scan_keylist keys;
 	struct bkey src_loc = START_KEY(src_start);
-	struct bkey src_end = KEY(KEY_INODE(src_start), KEY_START(src_start) + sectors, 0);
+	struct bkey src_end = KEY(KEY_INODE(src_start),
+				  KEY_START(src_start) + sectors,
+				  0);
 	u64 dst_inode = KEY_INODE(dst_start);
 	u64 dst_shift = KEY_START(dst_start) - KEY_START(src_start);
 	int ret = 0;
 
-	bch_keylist_init(&keys);
+	bch_scan_keylist_init(&keys, c, KEYLIST_MAX);
 
 	/* XXX: probably deserves input validation and errors here */
 
@@ -538,7 +544,7 @@ int bch_copy(struct cache_set *c, struct bkey *src_start, struct bkey *dst_start
 		struct bkey *k;
 
 		for_each_btree_key(&iter, c, BTREE_ID_EXTENTS, k, &src_loc) {
-			struct bkey *copy;
+			BKEY_PADDED(key) copy;
 
 			BUG_ON(bkey_cmp(k, &src_loc) <= 0);
 
@@ -547,30 +553,29 @@ int bch_copy(struct cache_set *c, struct bkey *src_start, struct bkey *dst_start
 				goto unlock;
 			}
 
-			/*
-			 * If memory alloc fails, just insert what we've slurped
-			 * up so far
-			 */
-			if (bch_keylist_realloc(&keys, KEY_U64s(k)))
-				goto unlock;
-
 			/* cut pointers to size */
-			copy = keys.top;
-			bkey_copy(copy, k);
-			bch_cut_front(&src_loc, copy);
-			bch_cut_back(&src_end, copy);
+			bkey_copy(&copy.key, k);
+			bch_cut_front(&src_loc, &copy.key);
+			bch_cut_back(&src_end, &copy.key);
 
 			/* modify copy to reference destination */
-			SET_KEY_INODE(copy, dst_inode);
-			SET_KEY_OFFSET(copy, KEY_OFFSET(copy) + dst_shift);
+			SET_KEY_INODE(&copy.key, dst_inode);
+			SET_KEY_OFFSET(&copy.key,
+				       KEY_OFFSET(&copy.key) + dst_shift);
 
 			if (version != ((u64) 0ULL)) {
 				/* Version 0 means retain the source version */
 				/* Else use the new version */
-				SET_KEY_VERSION(copy, version);
+				SET_KEY_VERSION(&copy.key, version);
 			}
 
-			bch_keylist_enqueue(&keys);
+			/*
+			 * If memory alloc fails, just insert what
+			 * we've slurped up so far.
+			 */
+			if (bch_scan_keylist_add(&keys, &copy.key))
+				goto unlock;
+
 			src_loc = *k;
 		}
 
@@ -579,14 +584,25 @@ int bch_copy(struct cache_set *c, struct bkey *src_start, struct bkey *dst_start
 unlock:
 		btree_iter_unlock(&iter);
 
-		ret = bch_btree_insert(c, BTREE_ID_EXTENTS, &keys, NULL, NULL);
+		/*
+		 * This is essentially casting a scan_keylist into the
+		 * internal keylist, which lacks locks.  However, the
+		 * only interaction is that bch_mark_keylist_keys
+		 * looks at it, and the absence of locking for
+		 * dequeing in the btree insertion code is innocuous.
+		 */
+		ret = bch_btree_insert(c,
+				       BTREE_ID_EXTENTS,
+				       &keys.list,
+				       NULL,
+				       NULL);
 		if (ret < 0)
 			break;
 
-		BUG_ON(!bch_keylist_empty(&keys));
+		BUG_ON(!bch_keylist_empty(&keys.list));
 	}
 
-	bch_keylist_free(&keys);
+	bch_scan_keylist_destroy(&keys);
 
 	return ret;
 }

@@ -6,6 +6,7 @@
 /* include/linux/bcache-kernel.h declares plain keylist macros and externs */
 
 void bch_scan_keylist_init(struct scan_keylist *kl,
+			   struct cache_set *c,
 			   unsigned max_size);
 
 void bch_scan_keylist_reset(struct scan_keylist *kl);

@@ -19,136 +19,74 @@ static struct class *bch_extent_class;
 static int bch_extent_major;
 DEFINE_IDR(bch_cache_set_minor);
 
-/* read and versioned_read ioctls */
-
-struct ioctl_read_state {
-	int error;
-	atomic_t ref;
-	struct kiocb *req;
-	u64 * __user user_found;
-	struct bch_versions_result *versions;
-};
-
-static void bch_read_complete(struct ioctl_read_state *s)
-{
-	struct kiocb *req = s->req;
-	int error = s->error;
-	u64 total_found;
-
-	if (s->versions != NULL) {
-		total_found = s->versions->found;
-		if (copy_to_user(s->user_found,
-				 &total_found,
-				 sizeof(total_found)))
-			error = -EFAULT;
-		kfree(s->versions);
-	}
-	kfree(s);
-	aio_complete(req, error, 0);
-}
+/* read ioctl */
 
 static void bch_cache_read_endio(struct bio *bio, int error)
 {
-	struct ioctl_read_state *s = bio->bi_private;
+	struct kiocb *req = bio->bi_private;
+	atomic_t *ref = (atomic_t *) &req->ki_nbytes;
 	struct bio_vec *bv;
 	int i;
 
 	if (error)
-		s->error = error;
+		req->ki_pos = error;
 
-	if (atomic_dec_and_test(&s->ref))
-		bch_read_complete(s);
+	if (atomic_dec_and_test(ref))
+		aio_complete(req, req->ki_pos, 0);
 
 	bio_for_each_segment_all(bv, bio, i)
 		page_cache_release(bv->bv_page);
 	bio_put(bio);
 }
 
-static void __bch_ioctl_read(struct kiocb *req, struct cache_set *c,
-			     struct bch_ioctl_read *i,
-			     struct bch_ioctl_versioned_read *j)
-{
-	struct bio *bio;
-	size_t bytes, pages;
-	ssize_t ret = 0;
-	struct ioctl_read_state *s;
-
-	s = kmalloc(sizeof(*s), GFP_KERNEL);
-	memset(s, 0, sizeof(*s));
-	atomic_set(&s->ref, 1);
-	s->req = req;
-
-	if (j != NULL) {
-		s->user_found = j->vers_found;
-		spin_lock_init(&s->versions->lock);
-		s->versions = kmalloc(sizeof(*s->versions), GFP_KERNEL);
-		s->versions->buf = ((struct bch_version_record *) j->vers_buf);
-		s->versions->size = j->vers_size;
-		s->versions->found = 0;
-	}
-
-	while (i->sectors && !ret) {
-		bytes = sector_bytes(i->sectors);
-		pages = min_t(size_t, BIO_MAX_PAGES,
-			      DIV_ROUND_UP(bytes, PAGE_SIZE));
-
-		bio = bio_alloc(GFP_NOIO, pages);
-		bio->bi_iter.bi_sector	= i->offset;
-		bio->bi_end_io		= bch_cache_read_endio;
-		bio->bi_private		= s;
-		atomic_inc(&s->ref);
-
-		ret = bio_get_user_pages(bio, i->buf, bytes, 1);
-		if (ret < 0) {
-			bio_endio(bio, ret);
-			break;
-		}
-
-		i->offset += bio_sectors(bio);
-		i->buf += sector_bytes(bio_sectors(bio));
-		i->sectors -= bio_sectors(bio);
-
-		if (j == NULL)
-			ret = bch_read(c, bio, i->inode);
-		else
-			ret = bch_read_with_versions(c,
-						     bio,
-						     i->inode,
-						     s->versions);
-		bio_endio(bio, ret);
-	}
-
-	if (atomic_dec_and_test(&s->ref)) {
-		s->error = ret;
-		bch_read_complete(s);
-	}
-}
-
 static void bch_ioctl_read(struct kiocb *req, struct cache_set *c,
 			   unsigned long arg)
 {
+	atomic_t *ref = (atomic_t *) &req->ki_nbytes;
 	struct bch_ioctl_read i, __user *user_read = (void __user *) arg;
+	struct bio *bio;
+	size_t bytes, pages;
+	ssize_t ret = 0;
 
 	if (copy_from_user(&i, user_read, sizeof(i))) {
 		aio_complete(req, -EFAULT, 0);
 		return;
 	}
 
-	__bch_ioctl_read(req, c, &i, NULL);
-}
+	/*
+	 * Hack: may need multiple bios, so I'm using spare fields in the kiocb
+	 * for refcount/return code
+	 */
+	atomic_set(ref, 1);
+	req->ki_pos = 0;
 
-static void bch_ioctl_versioned_read(struct kiocb *req, struct cache_set *c,
-				     unsigned long arg)
-{
-	struct bch_ioctl_versioned_read j,
-		__user *user_read = (void __user *) arg;
+	while (i.sectors && !ret) {
+		bytes = i.sectors << 9;
+		pages = min_t(size_t, BIO_MAX_PAGES,
+			      DIV_ROUND_UP(bytes, PAGE_SIZE));
 
-	if (copy_from_user(&j, user_read, sizeof(j))) {
-		aio_complete(req, -EFAULT, 0);
-		return;
+		bio = bio_alloc(GFP_NOIO, pages);
+		bio->bi_iter.bi_sector	= i.offset;
+		bio->bi_end_io		= bch_cache_read_endio;
+		bio->bi_private		= req;
+		atomic_inc(ref);
+
+		ret = bio_get_user_pages(bio, i.buf, bytes, 1);
+		if (ret < 0) {
+			bio_endio(bio, ret);
+			break;
+		}
+
+		i.offset += bio_sectors(bio);
+		i.buf += bio_sectors(bio) << 9;
+		i.sectors -= bio_sectors(bio);
+
+		ret = bch_read(c, bio, i.inode);
+		bio_endio(bio, ret);
 	}
 
-	__bch_ioctl_read(req, c, &j.read, &j);
+	if (atomic_dec_and_test(ref))
+		aio_complete(req, req->ki_pos, 0);
 }
 
 struct bch_ioctl_write_op {
@@ -212,7 +150,7 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 	req->ki_pos = 0;
 
 	while (KEY_SIZE(&i.extent)) {
-		bytes = sector_bytes(KEY_SIZE(&i.extent));
+		bytes = KEY_SIZE(&i.extent) << 9;
 		pages = DIV_ROUND_UP(bytes, PAGE_SIZE);
 
 		op = kmalloc(sizeof(*op) + sizeof(struct bio_vec) * pages,
@@ -237,8 +175,7 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 				  &i.extent, NULL);
 
 		ret = bio_get_user_pages(bio, i.buf,
-					 sector_bytes(KEY_SIZE(&i.extent)),
-					 0);
+					 KEY_SIZE(&i.extent) << 9, 0);
 		if (ret < 0) {
 			op->iop.error = ret;
 			closure_return_with_destructor_noreturn(&op->cl,
@@ -248,7 +185,7 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 
 		SET_KEY_SIZE(&i.extent,
 			     KEY_SIZE(&i.extent) - bio_sectors(bio));
-		i.buf += sector_bytes(bio_sectors(bio));
+		i.buf += bio_sectors(bio) << 9;
 
 		closure_call(&op->iop.cl, bch_write, NULL, &op->cl);
 		closure_return_with_destructor_noreturn(&op->cl,
@@ -847,9 +784,6 @@ static long bch_aio_ioctl(struct kiocb *req, unsigned int cmd,
 		return -EIOCBQUEUED;
 	case BCH_IOCTL_VERSIONED_DISCARD:
 		bch_ioctl_versioned_discard(req, c, arg);
-		return -EIOCBQUEUED;
-	case BCH_IOCTL_VERSIONED_READ:
-		bch_ioctl_versioned_read(req, c, arg);
 		return -EIOCBQUEUED;
 	}
 

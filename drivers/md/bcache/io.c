@@ -54,7 +54,7 @@ void bch_bio_submit_work(struct work_struct *work)
 
 void bch_bbio_free(struct bio *bio, struct cache_set *c)
 {
-	struct bbio *b = to_bbio(bio);
+	struct bbio *b = container_of(bio, struct bbio, bio);
 	mempool_free(b, c->bio_meta);
 }
 
@@ -139,7 +139,7 @@ static void bch_bbio_reset(struct bbio *b)
 
 	bio_reset(&b->bio);
 	iter->bi_sector		= KEY_START(&b->key);
-	iter->bi_size		= sector_bytes(KEY_SIZE(&b->key));
+	iter->bi_size		= KEY_SIZE(&b->key) << 9;
 	iter->bi_idx		= b->bi_idx;
 	iter->bi_bvec_done	= b->bi_bvec_done;
 }
@@ -797,7 +797,7 @@ static void cache_promote_write(struct closure *cl)
 
 	bio_reset(bio);
 	bio->bi_iter.bi_sector	= KEY_START(&op->iop.insert_key);
-	bio->bi_iter.bi_size	= sector_bytes(KEY_SIZE(&op->iop.insert_key));
+	bio->bi_iter.bi_size	= KEY_SIZE(&op->iop.insert_key) << 9;
 	/* needed to reinit bi_vcnt so pages can be freed later */
 	bch_bio_map(bio, NULL);
 
@@ -917,43 +917,11 @@ bool cache_promote(struct cache_set *c, struct bbio *bio,
 
 /* Read */
 
-static bool add_extent_version(struct bch_versions_result *versions,
-			       u64 version,
-			       u64 start,
-			       u64 size,
-			       int *error)
-{
-	bool ok = false;
-	struct bch_version_record new;
-
-	*error = 0;
-	spin_lock(&versions->lock);
-	if (versions->found >= versions->size)
-		*error = -ENOSPC;
-	else {
-		new.start = start;
-		new.size = size;
-		new.version = version;
-
-		if (copy_to_user((versions->buf + versions->found),
-				 &new,
-				 sizeof(new)))
-			*error = -EFAULT;
-		else {
-			versions->found += 1;
-			ok = true;
-		}
-	}
-	spin_unlock(&versions->lock);
-	return ok;
-}
-
 struct bch_read_op {
 	struct btree_op		op;
 	struct cache_set	*c;
 	struct bio		*bio;
 	u64			inode;
-	struct bch_versions_result	*versions;
 };
 
 static void bch_read_requeue(struct cache_set *c, struct bio *bio)
@@ -978,17 +946,6 @@ static void bch_read_endio(struct bio *bio, int error)
 		atomic_long_inc(&ca->set->cache_read_races);
 		bch_read_requeue(ca->set, bio);
 	} else {
-		int ret;
-
-		if (!error
-		    && (b->extent_info != NULL)
-		    && (!add_extent_version(b->extent_info,
-					    KEY_VERSION(&b->key),
-					    sector_bytes(KEY_START(&b->key)),
-					    sector_bytes(bio_sectors(bio)),
-					    &ret)))
-			error = ret;
-
 		bio_endio(bio->bi_private, error);
 		bio_put(bio);
 	}
@@ -997,18 +954,11 @@ static void bch_read_endio(struct bio *bio, int error)
 		percpu_ref_put(&ca->ref);
 }
 
-/*
- * Note: This adds the extent version only when it zero-fills.
- * For actual reads, it is added in endio unless the read is retried.
- * Due to retries and endios being asynchronous, the extent information
- * will not generally be sorted, and that's why it needs a start and offset.
- * The client is responsible for sorting if it wants it sorted.
- */
-
 /* XXX: this looks a lot like cache_lookup_fn() */
 static int bch_read_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 {
-	struct bch_read_op *op = container_of(b_op, struct bch_read_op, op);
+	struct bch_read_op *op = container_of(b_op,
+			struct bch_read_op, op);
 	struct bio *n, *bio = op->bio;
 	struct bbio *bbio;
 	int sectors, ret;
@@ -1030,18 +980,8 @@ static int bch_read_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 	}
 
 	if (!ca) {
-		unsigned bytes = sector_bytes(min_t(unsigned,
-						    sectors,
-						    bio_sectors(bio)));
-		int error;
-
-		if ((op->versions != NULL)
-		    && (!add_extent_version(op->versions,
-					    KEY_VERSION(k),
-					    sector_bytes(KEY_START(k)),
-					    bytes,
-					    &error)))
-				return error;
+		unsigned bytes = min_t(unsigned, sectors,
+				       bio_sectors(bio)) << 9;
 
 		swap(bio->bi_iter.bi_size, bytes);
 		zero_fill_bio(bio);
@@ -1067,7 +1007,6 @@ static int bch_read_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 	atomic_inc(&bio->bi_remaining);
 
 	bbio = to_bbio(n);
-	bbio->extent_info = op->versions;
 	bch_bkey_copy_single_ptr(&bbio->key, k, ptr);
 
 	/* Trim the key to match what we're actually reading */
@@ -1081,10 +1020,7 @@ static int bch_read_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 	return ret;
 }
 
-static int __bch_read(struct cache_set *c,
-		      struct bio *bio,
-		      u64 inode,
-		      struct bch_versions_result *versions)
+int bch_read(struct cache_set *c, struct bio *bio, u64 inode)
 {
 	struct bch_read_op op;
 	int ret;
@@ -1095,7 +1031,6 @@ static int __bch_read(struct cache_set *c,
 	op.c = c;
 	op.bio = bio;
 	op.inode = inode;
-	op.versions = versions;
 
 	ret = bch_btree_map_keys(&op.op, c,
 				 &KEY(inode, bio->bi_iter.bi_sector, 0),
@@ -1104,41 +1039,7 @@ static int __bch_read(struct cache_set *c,
 
 	return ret;
 }
-
-/*
- * bch_read, and bch_read_with_versions receive a plain bio
- * as an input, not a bbio.
- *
- * As such, we can't store the versions information in the bio, since
- * it doesn't have an extent_info field (only bbios do).  Instead, we
- * pass the versions information down the tree walk in the
- * bch_read_op, and transfer it to the bbios created in bch_read_fn
- * when about to do the actual reads.  If a read is re-tried, it is
- * based on a bbio which does have an extent_info field, and it calls
- * __bch_read directly passing it the contents of the extent_info
- * field found therein.
- *
- * Note that the situation with writes is different, as writes are
- * always based on bbios, as there is a bbio embedded in the
- * bch_write_op.
- */
-
-int bch_read(struct cache_set *c, struct bio *bio, u64 inode)
-{
-	return __bch_read(c, bio, inode, NULL);
-}
 EXPORT_SYMBOL(bch_read);
-
-/* Like bch_read, but return the versions read */
-
-int bch_read_with_versions(struct cache_set *c,
-			   struct bio *bio,
-			   u64 inode,
-			   struct bch_versions_result *versions)
-{
-	return __bch_read(c, bio, inode, versions);
-}
-EXPORT_SYMBOL(bch_read_with_versions);
 
 /**
  * bch_read_retry - re-submit a bio originally from bch_read()
@@ -1167,11 +1068,7 @@ static void bch_read_retry(struct bbio *bbio)
 	bch_bbio_reset(bbio);
 	bio_chain(bio, parent);
 
-	/*
-	 * This calls __bch_read to preserve whether we want to
-	 * return the extents or not.
-	 */
-	__bch_read(bbio->ca->set, bio, inode, bbio->extent_info);
+	bch_read(bbio->ca->set, bio, inode);
 	bio_endio(parent, 0);  /* for bio_chain() in bch_read_fn() */
 	bio_endio(bio, 0);
 }

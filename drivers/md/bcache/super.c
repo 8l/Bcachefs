@@ -95,19 +95,16 @@ static bool bch_is_open_cache(struct block_device *bdev)
 
 static bool bch_is_open(struct block_device *bdev)
 {
-	bool ret;
-
-	mutex_lock(&bch_register_lock);
-	ret = bch_is_open_cache(bdev) || bch_is_open_backing(bdev);
-	mutex_unlock(&bch_register_lock);
-
-	return ret;
+	lockdep_assert_held(&bch_register_lock);
+	return bch_is_open_cache(bdev) || bch_is_open_backing(bdev);
 }
 
 static const char *bch_blkdev_open(const char *path, void *holder, struct block_device **ret)
 {
 	struct block_device *bdev;
 	const char *err;
+
+	lockdep_assert_held(&bch_register_lock);
 
 	*ret = NULL;
 	bdev = blkdev_get_by_path(path, FMODE_READ|FMODE_WRITE|FMODE_EXCL,
@@ -2034,6 +2031,8 @@ int bch_cache_add(struct cache_set *c, const char *path)
 	int ret = -EINVAL;
 	struct cache_member *mi, orig_mi;
 
+	lockdep_assert_held(&bch_register_lock);
+
 	memset(&sb, 0, sizeof(sb));
 
 	down_read(&c->gc_lock);
@@ -2122,10 +2121,7 @@ have_slot:
 	kfree_rcu(old_mi, rcu);
 
 	err = "sysfs error";
-	mutex_lock(&bch_register_lock);
-	ret = cache_set_add_device(c, ca);
-	mutex_unlock(&bch_register_lock);
-	if (ret)
+	if (cache_set_add_device(c, ca))
 		goto err_put;
 
 	bcache_write_super(c);
@@ -2220,7 +2216,9 @@ const char *register_bcache_devices(char **path, int count,
 		goto out;
 
 	for (i = 0; i < count && path[i]; i++) {
+		mutex_lock(&bch_register_lock);
 		err = bch_blkdev_open(strim(path[i]), &sb, &bdev);
+		mutex_unlock(&bch_register_lock);
 		if (err)
 			goto err;
 

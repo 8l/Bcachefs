@@ -712,6 +712,19 @@ struct uuid_entry {
 
 BITMASK(UUID_FLASH_ONLY,	struct uuid_entry, flags, 0, 1);
 
+/*
+ * In theory, the start is redundant if the records are always returned
+ * in order.
+ */
+
+struct bch_version_record {
+	__u64 start;		/* in bytes */
+	__u64 size;		/* in bytes */
+	__u64 version;		/* For now a u64 */
+};
+
+#define BCH_SECTOR_SHIFT		9
+
 #ifdef __cplusplus
 }
 #endif

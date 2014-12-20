@@ -877,8 +877,16 @@ static void bch_read_requeue(struct cache_set *c, struct bio *bio)
 	queue_work(c->wq, &c->read_race_work);
 }
 
+/*
+ * This uses the identity of the completion function to determine that
+ * the caller was a true versioned read, and if so, as we can't restart
+ * the read(yet), we error out of the whole operation asking the caller
+ * to retry it.
+ */
+
 static void bch_read_endio(struct bio *bio, int error)
 {
+	struct bio *orig = bio->bi_private;
 	struct bbio *b = to_bbio(bio);
 	struct cache *ca = b->ca;
 
@@ -888,18 +896,70 @@ static void bch_read_endio(struct bio *bio, int error)
 	    (dynamic_fault() || ptr_stale(ca->set, ca, &b->key, 0))) {
 		/* Read bucket invalidate race */
 		atomic_long_inc(&ca->set->cache_read_races);
-		bch_read_requeue(ca->set, bio);
-	} else {
-		bio_endio(bio->bi_private, error);
-		bio_put(bio);
+
+		if (orig->bi_end_io == bch_read_versioned_ioctl_endio) {
+			/*
+			 * For now, we can't retry, so error out to
+			 * the top and let the caller retry.
+			 */
+			error = -EAGAIN;
+		} else {
+			bch_read_requeue(ca->set, bio);
+			goto out;
+		}
 	}
 
+	bio_endio(orig, error);
+	bio_put(bio);
+
+out:
 	if (ca)
 		percpu_ref_put(&ca->ref);
 }
 
+static bool __add_version(struct bch_versions_result *versions,
+			  u64 version,
+			  u64 start,
+			  u64 size)
+{
+	bool ok = false;
+	struct bch_version_record new;
+
+	if (versions->found >= versions->size)
+		versions->error = -ENOSPC;
+	else {
+		new.start = start;
+		new.size = size;
+		new.version = version;
+
+		if (copy_to_user((versions->buf + versions->found),
+				 &new,
+				 sizeof(new)))
+			versions->error = -EFAULT;
+		else {
+			versions->found += 1;
+			ok = true;
+		}
+	}
+	return ok;
+}
+
+static inline bool add_version(struct bch_versions_result *versions,
+			       u64 version,
+			       u64 start,
+			       u64 size)
+{
+	if (versions == NULL)
+		return true;
+
+	return __add_version(versions, version, start, size);
+}
+
 /* XXX: this looks a lot like cache_lookup_fn() */
-int bch_read(struct cache_set *c, struct bio *bio, u64 inode)
+int bch_read_with_versions(struct cache_set *c,
+			   struct bio *bio,
+			   u64 inode,
+			   struct bch_versions_result *v)
 {
 	struct btree_iter iter;
 	struct bkey *k;
@@ -923,39 +983,56 @@ int bch_read(struct cache_set *c, struct bio *bio, u64 inode)
 		done = sectors >= bio_sectors(bio);
 
 		ca = bch_extent_pick_ptr(c, k, &ptr);
-		if (IS_ERR(ca)) {
-			atomic_inc(&bio->bi_remaining);
-			bio_io_error(bio);
-			btree_iter_unlock(&iter);
-			return 0;
-		}
+		if (IS_ERR(ca))
+			goto error_out;
 
 		if (ca) {
+			__BKEY_PADDED(key, 1) tmp;
+
 			PTR_BUCKET(c, ca, k, ptr)->read_prio =
 				c->prio_clock[READ].hand;
 
-			n = sectors >= bio_sectors(bio)
+			bch_bkey_copy_single_ptr(&tmp.key, k, ptr);
+
+			/* Trim the key to match what we're actually reading */
+			bch_cut_front(&KEY(inode, bio->bi_iter.bi_sector, 0),
+				      &tmp.key);
+			if (sectors > bio_sectors(bio))
+				bch_cut_back(&KEY(inode,
+						  bio_end_sector(bio),
+						  0),
+					     &tmp.key);
+
+			if (!add_version(v,
+					 KEY_VERSION(k),
+					 sector_bytes(KEY_START(&tmp.key)),
+					 sector_bytes(KEY_SIZE(&tmp.key))))
+				goto error_out;
+
+			n = done
 				? bio_clone_fast(bio, GFP_NOIO, c->bio_split)
-				: bio_split(bio, sectors, GFP_NOIO, c->bio_split);
+				: bio_split(bio, sectors, GFP_NOIO,
+					    c->bio_split);
 
 			n->bi_private		= bio;
 			n->bi_end_io		= bch_read_endio;
 			atomic_inc(&bio->bi_remaining);
 
 			bbio = to_bbio(n);
-			bch_bkey_copy_single_ptr(&bbio->key, k, ptr);
 
-			/* Trim the key to match what we're actually reading */
-			bch_cut_front(&KEY(inode, n->bi_iter.bi_sector, 0),
-				      &bbio->key);
-			bch_cut_back(&KEY(inode, bio_end_sector(n), 0),
-				     &bbio->key);
+			bkey_copy(&bbio->key, &tmp.key);
 			bch_bbio_prep(bbio, ca);
 
 			cache_promote(c, bbio, k, ptr);
 		} else {
 			unsigned bytes = min_t(unsigned, sectors,
 					       bio_sectors(bio)) << 9;
+
+			if (!add_version(v,
+					 KEY_VERSION(k),
+					 sector_bytes(KEY_START(k)),
+					 bytes))
+				goto error_out;
 
 			swap(bio->bi_iter.bi_size, bytes);
 			zero_fill_bio(bio);
@@ -978,6 +1055,18 @@ int bch_read(struct cache_set *c, struct bio *bio, u64 inode)
 	bio_io_error(bio);
 
 	return 0;
+
+error_out:
+	atomic_inc(&bio->bi_remaining);
+	bio_io_error(bio);
+	btree_iter_unlock(&iter);
+	return 0;
+}
+EXPORT_SYMBOL(bch_read_with_versions);
+
+int bch_read(struct cache_set *c, struct bio *bio, u64 inode)
+{
+	return bch_read_with_versions(c, bio, inode, NULL);
 }
 EXPORT_SYMBOL(bch_read);
 

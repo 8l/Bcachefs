@@ -30,14 +30,16 @@ enum BCH_IOCTL {
 
 	BCH_IOCTL_VERSIONED_COPY	= 3210,
 	BCH_IOCTL_VERSIONED_DISCARD	= 3211,
+
+	BCH_IOCTL_VERSIONED_READ	= 3212,
 };
 
 struct bch_ioctl_read {
 	__u64			inode;
-	__u64			offset;		/* sectors */
+	__u64			offset;		/* in sectors */
 	__u64			sectors;
 
-	__u64			buf;
+	__u64			buf;		/* for the data */
 };
 
 struct bch_ioctl_write {
@@ -50,17 +52,17 @@ struct bch_ioctl_write {
 
 struct bch_ioctl_copy {
 	__u64			src_inode;
-	__u64			src_offset;		/* sectors */
+	__u64			src_offset;	/* in sectors */
 
 	__u64			dst_inode;
-	__u64			dst_offset;		/* sectors */
+	__u64			dst_offset;	/* in sectors */
 
 	__u64			sectors;
 };
 
 struct bch_ioctl_discard {
 	__u64			inode;
-	__u64			offset;		/* sectors */
+	__u64			offset;		/* in sectors */
 	__u64			sectors;
 };
 
@@ -73,8 +75,8 @@ struct bch_ioctl_list_keys {
 	struct bkey		end;
 
 	__u64			buf;
-	__u32			buf_size;	/* bytes */
-	__u32			keys_found;	/* u64s */
+	__u32			buf_size;	/* in bytes */
+	__u32			keys_found;	/* in u64s */
 };
 
 /* XXX: should not be blockdev inode specific */
@@ -114,7 +116,7 @@ struct bch_ioctl_versioned_copy {
 
 struct bch_ioctl_versioned_discard {
 	__u64			inode;
-	__u64			offset;		/* sectors */
+	__u64			offset;		/* in sectors */
 	__u64			sectors;
 	__u64			version;
 };
@@ -127,6 +129,18 @@ struct bch_ioctl_add_disks {
 struct bch_ioctl_rm_disk {
 	const char		*dev;
 	int			force;
+};
+
+/*
+ * vers_buf is an array of bch_version_record defined in uapi/bcache.h.
+ */
+
+struct bch_ioctl_versioned_read {
+	struct bch_ioctl_read	read;
+
+	__u64			*vers_buf;	/* for the versions */
+	__u64			vers_size;	/* in version records */
+	__u64			*vers_found;	/* in version records */
 };
 
 #ifdef __cplusplus

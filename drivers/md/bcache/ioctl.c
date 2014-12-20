@@ -21,7 +21,14 @@ DEFINE_IDR(bch_cache_set_minor);
 
 /* read ioctl */
 
-static void bch_cache_read_endio(struct bio *bio, int error)
+/*
+ * Through the call tree, ki_pos is:
+ * 0 if this is a non-versioned read that has not errored yet.
+ * 1 if this is a versioned read that has not errored yet.
+ * negative if this is either kind of read that has errored already.
+ */
+
+static void bch_read_ioctl_endio(struct bio *bio, int error)
 {
 	struct kiocb *req = bio->bi_private;
 	atomic_t *ref = (atomic_t *) &req->ki_nbytes;
@@ -39,19 +46,26 @@ static void bch_cache_read_endio(struct bio *bio, int error)
 	bio_put(bio);
 }
 
-static void bch_ioctl_read(struct kiocb *req, struct cache_set *c,
-			   unsigned long arg)
+/* This does the same thing, but is distinguishable by bch_read_endio */
+
+void bch_read_versioned_ioctl_endio(struct bio *bio, int error)
+{
+	bch_read_ioctl_endio(bio, error);
+}
+
+static void __bch_ioctl_read(struct kiocb *req, struct cache_set *c,
+			     struct bch_ioctl_read *i,
+			     struct bch_versions_result *v)
 {
 	atomic_t *ref = (atomic_t *) &req->ki_nbytes;
-	struct bch_ioctl_read i, __user *user_read = (void __user *) arg;
 	struct bio *bio;
 	size_t bytes, pages;
 	ssize_t ret = 0;
+	void (*read_endio)(struct bio *, int);
 
-	if (copy_from_user(&i, user_read, sizeof(i))) {
-		aio_complete(req, -EFAULT, 0);
-		return;
-	}
+	read_endio = ((v == NULL)
+		      ? bch_read_ioctl_endio
+		      : bch_read_versioned_ioctl_endio);
 
 	/*
 	 * Hack: may need multiple bios, so I'm using spare fields in the kiocb
@@ -60,33 +74,77 @@ static void bch_ioctl_read(struct kiocb *req, struct cache_set *c,
 	atomic_set(ref, 1);
 	req->ki_pos = 0;
 
-	while (i.sectors && !ret) {
-		bytes = i.sectors << 9;
+	while (i->sectors && !ret) {
+		bytes = i->sectors << 9;
 		pages = min_t(size_t, BIO_MAX_PAGES,
 			      DIV_ROUND_UP(bytes, PAGE_SIZE));
 
 		bio = bio_alloc(GFP_NOIO, pages);
-		bio->bi_iter.bi_sector	= i.offset;
-		bio->bi_end_io		= bch_cache_read_endio;
+		bio->bi_iter.bi_sector	= i->offset;
+		bio->bi_end_io		= read_endio;
 		bio->bi_private		= req;
 		atomic_inc(ref);
 
-		ret = bio_get_user_pages(bio, i.buf, bytes, 1);
+		ret = bio_get_user_pages(bio, i->buf, bytes, 1);
 		if (ret < 0) {
 			bio_endio(bio, ret);
 			break;
 		}
 
-		i.offset += bio_sectors(bio);
-		i.buf += bio_sectors(bio) << 9;
-		i.sectors -= bio_sectors(bio);
+		i->offset += bio_sectors(bio);
+		i->buf += bio_sectors(bio) << 9;
+		i->sectors -= bio_sectors(bio);
 
-		ret = bch_read(c, bio, i.inode);
+		ret = bch_read_with_versions(c, bio, i->inode, v);
 		bio_endio(bio, ret);
+	}
+
+	if (v != NULL) {
+		if (v->error != 0)
+			req->ki_pos = v->error;
+		else if (copy_to_user(v->user_found,
+				      &v->found,
+				      sizeof(v->found))
+			 != 0)
+			req->ki_pos = -EFAULT;
 	}
 
 	if (atomic_dec_and_test(ref))
 		aio_complete(req, req->ki_pos, 0);
+}
+
+static void bch_ioctl_read(struct kiocb *req, struct cache_set *c,
+			   unsigned long arg)
+{
+	struct bch_ioctl_read i, __user *user_read = (void __user *) arg;
+
+	if (copy_from_user(&i, user_read, sizeof(i))) {
+		aio_complete(req, -EFAULT, 0);
+		return;
+	}
+
+	__bch_ioctl_read(req, c, &i, NULL);
+}
+
+static void bch_ioctl_versioned_read(struct kiocb *req, struct cache_set *c,
+				     unsigned long arg)
+{
+	struct bch_ioctl_versioned_read i,
+		__user *user_read = (void __user *) arg;
+	struct bch_versions_result versions;
+
+	if (copy_from_user(&i, user_read, sizeof(i))) {
+		aio_complete(req, -EFAULT, 0);
+		return;
+	}
+
+	versions.found = 0;
+	versions.error = 0;
+	versions.buf = ((struct bch_version_record * __user) i.vers_buf);
+	versions.size = i.vers_size;
+	versions.user_found = ((u64 * __user) i.vers_found);
+
+	__bch_ioctl_read(req, c, &i.read, &versions);
 }
 
 struct bch_ioctl_write_op {
@@ -750,6 +808,9 @@ static long bch_aio_ioctl(struct kiocb *req, unsigned int cmd,
 		return -EIOCBQUEUED;
 	case BCH_IOCTL_VERSIONED_DISCARD:
 		bch_ioctl_versioned_discard(req, c, arg);
+		return -EIOCBQUEUED;
+	case BCH_IOCTL_VERSIONED_READ:
+		bch_ioctl_versioned_read(req, c, arg);
 		return -EIOCBQUEUED;
 	}
 

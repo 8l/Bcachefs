@@ -25,4 +25,24 @@ void bch_wake_delayed_writes(unsigned long data);
 
 extern struct workqueue_struct *bcache_io_wq;
 
+struct bch_versions_result {
+	int error;
+	u64 size;		/* In bch_version_records */
+	u64 found;		/* In bch_version_records */
+	u64 * __user user_found;
+	struct bch_version_record * __user buf;
+};
+
+int bch_read_with_versions(struct cache_set *,
+			   struct bio *,
+			   u64 inode,
+			   struct bch_versions_result *versions);
+
+static inline u64 sector_bytes(u64 sectors)
+{
+	return sectors << BCH_SECTOR_SHIFT;
+}
+
+void bch_read_versioned_ioctl_endio(struct bio *, int);
+
 #endif /* _BCACHE_IO_H */

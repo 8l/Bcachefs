@@ -622,9 +622,18 @@ static void bch_cache_set_read_only(struct cache_set *c)
 
 	trace_bcache_cache_set_read_only(c);
 
+	/*
+	 * Block new foreground-end write operations from starting - any new
+	 * writes will return -EROFS:
+	 */
+	percpu_ref_kill(&c->writes);
+
 	bch_wake_delayed_writes((unsigned long) c);
 	del_timer_sync(&c->foreground_write_wakeup);
 	cancel_delayed_work_sync(&c->pd_controllers_update);
+
+	/* Wait for outstanding writes to complete: */
+	wait_for_completion(&c->write_disable_complete);
 
 	radix_tree_for_each_slot(slot, &c->devices, &iter, 0) {
 		d = rcu_dereference_protected(*slot,
@@ -700,6 +709,7 @@ static void cache_set_free(struct closure *cl)
 
 	bch_bset_sort_state_free(&c->sort);
 
+	percpu_ref_free(&c->writes);
 	free_percpu(c->prio_clock[WRITE].rescale_percpu);
 	free_percpu(c->prio_clock[READ].rescale_percpu);
 	if (c->wq)
@@ -810,6 +820,12 @@ static unsigned cache_set_nr_online_devices(struct cache_set *c)
 	return nr;
 }
 
+static void bch_writes_disabled(struct percpu_ref *writes)
+{
+	struct cache_set *c = container_of(writes, struct cache_set, writes);
+	complete(&c->write_disable_complete);
+}
+
 #define alloc_bucket_pages(gfp, c)			\
 	((void *) __get_free_pages(__GFP_ZERO|gfp, ilog2(bucket_pages(c))))
 
@@ -850,6 +866,7 @@ static struct cache_set *bch_cache_set_alloc(struct cache *ca)
 	mutex_init(&c->btree_cache_lock);
 	mutex_init(&c->bucket_lock);
 	spin_lock_init(&c->btree_root_lock);
+	init_completion(&c->write_disable_complete);
 
 	init_rwsem(&c->gc_lock);
 	mutex_init(&c->gc_scan_keylist_lock);
@@ -886,6 +903,7 @@ static struct cache_set *bch_cache_set_alloc(struct cache *ca)
 	    !(c->wq = create_workqueue("bcache")) ||
 	    !(c->prio_clock[READ].rescale_percpu = alloc_percpu(unsigned)) ||
 	    !(c->prio_clock[WRITE].rescale_percpu = alloc_percpu(unsigned)) ||
+	    percpu_ref_init(&c->writes, bch_writes_disabled) ||
 	    bch_journal_alloc(c) ||
 	    bch_btree_cache_alloc(c) ||
 	    bch_bset_sort_state_init(&c->sort, ilog2(c->btree_pages)))

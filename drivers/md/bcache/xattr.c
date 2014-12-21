@@ -171,13 +171,10 @@ static int bch_xattr_set(struct dentry *dentry, const char *name,
 
 		ret = bch_btree_insert_at(&iter, &keys, NULL, NULL,
 					  0, BTREE_INSERT_ATOMIC);
-		btree_iter_unlock(&iter);
 		bch_keylist_free(&keys);
 
-		if (!ret) {
-			BUG_ON(!bch_keylist_empty(&keys));
+		if (ret != -EINTR && ret != -EAGAIN)
 			break;
-		}
 	}
 	btree_iter_unlock(&iter);
 

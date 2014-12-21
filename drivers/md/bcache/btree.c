@@ -2685,6 +2685,7 @@ static int bch_btree_insert_node(struct btree *b,
  * Return values:
  * -EAGAIN: @op->cl was put on a waitlist waiting for btree node allocation.
  * -EINTR: locking changed, this function should be called again.
+ * -EROFS: cache set read only
  */
 int bch_btree_insert_at(struct btree_iter *iter,
 			struct keylist *insert_keys,
@@ -2696,6 +2697,9 @@ int bch_btree_insert_at(struct btree_iter *iter,
 	int ret = -EINTR;;
 
 	BUG_ON(iter->level);
+
+	if (!percpu_ref_tryget(&iter->c->writes))
+		return -EROFS;
 
 	iter->locks_want = 0;
 	if (!btree_iter_upgrade(iter))
@@ -2709,7 +2713,8 @@ traverse:
 			btree_iter_unlock(iter);
 
 		if (bch_keylist_empty(insert_keys) ||
-		    (flags & BTREE_INSERT_ATOMIC))
+		    (flags & BTREE_INSERT_ATOMIC) ||
+		    ret == -EROFS)
 			break;
 
 		bch_btree_iter_set_pos(iter,
@@ -2717,6 +2722,7 @@ traverse:
 
 		bch_btree_iter_traverse(iter);
 	}
+	percpu_ref_put(&iter->c->writes);
 
 	return ret;
 }
@@ -2766,23 +2772,16 @@ int bch_btree_insert(struct cache_set *c, enum btree_id id,
 		     struct closure *persistent)
 {
 	struct btree_iter iter;
-	int ret;
+	int ret, ret2;
 
 	bch_btree_iter_init(&iter, c, id,
 			    &START_KEY(bch_keylist_front(keys)));
 
 	bch_btree_iter_traverse(&iter);
 	ret = bch_btree_insert_at(&iter, keys, replace, persistent, 0, 0);
-	BUG_ON(ret || !bch_keylist_empty(keys));
+	ret2 = btree_iter_unlock(&iter);
 
-	ret = btree_iter_unlock(&iter);
-	if (ret)
-		return ret;
-
-	if (iter.insert_collision)
-		return -ESRCH;
-
-	return 0;
+	return ret ?: ret2 ?: iter.insert_collision ? -ESRCH : 0;
 }
 
 /* Btree iterator: */

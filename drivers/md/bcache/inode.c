@@ -144,10 +144,15 @@ again:
 
 			ret = bch_btree_insert_at(&iter, &keylist_single(&inode->i_key),
 						  NULL, NULL, 0, BTREE_INSERT_ATOMIC);
-			btree_iter_unlock(&iter);
 
+			if (ret == -EINTR || ret == -EAGAIN)
+				continue;
+
+			btree_iter_unlock(&iter);
 			if (!ret)
-				goto out;
+				*hint = KEY_INODE(&inode->i_key) + 1;
+
+			return ret;
 		} else {
 			/* slot used */
 			bch_btree_iter_advance_pos(&iter);
@@ -162,12 +167,7 @@ again:
 		goto again;
 	}
 
-	ret = -ENOSPC;
-out:
-	if (!ret)
-		*hint = KEY_INODE(&inode->i_key) + 1;
-
-	return ret;
+	return -ENOSPC;
 }
 
 int bch_inode_update(struct cache_set *c, struct bch_inode *inode)

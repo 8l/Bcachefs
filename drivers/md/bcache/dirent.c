@@ -137,15 +137,8 @@ insert:
 
 			ret = bch_btree_insert_at(&iter, &keys, NULL, NULL,
 						  0, BTREE_INSERT_ATOMIC);
-			btree_iter_unlock(&iter);
-
-			if (!ret) {
-				BUG_ON(!bch_keylist_empty(&keys));
-				pr_debug("added %s -> %llu to %llu",
-					 dirent->d_name, dirent->d_inum,
-					 KEY_INODE(&dirent->d_key));
+			if (ret != -EINTR && ret != -EAGAIN)
 				break;
-			}
 		} else {
 			/* collision */
 			bch_btree_iter_advance_pos(&iter);
@@ -175,6 +168,7 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 	struct btree_iter iter;
 	struct bkey *k;
 	u64 hash = bch_dirent_hash(name);
+	int ret = -ENOENT;
 
 	pr_debug("deleting %llu:%llu (%s)",
 		 dir_inum, hash, name->name);
@@ -188,8 +182,7 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 			break;
 
 		if (!dirent_cmp(key_to_dirent(k), name)) {
-			struct keylist keys;
-			int ret;
+			struct bkey delete;
 
 			/*
 			 * XXX
@@ -200,20 +193,16 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 			 * probing)
 			 */
 
-			bch_keylist_init(&keys);
-			*keys.top = *k;
-			SET_KEY_DELETED(keys.top, 1);
-			bch_set_val_u64s(keys.top, 0);
-			bch_keylist_enqueue(&keys);
+			bkey_init(&delete);
+			bkey_copy_key(&delete, k);
+			SET_KEY_DELETED(&delete, 1);
 
-			ret = bch_btree_insert_at(&iter, &keys, NULL, NULL,
-						  0, BTREE_INSERT_ATOMIC);
-			btree_iter_unlock(&iter);
-
-			if (!ret) {
-				BUG_ON(!bch_keylist_empty(&keys));
-				return 0;
-			}
+			ret = bch_btree_insert_at(&iter,
+						  &keylist_single(&delete),
+						  NULL, NULL, 0,
+						  BTREE_INSERT_ATOMIC);
+			if (ret != -EINTR && ret != -EAGAIN)
+				break;
 		} else {
 			/* collision */
 			bch_btree_iter_advance_pos(&iter);
@@ -221,7 +210,7 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 	}
 	btree_iter_unlock(&iter);
 
-	return -ENOENT;
+	return ret;
 }
 
 u64 bch_dirent_lookup(struct cache_set *c, u64 dir_inum,

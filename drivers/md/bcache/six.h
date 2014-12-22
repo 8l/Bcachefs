@@ -12,10 +12,15 @@
 #include <trace/events/six.h>
 #else
 #define trace_six_trylock(lock, type)
+#define trace_six_trylock_fail(lock, type)
 #define trace_six_relock(lock, type)
+#define trace_six_relock_fail(lock, type)
+#define trace_six_lock_wait(lock, type)
 #define trace_six_lock(lock, type)
 #define trace_six_unlock(lock, type)
 #define trace_six_trylock_convert(lock, from, to)
+#define trace_six_trylock_convert_fail(lock, from, to)
+#define trace_six_lock_convert_wait(lock, from, to)
 #define trace_six_lock_convert(lock, from, to)
 #endif
 
@@ -130,31 +135,34 @@ void __six_unlock(struct six_lock *, unsigned long);
 #define __SIX_LOCK(type)						\
 	static inline bool six_trylock_##type(struct six_lock *lock)	\
 	{								\
-		trace_six_trylock(lock, #type);				\
 		if (__six_trylock(lock,					\
 				  __SIX_LOCK_VAL_##type,		\
 				  __SIX_LOCK_FAIL_##type)) {		\
+			trace_six_trylock(lock, #type);			\
 			six_acquire(&lock->dep_map);			\
 			return true;					\
 		}							\
+		trace_six_trylock_fail(lock, #type);			\
 		return false;						\
 	}								\
 									\
 	static inline bool six_relock_##type(struct six_lock *lock, u32 seq)\
 	{								\
-		trace_six_relock(lock, #type);				\
 		if (__six_relock(lock,					\
 				 __SIX_LOCK_VAL_##type,			\
 				 __SIX_LOCK_FAIL_##type,		\
 				 seq)) {				\
+			trace_six_relock(lock, #type);			\
 			six_acquire(&lock->dep_map);			\
 			return true;					\
 		}							\
+		trace_six_relock_fail(lock, #type);			\
 		return false;						\
 	}								\
 									\
 	static inline void six_lock_##type(struct six_lock *lock)	\
 	{								\
+		trace_six_lock_wait(lock, #type);			\
 		__six_lock(lock,					\
 			   __SIX_LOCK_VAL_##type,			\
 			   __SIX_LOCK_FAIL_##type);			\
@@ -176,15 +184,21 @@ __SIX_LOCK(write)
 
 #define six_trylock_convert(lock, from, to)				\
 ({									\
-	trace_six_trylock_convert(lock, #from, #to);			\
-	__six_trylock_convert(lock,					\
-			      __SIX_UNLOCK_VAL_##from,			\
-			      __SIX_LOCK_VAL_##to,			\
-			      __SIX_LOCK_FAIL_##to);			\
+	bool __ret;							\
+	__ret = __six_trylock_convert(lock,				\
+				      __SIX_UNLOCK_VAL_##from,		\
+				      __SIX_LOCK_VAL_##to,		\
+				      __SIX_LOCK_FAIL_##to);		\
+	if (__ret)							\
+		trace_six_trylock_convert(lock, #from, #to);		\
+	else								\
+		trace_six_trylock_convert_fail(lock, #from, #to);	\
+	__ret;								\
 })
 
 #define six_lock_convert(lock, from, to)				\
 do {									\
+	trace_six_lock_convert_wait(lock, #from, #to);			\
 	__six_lock_convert(lock,					\
 			   __SIX_UNLOCK_VAL_##from,			\
 			   __SIX_LOCK_VAL_##to,				\

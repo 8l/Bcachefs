@@ -47,7 +47,22 @@ DEFINE_EVENT(six, six_trylock,
 	TP_ARGS(lock, type)
 );
 
+DEFINE_EVENT(six, six_trylock_fail,
+	TP_PROTO(void *lock, const char *type),
+	TP_ARGS(lock, type)
+);
+
 DEFINE_EVENT(six, six_relock,
+	TP_PROTO(void *lock, const char *type),
+	TP_ARGS(lock, type)
+);
+
+DEFINE_EVENT(six, six_relock_fail,
+	TP_PROTO(void *lock, const char *type),
+	TP_ARGS(lock, type)
+);
+
+DEFINE_EVENT(six, six_lock_wait,
 	TP_PROTO(void *lock, const char *type),
 	TP_ARGS(lock, type)
 );
@@ -63,12 +78,22 @@ DEFINE_EVENT(six, six_unlock,
 );
 
 DEFINE_EVENT(six_convert, six_trylock_convert,
-	TP_PROTO(void *lock, const char *from, const char* to),
+	TP_PROTO(void *lock, const char *from, const char *to),
+	TP_ARGS(lock, from, to)
+);
+
+DEFINE_EVENT(six_convert, six_trylock_convert_fail,
+	TP_PROTO(void *lock, const char *from, const char *to),
+	TP_ARGS(lock, from, to)
+);
+
+DEFINE_EVENT(six_convert, six_lock_convert_wait,
+	TP_PROTO(void *lock, const char *from, const char *to),
 	TP_ARGS(lock, from, to)
 );
 
 DEFINE_EVENT(six_convert, six_lock_convert,
-	TP_PROTO(void *lock, const char *from, const char* to),
+	TP_PROTO(void *lock, const char *from, const char *to),
 	TP_ARGS(lock, from, to)
 );
 

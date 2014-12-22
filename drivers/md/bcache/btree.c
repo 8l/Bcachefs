@@ -1899,8 +1899,13 @@ static int bch_gc_btree(struct cache_set *c, enum btree_id btree_id,
 			gc_merge_nodes_unlock(merge);
 			btree_iter_unlock(&iter);
 
-			/* Sleep for some time before continuing. */
-			msleep(BTREE_GC_IDLE_QUANTUM);
+			if (need_resched()) {
+				cond_resched();
+			} else {
+				/* Sleep for some time before continuing. */
+				msleep(BTREE_GC_IDLE_QUANTUM);
+			}
+
 			stat->last_start = local_clock();
 
 			btree_iter_upgrade(&iter);

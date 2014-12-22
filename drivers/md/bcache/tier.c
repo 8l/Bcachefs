@@ -141,7 +141,7 @@ static bool tiering_keylist_empty(struct cache *ca)
  */
 static void tiering_refill(struct cache_set *c, struct tiering_refill *refill)
 {
-	struct scan_keylist *keys = &refill->ca->tiering_queue.keys;
+	struct scan_keylist *keys;
 	struct btree_iter iter;
 	struct bkey *k;
 
@@ -157,6 +157,8 @@ static void tiering_refill(struct cache_set *c, struct tiering_refill *refill)
 	trace_bcache_tiering_refill_start(c);
 
 	for_each_btree_key(&iter, c, BTREE_ID_EXTENTS, k, &refill->start) {
+		keys = &refill->ca->tiering_queue.keys;
+
 		if (!tiering_pred(keys, k)) {
 			refill->start = *k;
 			continue;

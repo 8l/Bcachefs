@@ -91,6 +91,7 @@ read_attribute(metadata_written);
 read_attribute(journal_debug);
 
 sysfs_time_stats_attribute(btree_gc, sec, ms);
+sysfs_time_stats_attribute(btree_coalesce, sec, ms);
 sysfs_time_stats_attribute(btree_split, sec, us);
 sysfs_time_stats_attribute(btree_sort, ms, us);
 sysfs_time_stats_attribute(btree_read, ms, us);
@@ -601,6 +602,7 @@ SHOW(__bch_cache_set)
 	sysfs_print(btree_gc_running,		c->gc_cur_btree <= BTREE_ID_NR);
 
 	sysfs_print_time_stats(&c->btree_gc_time, btree_gc, sec, ms);
+	sysfs_print_time_stats(&c->btree_coalesce_time, btree_coalesce, sec, ms);
 	sysfs_print_time_stats(&c->btree_split_time, btree_split, sec, us);
 	sysfs_print_time_stats(&c->sort.time, btree_sort, ms, us);
 	sysfs_print_time_stats(&c->btree_read_time, btree_read, ms, us);
@@ -753,6 +755,7 @@ STORE(__bch_cache_set)
 	}
 
 	sysfs_clear_time_stats(&c->btree_gc_time, btree_gc);
+	sysfs_clear_time_stats(&c->btree_coalesce_time, btree_coalesce);
 	sysfs_clear_time_stats(&c->btree_split_time, btree_split);
 	sysfs_clear_time_stats(&c->sort.time, btree_sort);
 	sysfs_clear_time_stats(&c->btree_read_time, btree_read);
@@ -971,6 +974,7 @@ static struct attribute *bch_cache_set_internal_files[] = {
 	&sysfs_journal_debug,
 
 	sysfs_time_stats_attribute_list(btree_gc, sec, ms)
+	sysfs_time_stats_attribute_list(btree_coalesce, sec, ms)
 	sysfs_time_stats_attribute_list(btree_split, sec, us)
 	sysfs_time_stats_attribute_list(btree_sort, ms, us)
 	sysfs_time_stats_attribute_list(btree_read, ms, us)

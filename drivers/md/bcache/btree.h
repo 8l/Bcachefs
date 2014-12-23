@@ -311,6 +311,7 @@ int bch_btree_insert(struct cache_set *, enum btree_id, struct keylist *,
 
 int bch_btree_node_rewrite(struct btree *, struct btree_iter *, bool);
 
+void bch_gc(struct cache_set *);
 int bch_gc_thread_start(struct cache_set *);
 int bch_initial_gc(struct cache_set *, struct list_head *);
 uint8_t bch_btree_mark_last_gc(struct cache_set *, struct bkey *);

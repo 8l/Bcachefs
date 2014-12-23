@@ -15,7 +15,7 @@ static inline void set_gc_sectors(struct cache_set *c)
 void bch_gc(struct cache_set *);
 int bch_gc_thread_start(struct cache_set *);
 int bch_initial_gc(struct cache_set *, struct list_head *);
-uint8_t bch_btree_mark_last_gc(struct cache_set *, struct bkey *);
+uint8_t bch_btree_key_recalc_oldest_gen(struct cache_set *, struct bkey *);
 uint8_t __bch_btree_mark_key(struct cache_set *, int, struct bkey *);
 
 bool btree_gc_mark_node(struct cache_set *, struct btree *,

@@ -570,19 +570,25 @@ void bch_gc(struct cache_set *c)
 
 	down_write(&c->gc_lock);
 	bch_gc_start(c);
-	stats.last_start = local_clock();
 
 	while (c->gc_cur_btree < BTREE_ID_NR) {
 		int ret = c->btree_roots[c->gc_cur_btree]
 			? bch_gc_btree(c, c->gc_cur_btree, &stats)
 			: 0;
 
-		if (ret == -ESHUTDOWN)
-			goto gc_failed;
-
 		if (ret) {
-			pr_err("garbage collection failed with %d!", ret);
-			goto gc_failed;
+			if (ret != -ESHUTDOWN)
+				pr_err("btree gc failed with %d!", ret);
+
+			write_seqlock(&c->gc_cur_lock);
+			c->gc_cur_btree = BTREE_ID_NR + 1;
+			c->gc_cur_level = 0;
+			c->gc_cur_key = ZERO_KEY;
+			write_sequnlock(&c->gc_cur_lock);
+
+			set_bit(CACHE_SET_GC_FAILURE, &c->flags);
+			up_write(&c->gc_lock);
+			return;
 		}
 
 		write_seqlock(&c->gc_cur_lock);
@@ -604,17 +610,6 @@ void bch_gc(struct cache_set *c)
 	debug_check_no_locks_held();
 
 	trace_bcache_gc_end(c);
-	return;
-
-gc_failed:
-	write_seqlock(&c->gc_cur_lock);
-	c->gc_cur_btree = BTREE_ID_NR + 1;
-	c->gc_cur_level = 0;
-	c->gc_cur_key = ZERO_KEY;
-	write_sequnlock(&c->gc_cur_lock);
-
-	set_bit(CACHE_SET_GC_FAILURE, &c->flags);
-	up_write(&c->gc_lock);
 }
 
 static int bch_gc_thread(void *arg)

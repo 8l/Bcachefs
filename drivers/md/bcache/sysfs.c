@@ -9,6 +9,7 @@
 #include "blockdev.h"
 #include "sysfs.h"
 #include "btree.h"
+#include "gc.h"
 #include "inode.h"
 #include "journal.h"
 #include "keybuf.h"

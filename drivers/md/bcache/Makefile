@@ -12,6 +12,7 @@ bcache-y		:= alloc.o\
 	dirent.o\
 	extents.o\
 	fs.o\
+	gc.o\
 	inode.o\
 	io.o\
 	ioctl.o\

@@ -10,6 +10,7 @@
 #include "debug.h"
 #include "dirent.h"
 #include "extents.h"
+#include "gc.h"
 #include "inode.h"
 #include "super.h"
 #include "writeback.h"

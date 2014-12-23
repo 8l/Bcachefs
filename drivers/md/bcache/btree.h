@@ -256,7 +256,7 @@ struct btree_iter {
 	struct btree_node_iter	node_iters[BTREE_MAX_DEPTH];
 };
 
-int btree_iter_unlock(struct btree_iter *);
+int bch_btree_iter_unlock(struct btree_iter *);
 void bch_btree_iter_init(struct btree_iter *, struct cache_set *,
 			 enum btree_id, struct bkey *);
 

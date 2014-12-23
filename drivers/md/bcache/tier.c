@@ -199,7 +199,7 @@ static void tiering_refill(struct cache_set *c, struct tiering_refill *refill)
 	/* Reached the end of the keyspace */
 	refill->start = MAX_KEY;
 done:
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	trace_bcache_tiering_refill_end(c);
 }

@@ -320,7 +320,7 @@ static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 
 		i->keys_found += KEY_U64s(k);
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	return ret;
 }
@@ -575,7 +575,7 @@ int bch_copy(struct cache_set *c,
 		}
 insert:
 		/* Unlock our iterator inserting so we don't deadlock */
-		btree_iter_unlock(&iter);
+		bch_btree_iter_unlock(&iter);
 
 		/*
 		 * This is essentially casting a scan_keylist into the internal
@@ -591,7 +591,7 @@ insert:
 
 		BUG_ON(!bch_keylist_empty(&keys->list));
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 	bch_scan_keylist_destroy(keys);
 	kfree(keys);
 

@@ -218,7 +218,7 @@ static ssize_t bch_dump_read(struct file *file, char __user *buf,
 		if (!i->size)
 			break;
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	return err < 0 ? err : i->ret;
 }

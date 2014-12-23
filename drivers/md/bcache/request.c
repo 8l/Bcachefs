@@ -428,7 +428,7 @@ retry:
 		ca = bch_extent_pick_ptr(s->iop.c, k, &ptr);
 		if (IS_ERR(ca)) {
 			bio_io_error(bio);
-			btree_iter_unlock(&iter);
+			bch_btree_iter_unlock(&iter);
 			goto out;
 		}
 
@@ -478,7 +478,7 @@ retry:
 		}
 
 		if (done) {
-			btree_iter_unlock(&iter);
+			bch_btree_iter_unlock(&iter);
 			goto out;
 		}
 	}
@@ -487,7 +487,7 @@ retry:
 	 * If we get here, it better have been because there was an error
 	 * reading a btree node
 	 */
-	BUG_ON(!btree_iter_unlock(&iter));
+	BUG_ON(!bch_btree_iter_unlock(&iter));
 	bio_io_error(bio);
 out:
 	continue_at(cl, cached_dev_read_done_bh, NULL);

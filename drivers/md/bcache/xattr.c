@@ -88,16 +88,16 @@ static int bch_xattr_get(struct dentry *dentry, const char *name,
 		/* collision? */
 		if (!xattr_cmp(xattr, &qname)) {
 			if (xattr->x_val_len > size) {
-				btree_iter_unlock(&iter);
+				bch_btree_iter_unlock(&iter);
 				return -ERANGE;
 			}
 
 			memcpy(buffer, xattr_val(xattr), xattr->x_val_len);
-			btree_iter_unlock(&iter);
+			bch_btree_iter_unlock(&iter);
 			return 0;
 		}
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 	return -ENOENT;
 }
 
@@ -176,7 +176,7 @@ static int bch_xattr_set(struct dentry *dentry, const char *name,
 		if (ret != -EINTR && ret != -EAGAIN)
 			break;
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	return ret;
 }
@@ -216,7 +216,7 @@ ssize_t bch_xattr_list(struct dentry *dentry, char *buffer, size_t buffer_size)
 
 		len = bch_xattr_emit(dentry, xattr, buffer, buffer_size);
 		if (len > buffer_size) {
-			btree_iter_unlock(&iter);
+			bch_btree_iter_unlock(&iter);
 			return -ERANGE;
 		}
 
@@ -225,7 +225,7 @@ ssize_t bch_xattr_list(struct dentry *dentry, char *buffer, size_t buffer_size)
 		buffer_size -= len;
 
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	return ret;
 }

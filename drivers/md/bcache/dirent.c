@@ -144,7 +144,7 @@ insert:
 			bch_btree_iter_advance_pos(&iter);
 		}
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 	bch_keylist_free(&keys);
 
 	return ret;
@@ -208,7 +208,7 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 			bch_btree_iter_advance_pos(&iter);
 		}
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	return ret;
 }
@@ -235,12 +235,12 @@ u64 bch_dirent_lookup(struct cache_set *c, u64 dir_inum,
 		if (!dirent_cmp(dirent, name)) {
 			u64 inum = dirent->d_inum;
 
-			btree_iter_unlock(&iter);
+			bch_btree_iter_unlock(&iter);
 			pr_debug("found %s: %llu", name->name, inum);
 			return inum;
 		}
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	pr_debug("%s not found", name->name);
 	return 0;
@@ -263,12 +263,12 @@ int bch_empty_dir(struct cache_set *c, u64 dir_inum)
 			break;
 
 		if (KEY_INODE(k) == dir_inum) {
-			btree_iter_unlock(&iter);
+			bch_btree_iter_unlock(&iter);
 			return -ENOTEMPTY;
 		}
 
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	return 0;
 }
@@ -314,7 +314,7 @@ int bch_readdir(struct file *file, struct dir_context *ctx)
 
 		ctx->pos = KEY_OFFSET(k) + 1;
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	return 0;
 }

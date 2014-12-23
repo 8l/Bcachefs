@@ -438,7 +438,7 @@ static int bch_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		}
 	}
 out:
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 	return ret;
 }
 
@@ -975,7 +975,7 @@ static u64 bch_count_inodes(struct cache_set *c)
 	for_each_btree_key(&iter, c, BTREE_ID_INODES, k, NULL)
 		inodes++;
 
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	return inodes;
 }

@@ -505,7 +505,7 @@ void bch_sectors_dirty_init(struct cached_dev *dc, struct cache_set *c)
 			__bcache_dev_sectors_dirty_add(d, KEY_START(k),
 						       KEY_SIZE(k));
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	dc->writeback_pd.last_actual = bcache_dev_sectors_dirty(d);
 }

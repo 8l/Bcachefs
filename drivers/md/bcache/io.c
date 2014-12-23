@@ -714,7 +714,7 @@ int bch_discard(struct cache_set *c, struct bkey *start_key,
 
 		bch_btree_iter_set_pos(&iter, &n);
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	return ret;
 }
@@ -1049,7 +1049,7 @@ int bch_read_with_versions(struct cache_set *c,
 		}
 
 		if (done) {
-			btree_iter_unlock(&iter);
+			bch_btree_iter_unlock(&iter);
 			return 0;
 		}
 	}
@@ -1058,7 +1058,7 @@ int bch_read_with_versions(struct cache_set *c,
 	 * If we get here, it better have been because there was an error
 	 * reading a btree node
 	 */
-	BUG_ON(!btree_iter_unlock(&iter));
+	BUG_ON(!bch_btree_iter_unlock(&iter));
 	bio_io_error(bio);
 
 	return 0;
@@ -1066,7 +1066,7 @@ int bch_read_with_versions(struct cache_set *c,
 error_out:
 	atomic_inc(&bio->bi_remaining);
 	bio_io_error(bio);
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 	return 0;
 }
 EXPORT_SYMBOL(bch_read_with_versions);

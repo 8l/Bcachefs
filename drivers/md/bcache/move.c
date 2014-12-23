@@ -836,7 +836,7 @@ move:
 				 * reserve: after retaking, recheck in case we
 				 * raced.
 				 */
-				btree_iter_unlock(&iter);
+				bch_btree_iter_unlock(&iter);
 				b = bch_btree_iter_peek_node(&iter);
 				goto retry;
 			}
@@ -844,7 +844,7 @@ move:
 			moved++;
 			iter.locks_want = -1;
 		}
-		ret = btree_iter_unlock(&iter);
+		ret = bch_btree_iter_unlock(&iter);
 		if (ret)
 			return ret; /* btree IO error */
 

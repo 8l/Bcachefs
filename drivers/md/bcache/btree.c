@@ -1896,13 +1896,13 @@ static int bch_gc_btree(struct cache_set *c, enum btree_id btree_id,
 		lock_seq[0] = merge[0]->lock.state.seq;
 
 		if (test_bit(CACHE_SET_STOPPING, &c->flags)) {
-			btree_iter_unlock(&iter);
+			bch_btree_iter_unlock(&iter);
 			return -ESHUTDOWN;
 		}
 
 		if (need_resched() ||
 		    btree_gc_run_long_enough(stat->last_start, c)) {
-			btree_iter_unlock(&iter);
+			bch_btree_iter_unlock(&iter);
 
 			if (need_resched()) {
 				cond_resched();
@@ -1915,11 +1915,11 @@ static int bch_gc_btree(struct cache_set *c, enum btree_id btree_id,
 
 			btree_iter_upgrade(&iter);
 		} else if (race_fault()) {
-			btree_iter_unlock(&iter);
+			bch_btree_iter_unlock(&iter);
 			btree_iter_upgrade(&iter);
 		}
 	}
-	return btree_iter_unlock(&iter);
+	return bch_btree_iter_unlock(&iter);
 }
 
 static void bch_gc_start(struct cache_set *c)
@@ -2131,7 +2131,7 @@ static int bch_btree_check(struct cache_set *c)
 
 			__bch_btree_mark_key(c, iter.level + 1, &b->key);
 		}
-		btree_iter_unlock(&iter);
+		bch_btree_iter_unlock(&iter);
 	}
 
 	return 0;
@@ -2723,7 +2723,7 @@ int bch_btree_insert_at(struct btree_iter *iter,
 					    replace, persistent, reserve);
 traverse:
 		if (ret == -EAGAIN)
-			btree_iter_unlock(iter);
+			bch_btree_iter_unlock(iter);
 
 		if (bch_keylist_empty(insert_keys) ||
 		    (flags & BTREE_INSERT_ATOMIC) ||
@@ -2792,14 +2792,14 @@ int bch_btree_insert(struct cache_set *c, enum btree_id id,
 
 	bch_btree_iter_traverse(&iter);
 	ret = bch_btree_insert_at(&iter, keys, replace, persistent, 0, 0);
-	ret2 = btree_iter_unlock(&iter);
+	ret2 = bch_btree_iter_unlock(&iter);
 
 	return ret ?: ret2 ?: iter.insert_collision ? -ESRCH : 0;
 }
 
 /* Btree iterator: */
 
-int btree_iter_unlock(struct btree_iter *iter)
+int bch_btree_iter_unlock(struct btree_iter *iter)
 {
 	unsigned l;
 
@@ -2933,7 +2933,7 @@ retry:
 		if (iter->nodes[iter->level]) {
 			int ret = btree_iter_down(iter, pos);
 			if (unlikely(ret)) {
-				btree_iter_unlock(iter);
+				bch_btree_iter_unlock(iter);
 
 				/*
 				 * We just dropped all our locks - so if we need

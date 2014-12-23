@@ -148,7 +148,7 @@ again:
 			if (ret == -EINTR || ret == -EAGAIN)
 				continue;
 
-			btree_iter_unlock(&iter);
+			bch_btree_iter_unlock(&iter);
 			if (!ret)
 				*hint = KEY_INODE(&inode->i_key) + 1;
 
@@ -158,7 +158,7 @@ again:
 			bch_btree_iter_advance_pos(&iter);
 		}
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	if (!searched_from_start) {
 		/* Retry from start */
@@ -214,11 +214,11 @@ int bch_inode_find_by_inum(struct cache_set *c, u64 inode_nr,
 			break;
 
 		bkey_copy(ret, k);
-		btree_iter_unlock(&iter);
+		bch_btree_iter_unlock(&iter);
 		return 0;
 
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	return -ENOENT;
 }
@@ -246,12 +246,12 @@ static int __bch_blockdev_inode_find_by_uuid(struct cache_set *c, uuid_le *uuid,
 
 			if (!memcmp(uuid, &binode->i_uuid, 16)) {
 				memcpy(ret, binode, sizeof(*binode));
-				btree_iter_unlock(&iter);
+				bch_btree_iter_unlock(&iter);
 				return 0;
 			}
 		}
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 	return -ENOENT;
 }
 

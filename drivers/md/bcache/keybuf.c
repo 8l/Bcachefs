@@ -100,7 +100,7 @@ void bch_refill_keybuf(struct cache_set *c, struct keybuf *buf,
 	 * Therefore, we are at the end of the key space */
 	buf->last_scanned = MAX_KEY;
 done:
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	trace_bcache_keyscan(nr_found,
 			     KEY_INODE(&start), KEY_OFFSET(&start),

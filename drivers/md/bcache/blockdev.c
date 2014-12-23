@@ -709,7 +709,7 @@ int flash_devs_run(struct cache_set *c)
 			}
 		}
 	}
-	btree_iter_unlock(&iter);
+	bch_btree_iter_unlock(&iter);
 
 	return ret;
 }

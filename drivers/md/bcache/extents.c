@@ -1206,3 +1206,15 @@ const struct btree_keys_ops *bch_btree_ops[] = {
 	[BTREE_ID_DIRENTS]	= &bch_dirent_ops,
 	[BTREE_ID_XATTRS]	= &bch_xattr_ops,
 };
+
+void bch_insert_check_key(struct btree_keys *bk, struct bkey *k)
+{
+	BUG_ON(bk->ops == NULL);
+	if (bk->ops->is_extents)
+		BUG_ON(bk->ops->val_to_text == NULL
+		       || bk->ops->key_debugcheck == NULL);
+
+	if ((bk->ops->key_debugcheck != NULL)
+	    && (bk->ops->val_to_text != NULL))
+		bk->ops->key_debugcheck(bk, k);
+}

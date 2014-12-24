@@ -2160,6 +2160,7 @@ static bool btree_insert_key(struct btree_iter *iter, struct btree *b,
 	unsigned status = BTREE_INSERT_STATUS_NO_INSERT;
 	int newsize, oldsize = bch_count_data(&b->keys);
 	bool do_insert;
+	struct bkey *orig = insert;
 
 	bch_btree_node_iter_verify(&b->keys, node_iter);
 	BUG_ON(write_block(b) != btree_bset_last(b));
@@ -2169,8 +2170,6 @@ static bool btree_insert_key(struct btree_iter *iter, struct btree *b,
 	       bkey_cmp(&START_KEY(insert), &iter->pos) < 0);
 
 	if (b->keys.ops->is_extents) {
-		struct bkey *orig = insert;
-
 		bkey_copy(&temp.key, insert);
 		insert = &temp.key;
 
@@ -2201,6 +2200,7 @@ static bool btree_insert_key(struct btree_iter *iter, struct btree *b,
 	 * or dropped.
 	 */
 	if (dequeue) {
+		bch_insert_check_key(&b->keys, orig);
 		bch_keylist_dequeue(insert_keys);
 		dequeue = false; /* already done */
 	}

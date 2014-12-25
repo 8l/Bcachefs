@@ -2973,7 +2973,6 @@ struct btree *bch_btree_iter_peek_node(struct btree_iter *iter)
 struct btree *bch_btree_iter_next_node(struct btree_iter *iter)
 {
 	struct btree *b;
-	struct bkey *k;
 
 	BUG_ON(iter->is_extents);
 
@@ -2984,17 +2983,15 @@ struct btree *bch_btree_iter_next_node(struct btree_iter *iter)
 
 	/* parent node usually won't be locked: redo traversal if necessary */
 	bch_btree_iter_traverse(iter);
-
-	while ((k = bch_btree_node_iter_peek(&iter->node_iters[iter->level])) &&
-	       bkey_cmp(&iter->pos, k) >= 0)
-		bch_btree_node_iter_next_all(&iter->node_iters[iter->level]);
-
-	if (__btree_iter_peek(iter))
-		__bch_btree_iter_traverse(iter, 0, &iter->pos);
-
 	b = iter->nodes[iter->level];
 
-	BUG_ON(bkey_cmp(&b->key, &iter->pos) < 0);
+	if (bkey_cmp(&iter->pos, &b->key) < 0) {
+		struct bkey pos = bkey_successor(&iter->pos);
+
+		__bch_btree_iter_traverse(iter, 0, &pos);
+		b = iter->nodes[iter->level];
+	}
+
 	bkey_copy_key(&iter->pos, &b->key);
 
 	return b;

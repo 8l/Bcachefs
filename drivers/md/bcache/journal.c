@@ -204,7 +204,7 @@ reread:		left = ca->sb.bucket_size - offset;
 			size_t blocks, bytes = set_bytes(j);
 			u64 got, expect;
 
-			if (cache_set_init_fault(1))
+			if (cache_set_init_fault())
 				goto err;
 
 			if (j->magic != jset_magic(&ca->sb)) {

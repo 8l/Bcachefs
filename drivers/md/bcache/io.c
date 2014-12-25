@@ -900,7 +900,7 @@ static void bch_read_endio(struct bio *bio, int error)
 	bch_bbio_count_io_errors(b, error, "reading from cache");
 
 	if (!error && ca &&
-	    (dynamic_fault() || ptr_stale(ca->set, ca, &b->key, 0))) {
+	    (race_fault() || ptr_stale(ca->set, ca, &b->key, 0))) {
 		/* Read bucket invalidate race */
 		atomic_long_inc(&ca->set->cache_read_races);
 

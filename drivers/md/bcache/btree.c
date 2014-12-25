@@ -151,7 +151,7 @@ static void btree_node_unlock(struct btree_iter *iter, unsigned level)
 })
 
 #define btree_node_lock(b, iter, level, check_if_raced)			\
-	(!dynamic_fault() &&						\
+	(!race_fault() &&						\
 	 (btree_want_intent(iter, level)				\
 	  ? __btree_node_lock(b, iter, level, check_if_raced, intent)	\
 	  : __btree_node_lock(b, iter, level, check_if_raced, read)))
@@ -172,7 +172,7 @@ static bool btree_node_relock(struct btree_iter *iter, unsigned level)
 	struct btree *b = iter->nodes[level];
 
 	return btree_node_locked(iter, level) ||
-		(!dynamic_fault() &&
+		(!race_fault() &&
 		 (btree_want_intent(iter, level)
 		  ? __btree_node_relock(b, iter, level, intent)
 		  : __btree_node_relock(b, iter, level, read)));
@@ -1909,6 +1909,10 @@ static int bch_gc_btree(struct cache_set *c, enum btree_id btree_id,
 
 			stat->last_start = local_clock();
 
+			btree_iter_upgrade(&iter);
+		} else if (race_fault()) {
+			gc_merge_nodes_unlock(merge);
+			btree_iter_unlock(&iter);
 			btree_iter_upgrade(&iter);
 		}
 	}

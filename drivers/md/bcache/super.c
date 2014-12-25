@@ -378,7 +378,7 @@ retry:
 				     : CACHE_SB_CSUM_TYPE(sb->sb)))
 		return "Bad checksum";
 
-	if (cache_set_init_fault(0))
+	if (cache_set_init_fault())
 		return "dynamic fault";
 
 	return NULL;
@@ -1185,7 +1185,7 @@ const char *bch_run_cache_set(struct cache_set *c)
 	bch_debug_init_cache_set(c);
 
 	err = "dynamic fault";
-	if (cache_set_init_fault(3))
+	if (cache_set_init_fault())
 		goto err;
 
 	set_bit(CACHE_SET_RUNNING, &c->flags);
@@ -1899,7 +1899,7 @@ static int cache_init(struct cache *ca, struct cache_set *c)
 	size_t heap_size;
 	unsigned i;
 
-	if (cache_set_init_fault(4))
+	if (cache_set_init_fault())
 		return -ENOMEM;
 
 	if (percpu_ref_init(&ca->ref, bch_cache_percpu_ref_release))

@@ -307,7 +307,7 @@ int bch_prio_read(struct cache *ca, u64 bucket)
 	size_t b;
 	int ret;
 
-	if (cache_set_init_fault(2)) {
+	if (cache_set_init_fault()) {
 		bch_cache_error(ca, "bch_prio_read() dynamic fault");
 		return -EIO;
 	}
@@ -1178,7 +1178,7 @@ static struct open_bucket *lock_and_refill_writepoint(struct cache_set *c,
 			if (IS_ERR_OR_NULL(b))
 				return b;
 
-			if (!dynamic_fault() &&
+			if (!race_fault() &&
 			    cmpxchg(&wp->b, NULL, b) == NULL) {
 				if (bucket_still_writeable(b, c))
 					return b;

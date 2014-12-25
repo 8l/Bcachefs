@@ -40,6 +40,7 @@
 #include <linux/ramfs.h>
 #include <linux/percpu-refcount.h>
 #include <linux/mount.h>
+#include <linux/closure.h>
 
 #include <asm/kmap_types.h>
 #include <asm/uaccess.h>
@@ -136,7 +137,7 @@ struct kioctx {
 
 	struct {
 		struct mutex	ring_lock;
-		wait_queue_head_t wait;
+		struct closure_waitlist wait;
 	} ____cacheline_aligned_in_smp;
 
 	struct {
@@ -689,7 +690,6 @@ static struct kioctx *ioctx_alloc(unsigned nr_events)
 	/* Protect against page migration throughout kiotx setup by keeping
 	 * the ring_lock mutex held until setup is complete. */
 	mutex_lock(&ctx->ring_lock);
-	init_waitqueue_head(&ctx->wait);
 
 	INIT_LIST_HEAD(&ctx->active_reqs);
 
@@ -772,7 +772,7 @@ static int kill_ioctx(struct mm_struct *mm, struct kioctx *ctx,
 	spin_unlock(&mm->ioctx_lock);
 
 	/* percpu_ref_kill() will do the necessary call_rcu() */
-	wake_up_all(&ctx->wait);
+	closure_wake_up(&ctx->wait);
 
 	/*
 	 * It'd be more correct to do this in free_ioctx(), after all
@@ -1121,8 +1121,7 @@ void aio_complete(struct kiocb *iocb, long res, long res2)
 	 */
 	smp_mb();
 
-	if (waitqueue_active(&ctx->wait))
-		wake_up(&ctx->wait);
+	closure_wake_up(&ctx->wait);
 
 	percpu_ref_put(&ctx->reqs);
 }
@@ -1237,26 +1236,15 @@ static long read_events(struct kioctx *ctx, long min_nr, long nr,
 			return -EFAULT;
 
 		until = timespec_to_ktime(ts);
+
+		if (until.tv64)
+			until = ktime_add(ktime_get(), until);
 	}
 
-	/*
-	 * Note that aio_read_events() is being called as the conditional - i.e.
-	 * we're calling it after prepare_to_wait() has set task state to
-	 * TASK_INTERRUPTIBLE.
-	 *
-	 * But aio_read_events() can block, and if it blocks it's going to flip
-	 * the task state back to TASK_RUNNING.
-	 *
-	 * This should be ok, provided it doesn't flip the state back to
-	 * TASK_RUNNING and return 0 too much - that causes us to spin. That
-	 * will only happen if the mutex_lock() call blocks, and we then find
-	 * the ringbuffer empty. So in practice we should be ok, but it's
-	 * something to be aware of when touching this code.
-	 */
 	if (until.tv64 == 0)
 		aio_read_events(ctx, min_nr, nr, event, &ret);
 	else
-		wait_event_interruptible_hrtimeout(ctx->wait,
+		closure_wait_event_hrtimeout(&ctx->wait,
 				aio_read_events(ctx, min_nr, nr, event, &ret),
 				until);
 

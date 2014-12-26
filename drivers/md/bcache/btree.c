@@ -3056,20 +3056,20 @@ struct bkey *bch_btree_iter_peek(struct btree_iter *iter)
 
 struct bkey *bch_btree_iter_peek_with_holes(struct btree_iter *iter)
 {
-	struct bkey *k, pos = iter->pos;
+	struct bkey *k;
 
 	while (1) {
-		__bch_btree_iter_traverse(iter, 0, &pos);
+		__bch_btree_iter_traverse(iter, 0, &iter->pos);
 
-		k = bch_btree_node_iter_peek_all(iter->node_iters)
-			?: &iter->nodes[0]->key;
-
-		BUG_ON(bkey_cmp(k, &iter->pos) < 0);
+		k = bch_btree_node_iter_peek_all(iter->node_iters);
 recheck:
-		if (bkey_cmp(&START_KEY(k), &iter->pos) > 0) {
+		if (!k || bkey_cmp(&START_KEY(k), &iter->pos) > 0) {
 			/* hole */
 			iter->k = iter->pos;
 			bch_set_val_u64s(&iter->k, 0);
+
+			if (!k)
+				k = &iter->nodes[0]->key;
 
 			if (iter->btree_id == BTREE_ID_EXTENTS) {
 				if (KEY_OFFSET(&iter->k) == KEY_OFFSET_MAX) {
@@ -3087,21 +3087,18 @@ recheck:
 			}
 
 			SET_KEY_DELETED(&iter->k, true);
+
+			BUG_ON(!iter->is_extents &&
+			       bkey_cmp(&iter->pos, &START_KEY(&iter->k)));
 			return &iter->k;
-		} else if (k != &iter->nodes[0]->key) {
-			if (!KEY_DELETED(k)) {
-				iter->k = *k;
-				return k;
-			}
+		} else if (!KEY_DELETED(k)) {
+			iter->k = *k;
 
-			bch_btree_node_iter_next_all(iter->node_iters);
+			BUG_ON(!iter->is_extents &&
+			       bkey_cmp(&iter->pos, &START_KEY(&iter->k)));
+			return k;
 		} else {
-			pos = iter->nodes[0]->key;
-
-			if (!bkey_cmp(&pos, &MAX_KEY))
-				return NULL;
-
-			__bch_btree_iter_advance_pos(iter, &pos);
+			bch_btree_node_iter_next_all(iter->node_iters);
 		}
 	}
 

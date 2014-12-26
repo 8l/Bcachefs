@@ -3067,6 +3067,7 @@ recheck:
 			/* hole */
 			iter->k = iter->pos;
 			bch_set_val_u64s(&iter->k, 0);
+			SET_KEY_DELETED(&iter->k, true);
 
 			if (!k)
 				k = &iter->nodes[0]->key;
@@ -3086,16 +3087,9 @@ recheck:
 				BUG_ON(!KEY_SIZE(&iter->k));
 			}
 
-			SET_KEY_DELETED(&iter->k, true);
-
-			BUG_ON(!iter->is_extents &&
-			       bkey_cmp(&iter->pos, &START_KEY(&iter->k)));
 			return &iter->k;
 		} else if (!KEY_DELETED(k)) {
 			iter->k = *k;
-
-			BUG_ON(!iter->is_extents &&
-			       bkey_cmp(&iter->pos, &START_KEY(&iter->k)));
 			return k;
 		} else {
 			bch_btree_node_iter_next_all(iter->node_iters);

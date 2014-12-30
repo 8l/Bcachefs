@@ -67,7 +67,7 @@ struct bio *bch_bbio_alloc(struct cache_set *c)
 
 	bio_init(bio);
 	bio->bi_flags		|= BIO_POOL_NONE << BIO_POOL_OFFSET;
-	bio->bi_max_vecs	 = bucket_pages(c);
+	bio->bi_max_vecs	 = c->btree_pages;
 	bio->bi_io_vec		 = bio->bi_inline_vecs;
 
 	return bio;
@@ -794,7 +794,7 @@ static void cache_promote_endio(struct bio *bio, int error)
 
 	if (error)
 		op->iop.error = error;
-	else if (b->ca && ptr_stale(b->ca->set, b->ca, &b->key, 0))
+	else if (b->ca && ptr_stale(b->ca, &b->key, 0))
 		op->stale = 1;
 
 	bch_bbio_endio(b, error, "reading from cache");
@@ -903,7 +903,7 @@ static void bch_read_endio(struct bio *bio, int error)
 	bch_bbio_count_io_errors(b, error, "reading from cache");
 
 	if (!error && ca &&
-	    (race_fault() || ptr_stale(ca->set, ca, &b->key, 0))) {
+	    (race_fault() || ptr_stale(ca, &b->key, 0))) {
 		/* Read bucket invalidate race */
 		atomic_long_inc(&ca->set->cache_read_races);
 		bch_read_requeue(ca->set, bio);
@@ -951,7 +951,7 @@ int bch_read(struct cache_set *c, struct bio *bio, u64 inode)
 		}
 
 		if (ca) {
-			PTR_BUCKET(c, ca, k, ptr)->read_prio =
+			PTR_BUCKET(ca, k, ptr)->read_prio =
 				c->prio_clock[READ].hand;
 
 			n = sectors >= bio_sectors(bio)

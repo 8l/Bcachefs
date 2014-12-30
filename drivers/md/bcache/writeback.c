@@ -166,11 +166,10 @@ static void write_dirty(struct closure *cl)
 static void read_dirty_endio(struct bio *bio, int error)
 {
 	struct dirty_io *io = container_of(bio, struct dirty_io, bio);
-	struct cache_set *c = io->dc->disk.c;
 
 	bch_count_io_errors(io->ca, error, "reading dirty data from cache");
 
-	if (ptr_stale(c, io->ca, &io->replace.key, io->ptr))
+	if (ptr_stale(io->ca, &io->replace.key, io->ptr))
 		error = -EINTR;
 
 	percpu_ref_put(&io->ca->ref);

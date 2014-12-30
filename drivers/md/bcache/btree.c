@@ -47,8 +47,7 @@ static int __bch_btree_insert_node(struct btree *, struct btree_iter *,
 				   struct closure *, enum alloc_reserve,
 				   struct keylist *, struct closure *);
 
-#define PTR_HASH(c, k)							\
-	(((k)->val[0] >> c->bucket_bits) | PTR_GEN(k, 0))
+#define PTR_HASH(k) k->val[0]
 
 static inline void mark_btree_node_intent_locked(struct btree_iter *iter,
 						 unsigned level)
@@ -234,7 +233,7 @@ do {								\
 		"btree node error at btree %u level %u/%u bucket %zu block %u keys %u: " fmt,\
 		(b)->btree_id, (b)->level, btree_node_root(b)	\
 			    ? btree_node_root(b)->level : -1,	\
-		PTR_BUCKET_NR((b)->c, &(b)->key, ptr),		\
+		CACHE_BUCKET_NR(ca, &(b)->key, ptr),		\
 		bset_block_offset(b, i),			\
 		i->keys, ##__VA_ARGS__);			\
 } while (0)
@@ -405,7 +404,7 @@ missing:
 
 err:
 	bch_cache_error(ca, "IO error reading bucket %zu",
-			PTR_BUCKET_NR(b->c, &b->key, ptr));
+			CACHE_BUCKET_NR(ca, &b->key, ptr));
 }
 
 static void btree_complete_write(struct btree *b, struct btree_write *w)
@@ -879,7 +878,7 @@ void bch_btree_cache_free(struct cache_set *c)
 	if (c->verify_data)
 		list_move(&c->verify_data->list, &c->btree_cache);
 
-	free_pages((unsigned long) c->verify_ondisk, ilog2(bucket_pages(c)));
+	free_pages((unsigned long) c->verify_ondisk, ilog2(c->btree_pages));
 #endif
 
 	for (i = 0; i < BTREE_ID_NR; i++)
@@ -927,7 +926,7 @@ int bch_btree_cache_alloc(struct cache_set *c)
 	mutex_init(&c->verify_lock);
 
 	c->verify_ondisk = (void *)
-		__get_free_pages(GFP_KERNEL, ilog2(bucket_pages(c)));
+		__get_free_pages(GFP_KERNEL, ilog2(c->btree_pages));
 
 	c->verify_data = mca_bucket_alloc(c, GFP_KERNEL);
 
@@ -951,7 +950,7 @@ int bch_btree_cache_alloc(struct cache_set *c)
 
 static struct hlist_head *mca_hash(struct cache_set *c, const struct bkey *k)
 {
-	return &c->bucket_hash[hash_32(PTR_HASH(c, k), BUCKET_HASH_BITS)];
+	return &c->bucket_hash[hash_32(PTR_HASH(k), BUCKET_HASH_BITS)];
 }
 
 static inline struct btree *mca_find(struct cache_set *c, const struct bkey *k)

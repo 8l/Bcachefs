@@ -585,10 +585,10 @@ static void bch_recalc_capacity(struct cache_set *c)
 
 				capacity += (ca->sb.nbuckets -
 					     ca->sb.first_bucket) <<
-					c->bucket_bits;
+					ca->bucket_bits;
 
 				ca->reserve_buckets_count =
-					div_u64((ca->sb.nbuckets - ca->sb.first_bucket) *
+				div_u64((ca->sb.nbuckets - ca->sb.first_bucket) *
 						c->bucket_reserve_percent, 100);
 
 			}
@@ -837,8 +837,8 @@ static void bch_writes_disabled(struct percpu_ref *writes)
 	complete(&c->write_disable_complete);
 }
 
-#define alloc_bucket_pages(gfp, c)			\
-	((void *) __get_free_pages(__GFP_ZERO|gfp, ilog2(bucket_pages(c))))
+#define alloc_bucket_pages(gfp, ca)			\
+	((void *) __get_free_pages(__GFP_ZERO|gfp, ilog2(bucket_pages(ca))))
 
 static struct cache_set *bch_cache_set_alloc(struct cache *ca)
 {
@@ -868,7 +868,6 @@ static struct cache_set *bch_cache_set_alloc(struct cache *ca)
 		goto err;
 
 	c->minor		= -1;
-	c->bucket_bits		= ilog2(c->sb.bucket_size);
 	c->block_bits		= ilog2(c->sb.block_size);
 	c->btree_pages		= CACHE_BTREE_NODE_SIZE(&c->sb) / PAGE_SECTORS;
 
@@ -906,12 +905,12 @@ static struct cache_set *bch_cache_set_alloc(struct cache *ca)
 	if (!c->search)
 		goto err;
 
-	iter_size = (c->sb.bucket_size / c->sb.block_size + 1) *
+	iter_size = (btree_blocks(c) + 1) *
 		sizeof(struct btree_node_iter_set);
 
 	if (!(c->bio_meta = mempool_create_kmalloc_pool(2,
 				sizeof(struct bbio) + sizeof(struct bio_vec) *
-				bucket_pages(c))) ||
+				c->btree_pages)) ||
 	    !(c->fill_iter = mempool_create_kmalloc_pool(1, iter_size)) ||
 	    !(c->bio_split = bioset_create(4, offsetof(struct bbio, bio))) ||
 	    !(c->wq = create_workqueue("bcache")) ||
@@ -1216,8 +1215,6 @@ static const char *can_add_cache(struct cache *ca, struct cache_set *c)
 {
 	if (ca->sb.block_size != c->sb.block_size)
 		return "new cache has wrong block size";
-	else if (ca->sb.bucket_size != c->sb.bucket_size)
-		return "new cache has wrong bucket size";
 	else if (memcmp(&ca->sb.set_uuid, &c->sb.set_uuid,
 				sizeof(ca->sb.set_uuid)))
 		return "new cache has wrong cacheset uuid";
@@ -1619,6 +1616,9 @@ void bch_cache_release(struct kobject *kobj)
 			free_fifo(&ca->free[i]);
 	}
 
+	if (ca->bio_prio)
+		kfree(ca->bio_prio);
+
 	free_super(&ca->disk_sb);
 
 	kfree(ca);
@@ -1963,10 +1963,12 @@ static int cache_init(struct cache *ca, struct cache_set *c)
 	    !(ca->replica_set = bioset_create(4, offsetof(struct bbio, bio))) ||
 	    !(ca->bucket_stats_percpu = alloc_percpu(struct bucket_stats)) ||
 	    !(ca->journal.seq	= kcalloc(bch_nr_journal_buckets(&ca->sb),
-					  sizeof(u64), GFP_KERNEL)))
+					  sizeof(u64), GFP_KERNEL)) ||
+	    !(ca->bio_prio = bio_kmalloc(GFP_NOIO, bucket_pages(ca))))
 		return -ENOMEM;
 
 	ca->prio_last_buckets = ca->prio_buckets + prio_buckets(ca);
+	ca->bucket_bits = ilog2(ca->sb.bucket_size);
 
 	total_reserve = ca->free_inc.size;
 	for (i = 0; i < RESERVE_NR; i++)
@@ -2128,7 +2130,6 @@ have_slot:
 	}
 
 	memcpy(&sb.sb->set_uuid, &c->sb.set_uuid, sizeof(sb.sb->set_uuid));
-	sb.sb->bucket_size	= c->sb.bucket_size;
 	sb.sb->block_size	= c->sb.block_size;
 
 	/* Preserve the old cache member information (esp. tier)

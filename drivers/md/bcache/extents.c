@@ -103,7 +103,7 @@ static bool should_drop_ptr(const struct cache_set *c, const struct bkey *k,
 		return true;
 
 	return (ca = PTR_CACHE(c, k, ptr)) &&
-		ptr_stale(c, ca, k, ptr);
+		ptr_stale(ca, k, ptr);
 }
 
 unsigned bch_extent_nr_ptrs_after_normalize(const struct cache_set *c,
@@ -165,10 +165,10 @@ static bool __ptr_invalid(const struct cache_set *c, const struct bkey *k)
 
 	for (i = 0; i < bch_extent_ptrs(k); i++)
 		if ((ca = PTR_CACHE(c, k, i))) {
-			size_t bucket = PTR_BUCKET_NR(c, k, i);
-			size_t r = bucket_remainder(c, PTR_OFFSET(k, i));
+			size_t bucket = CACHE_BUCKET_NR(ca, k, i);
+			size_t r = bucket_remainder(ca, PTR_OFFSET(k, i));
 
-			if (KEY_SIZE(k) + r > c->sb.bucket_size ||
+			if (KEY_SIZE(k) + r > ca->sb.bucket_size ||
 			    bucket <  ca->sb.first_bucket ||
 			    bucket >= ca->sb.nbuckets) {
 				rcu_read_unlock();
@@ -190,16 +190,16 @@ static const char *bch_ptr_status(const struct cache_set *c,
 		struct cache *ca = PTR_CACHE(c, k, i);
 
 		if (ca) {
-			size_t bucket = PTR_BUCKET_NR(c, k, i);
-			size_t r = bucket_remainder(c, PTR_OFFSET(k, i));
+			size_t bucket = CACHE_BUCKET_NR(ca, k, i);
+			size_t r = bucket_remainder(ca, PTR_OFFSET(k, i));
 
-			if (KEY_SIZE(k) + r > c->sb.bucket_size)
+			if (KEY_SIZE(k) + r > ca->sb.bucket_size)
 				return "bad, length too big";
 			if (bucket <  ca->sb.first_bucket)
 				return "bad, short offset";
 			if (bucket >= ca->sb.nbuckets)
 				return "bad, offset past end of device";
-			if (ptr_stale(c, ca, k, i))
+			if (ptr_stale(ca, k, i))
 				return "stale";
 		}
 	}
@@ -290,7 +290,7 @@ static void btree_ptr_debugcheck(struct btree_keys *bk, const struct bkey *k)
 
 	for (i = 0; i < bch_extent_ptrs(k); i++)
 		if ((ca = PTR_CACHE(c, k, i))) {
-			g = PTR_BUCKET(c, ca, k, i);
+			g = PTR_BUCKET(ca, k, i);
 
 			if (KEY_CACHED(k))
 				goto err;
@@ -312,8 +312,8 @@ err:
 	bch_bkey_val_to_text(bk, buf, sizeof(buf), k);
 	btree_bug(b, "inconsistent btree pointer %s: bucket %zi prio %i "
 		  "gen %i oldest_gen %i mark 0x%08x",
-		  buf, PTR_BUCKET_NR(c, k, i),
-		  g->read_prio, PTR_BUCKET_GEN(c, ca, k, i),
+		  buf, CACHE_BUCKET_NR(ca, k, i),
+		  g->read_prio, PTR_BUCKET_GEN(ca, k, i),
 		  g->oldest_gen, g->mark.counter);
 	rcu_read_unlock();
 }
@@ -1003,7 +1003,7 @@ static void bch_extent_debugcheck(struct btree_keys *bk, const struct bkey *k)
 		stale = 0;
 
 		if ((ca = PTR_CACHE(c, k, i))) {
-			g = PTR_BUCKET(c, ca, k, i);
+			g = PTR_BUCKET(ca, k, i);
 
 			do {
 				struct bucket_mark mark;
@@ -1012,7 +1012,7 @@ static void bch_extent_debugcheck(struct btree_keys *bk, const struct bkey *k)
 				mark = ACCESS_ONCE(g->mark);
 				smp_rmb();
 
-				stale = ptr_stale(c, ca, k, i);
+				stale = ptr_stale(ca, k, i);
 
 				cache_set_bug_on(stale > 96, c,
 						 "key too stale: %i",
@@ -1066,8 +1066,8 @@ bad_ptr:
 	bch_bkey_val_to_text(bk, buf, sizeof(buf), k);
 	cache_set_bug(c, "extent pointer %i bad gc mark: %s:\nbucket %zu prio %i "
 		      "gen %i oldest_gen %i mark 0x%08x", i,
-		      buf, PTR_BUCKET_NR(c, k, i),
-		      g->read_prio, PTR_BUCKET_GEN(c, ca, k, i),
+		      buf, CACHE_BUCKET_NR(ca, k, i),
+		      g->read_prio, PTR_BUCKET_GEN(ca, k, i),
 		      g->oldest_gen, g->mark.counter);
 	cache_member_info_put();
 	return;
@@ -1127,7 +1127,7 @@ struct cache *bch_extent_pick_ptr(struct cache_set *c, const struct bkey *k,
 	for (*ptr = 0; *ptr < bch_extent_ptrs(k); (*ptr)++) {
 		struct cache *ca = PTR_CACHE(c, k, *ptr);
 
-		if (ca && !ptr_stale(c, ca, k, *ptr)) {
+		if (ca && !ptr_stale(ca, k, *ptr)) {
 			percpu_ref_get(&ca->ref);
 			rcu_read_unlock();
 			return ca;
@@ -1168,7 +1168,8 @@ static bool bch_extent_merge(struct btree_keys *bk, struct bkey *l, struct bkey 
 
 	for (i = 0; i < bch_extent_ptrs(l); i++)
 		if (l->val[i] + PTR(0, KEY_SIZE(l), 0) != r->val[i] ||
-		    PTR_BUCKET_NR(b->c, l, i) != PTR_BUCKET_NR(b->c, r, i))
+		    PTR_BUCKET_NR(b->c, l, i) !=
+		    PTR_BUCKET_NR(b->c, r, i))
 			return false;
 
 	/* Keys with no pointers aren't restricted to one bucket and could

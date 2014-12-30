@@ -259,6 +259,7 @@ struct cache {
 	uint64_t		*prio_last_buckets;
 	uint64_t		prio_journal_bucket;
 	spinlock_t		prio_buckets_lock;
+	struct bio		*bio_prio;
 
 	/*
 	 * free: Buckets that are ready to be used
@@ -280,6 +281,7 @@ struct cache {
 	/* Allocation stuff: */
 	u8			*bucket_gens;
 	struct bucket		*buckets;
+	unsigned short		bucket_bits;	/* ilog2(bucket_size) */
 
 	/* last calculated minimum prio */
 	u16			min_prio[2];
@@ -394,7 +396,6 @@ struct cache_set {
 	unsigned long		cache_slots_used[BITS_TO_LONGS(MAX_CACHES_PER_SET)];
 
 	struct cache_sb		sb;
-	unsigned short		bucket_bits;	/* ilog2(bucket_size) */
 	unsigned short		block_bits;	/* ilog2(block_size) */
 
 	struct closure		sb_write;
@@ -651,15 +652,23 @@ struct cache_set {
 	unsigned		cache_reserve_percent;
 };
 
-#define bucket_pages(c)		((c)->sb.bucket_size / PAGE_SECTORS)
-#define bucket_bytes(c)		((c)->sb.bucket_size << 9)
+static inline unsigned bucket_pages(const struct cache *ca)
+{
+	return ca->sb.bucket_size / PAGE_SECTORS;
+}
+
+static inline unsigned bucket_bytes(const struct cache *ca)
+{
+	return ca->sb.bucket_size << 9;
+}
+
 #define block_bytes(c)		((c)->sb.block_size << 9)
 
-#define prios_per_bucket(c)				\
-	((bucket_bytes(c) - sizeof(struct prio_set)) /	\
+#define prios_per_bucket(ca)				\
+	((bucket_bytes(ca) - sizeof(struct prio_set)) /	\
 	 sizeof(struct bucket_disk))
-#define prio_buckets(c)					\
-	DIV_ROUND_UP((size_t) (c)->sb.nbuckets, prios_per_bucket(c))
+#define prio_buckets(ca)					\
+	DIV_ROUND_UP((size_t) (ca)->sb.nbuckets, prios_per_bucket(ca))
 
 /* Error handling macros */
 

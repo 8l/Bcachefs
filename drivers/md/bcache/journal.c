@@ -166,7 +166,7 @@ static int journal_read_bucket(struct cache *ca, struct journal_list *jlist,
 	struct bio *bio = &ja->bio;
 	struct jset *j, *data;
 	unsigned len, left, offset = 0;
-	sector_t bucket = bucket_to_sector(ca->set,
+	sector_t bucket = bucket_to_sector(ca,
 				journal_bucket(ca, bucket_index));
 	bool entries_found = false;
 	int ret = 0;
@@ -595,7 +595,7 @@ static void do_journal_discard(struct cache *ca)
 		atomic_set(&ja->discard_in_flight, DISCARD_IN_FLIGHT);
 
 		bio_init(bio);
-		bio->bi_iter.bi_sector	= bucket_to_sector(ca->set,
+		bio->bi_iter.bi_sector	= bucket_to_sector(ca,
 						journal_bucket(ca, ja->discard_idx));
 		bio->bi_bdev		= ca->bdev;
 		bio->bi_rw		= REQ_WRITE|REQ_DISCARD;
@@ -743,7 +743,8 @@ pick_new_devices:
 
 		ja->cur_idx = next;
 		k->val[bch_extent_ptrs(k)] =
-			PTR(0, bucket_to_sector(c, journal_bucket(ca, ja->cur_idx)),
+			PTR(0, bucket_to_sector(ca, journal_bucket(ca,
+							ja->cur_idx)),
 			    ca->sb.nr_this_dev);
 
 		bch_set_extent_ptrs(k, bch_extent_ptrs(k) + 1);

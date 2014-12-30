@@ -968,6 +968,8 @@ static struct cache_set *bch_cache_set_alloc(struct cache *ca)
 	c->gc_sector_percent = DFLT_CACHE_SET_GC_SECTOR_PERCENT;
 	c->cache_reserve_percent = DFLT_CACHE_SET_CACHE_RESERVE_PERCENT;
 
+	set_bit(CACHE_SET_CACHE_FULL_EXTENTS, &c->flags);
+
 	return c;
 err:
 	bch_cache_set_unregister(c);

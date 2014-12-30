@@ -18,6 +18,7 @@
 #include "super.h"
 
 #include <linux/blkdev.h>
+#include <linux/bio.h>
 
 #include <trace/events/bcache.h>
 
@@ -733,6 +734,7 @@ struct cache_promote_op {
 	struct bio		*orig_bio;
 	struct bch_write_op	iop;
 	bool			stale; /* was the ptr stale after the read? */
+	bool			adjust_copy;
 	struct bbio		bio; /* must be last */
 };
 
@@ -754,6 +756,24 @@ static void cache_promote_done(struct closure *cl)
 	kfree(op);
 }
 
+static void bio_copy_data_w_offsets(struct bio *dst,
+				    uint64_t dst_offset,
+				    struct bio *src,
+				    uint64_t src_offset)
+{
+	struct bvec_iter src_iter, dst_iter;
+
+	src_iter = src->bi_iter;
+	dst_iter = dst->bi_iter;
+
+	bio_advance(src, src_offset);
+	bio_advance(dst, dst_offset);
+	bio_copy_data(dst, src);
+
+	src->bi_iter = src_iter;
+	dst->bi_iter = dst_iter;
+}
+
 static void cache_promote_write(struct closure *cl)
 {
 	struct cache_promote_op *op = container_of(cl,
@@ -762,11 +782,20 @@ static void cache_promote_write(struct closure *cl)
 
 	bio_reset(bio);
 	bio->bi_iter.bi_sector	= KEY_START(&op->iop.insert_key);
-	bio->bi_iter.bi_size	= KEY_SIZE(&op->iop.insert_key) << 9;
+	bio->bi_iter.bi_size	= sector_bytes(KEY_SIZE(&op->iop.insert_key));
 	/* needed to reinit bi_vcnt so pages can be freed later */
 	bch_bio_map(bio, NULL);
 
-	bio_copy_data(op->orig_bio, bio);
+	if (!op->adjust_copy)
+		bio_copy_data(op->orig_bio, bio);
+	else {
+		struct bbio *orig_bbio = to_bbio(op->orig_bio);
+		uint64_t offset
+			= sector_bytes(KEY_START(&orig_bbio->key)
+				       - KEY_START(&op->iop.insert_key));
+		bio_copy_data_w_offsets(op->orig_bio, 0, bio, offset);
+	}
+
 	bio_endio(op->orig_bio, op->iop.error);
 
 	if (!op->stale &&
@@ -798,6 +827,41 @@ static void cache_promote_endio(struct bio *bio, int error)
 	bch_bbio_endio(b, error, "reading from cache");
 }
 
+static uint64_t calculate_start_sector(const struct bkey *full,
+				       struct bbio *bbio,
+				       bool *stale)
+{
+	struct bkey *need = &bbio->key;
+	struct cache *ca = bbio->ca;
+	struct cache *ca2;
+	unsigned ptr;
+
+	BUG_ON(ca == NULL);
+	BUG_ON(bch_extent_ptrs(need) != 1);
+	BUG_ON(bch_extent_ptrs(full) == 0);
+
+	ca2 = bch_extent_pick_ptr(ca->set, full, &ptr);
+
+	/*
+	 * In theory, it could have gone stale in the interim.
+	 * We could read from the new pointer and update everything,
+	 * but for now we just abort the caching instead.
+	 */
+	*stale = (ca2 != ca);
+
+	/*
+	 * bch_extent_pick_ptr gets a ref to ca2->ref.
+	 * If ca2 is the same as ca, we already have one, give the other up.
+	 * If ca2 is not the same as ca, we are not going to use it anyway,
+	 * so give it up.
+	 * So we give it up either way.
+	 */
+	if (!IS_ERR_OR_NULL(ca2))
+		percpu_ref_put(&ca2->ref);
+
+	return PTR_OFFSET(full, ptr);
+}
+
 /**
  * __cache_promote -- insert result of read bio into cache
  *
@@ -805,15 +869,23 @@ static void cache_promote_endio(struct bio *bio, int error)
  *
  * @orig_bio must actually be a bbio with a valid key.
  */
+
 void __cache_promote(struct cache_set *c, struct bbio *orig_bio,
 		     const struct bkey *replace_key,
 		     unsigned write_flags)
 {
+	bool read_full, stale;
 	struct cache_promote_op *op;
 	struct bio *bio;
-	unsigned pages = DIV_ROUND_UP(orig_bio->bio.bi_iter.bi_size, PAGE_SIZE);
+	unsigned pages, size = sector_bytes(KEY_SIZE(replace_key));
 
-	/* XXX: readahead? */
+	read_full = (test_bit(CACHE_SET_CACHE_FULL_EXTENTS, &c->flags)
+		     && orig_bio->ca != NULL);
+
+	if (!read_full)
+		size = orig_bio->bio.bi_iter.bi_size;
+
+	pages = DIV_ROUND_UP(size, PAGE_SIZE);
 
 	op = kmalloc(sizeof(*op) + sizeof(struct bio_vec) * pages, GFP_NOIO);
 	if (!op)
@@ -826,8 +898,30 @@ void __cache_promote(struct cache_set *c, struct bbio *orig_bio,
 	bio_init(bio);
 	bio_get(bio);
 	bio->bi_bdev		= orig_bio->bio.bi_bdev;
-	bio->bi_iter.bi_sector	= orig_bio->bio.bi_iter.bi_sector;
-	bio->bi_iter.bi_size	= orig_bio->bio.bi_iter.bi_size;
+
+	if (read_full) {
+		op->adjust_copy = true;
+		bio->bi_iter.bi_sector  = calculate_start_sector(replace_key,
+								 orig_bio,
+								 &stale);
+		bio->bi_iter.bi_size	= size;
+		if (stale) {
+			/* We could update everything to use the new ca */
+			goto out_free;
+		}
+		BUG_ON(size < orig_bio->bio.bi_iter.bi_size);
+		BUG_ON(orig_bio->bio.bi_iter.bi_sector <
+		       bio->bi_iter.bi_sector);
+		BUG_ON((sector_bytes(orig_bio->bio.bi_iter.bi_sector) +
+			orig_bio->bio.bi_iter.bi_size) >
+		       (sector_bytes(bio->bi_iter.bi_sector) +
+			size));
+	} else {
+		op->adjust_copy = false;
+		bio->bi_iter.bi_sector	= orig_bio->bio.bi_iter.bi_sector;
+		bio->bi_iter.bi_size	= orig_bio->bio.bi_iter.bi_size;
+	}
+
 	bio->bi_end_io		= cache_promote_endio;
 	bio->bi_private		= &op->cl;
 	bio->bi_io_vec		= bio->bi_inline_vecs;
@@ -847,8 +941,10 @@ void __cache_promote(struct cache_set *c, struct bbio *orig_bio,
 			  replace_key, replace_key,
 			  write_flags);
 
-	bch_cut_front(&START_KEY(&orig_bio->key), &op->iop.insert_key);
-	bch_cut_back(&orig_bio->key, &op->iop.insert_key);
+	if (!read_full) {
+		bch_cut_front(&START_KEY(&orig_bio->key), &op->iop.insert_key);
+		bch_cut_back(&orig_bio->key, &op->iop.insert_key);
+	}
 
 	trace_bcache_promote(&orig_bio->bio);
 

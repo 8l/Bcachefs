@@ -363,6 +363,9 @@ struct gc_stat {
 #define	CACHE_SET_RO			3
 #define	CACHE_SET_GC_FAILURE		4
 
+/* Additional flag bits that control the operation of the whole cache set */
+#define CACHE_SET_CACHE_FULL_EXTENTS	10
+
 struct prio_clock {
 	/* All fields protected by bucket_lock */
 	u16			hand;

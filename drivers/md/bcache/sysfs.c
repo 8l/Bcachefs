@@ -158,6 +158,7 @@ rw_attribute(version_stress_test);
 rw_attribute(cache_replacement_policy);
 rw_attribute(checksum_type);
 rw_attribute(btree_shrinker_disabled);
+rw_attribute(cache_full_extents);
 
 rw_attribute(copy_gc_enabled);
 sysfs_queue_attribute(copy_gc);
@@ -685,6 +686,9 @@ SHOW(__bch_cache_set)
 	sysfs_print(tiering_percent, c->tiering_percent);
 	sysfs_pd_controller_show(tiering, &c->tiering_pd);
 
+	sysfs_printf(cache_full_extents,	"%u",
+		     test_bit(CACHE_SET_CACHE_FULL_EXTENTS, &c->flags));
+
 	return 0;
 }
 SHOW_LOCKED(bch_cache_set)
@@ -831,6 +835,15 @@ STORE(__bch_cache_set)
 			wake_up_process(c->tiering_read);
 
 		return ret;
+	}
+
+	if (attr == &sysfs_cache_full_extents) {
+		unsigned v = strtoul_restrict_or_return(buf, 1, 1);
+
+		if (v)
+			set_bit(CACHE_SET_CACHE_FULL_EXTENTS, &c->flags);
+		else
+			clear_bit(CACHE_SET_CACHE_FULL_EXTENTS, &c->flags);
 	}
 
 	sysfs_strtoul(pd_controllers_update_seconds,
@@ -1009,6 +1022,8 @@ static struct attribute *bch_cache_set_internal_files[] = {
 
 	&sysfs_tiering_enabled,
 	sysfs_pd_controller_files(tiering),
+
+	&sysfs_cache_full_extents,
 
 	NULL
 };

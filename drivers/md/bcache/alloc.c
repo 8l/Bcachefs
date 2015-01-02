@@ -897,8 +897,12 @@ static void bch_bucket_free_never_used(struct cache_set *c, struct bkey *k)
 	rcu_read_unlock();
 }
 
-#define BUCKETS_NOT_AVAILABLE		1
-#define FREELIST_EMPTY			2
+enum bucket_alloc_ret {
+	ALLOC_SUCCESS,
+	CACHE_SET_FULL,		/* -ENOSPC */
+	BUCKETS_NOT_AVAILABLE,	/* Device full */
+	FREELIST_EMPTY,		/* Allocator thread not keeping up */
+};
 
 static struct cache *bch_next_cache(struct cache_set *c,
 				    enum alloc_reserve reserve,
@@ -953,15 +957,20 @@ static struct cache *bch_next_cache(struct cache_set *c,
 	return NULL;
 }
 
-static int __bch_bucket_alloc_set(struct cache_set *c,
-				  enum alloc_reserve reserve,
-				  struct bkey *k, int n,
-				  struct cache_group *devs)
+static enum bucket_alloc_ret __bch_bucket_alloc_set(struct cache_set *c,
+						    enum alloc_reserve reserve,
+						    struct bkey *k, int n,
+						    struct cache_group *devs)
 {
 	long caches_used[BITS_TO_LONGS(MAX_CACHES_PER_SET)];
-	int i, ret;
+	enum bucket_alloc_ret ret;
+	int i;
 
 	BUG_ON(n <= 0 || n > BKEY_EXTENT_PTRS_MAX);
+
+	if (!devs->nr_devices ||
+	    (reserve == RESERVE_NONE && cache_set_full(c)))
+		return CACHE_SET_FULL;
 
 	bkey_init(k);
 	memset(caches_used, 0, sizeof(caches_used));
@@ -997,7 +1006,7 @@ static int __bch_bucket_alloc_set(struct cache_set *c,
 		} while (read_seqcount_retry(&devs->lock, seq) || !ca);
 
 		if (IS_ERR(ca)) {
-			ret = PTR_ERR(ca);
+			ret = -PTR_ERR(ca);
 			goto err;
 		}
 
@@ -1005,7 +1014,7 @@ static int __bch_bucket_alloc_set(struct cache_set *c,
 
 		r = bch_bucket_alloc(ca, reserve);
 		if (!r) {
-			ret = -FREELIST_EMPTY;
+			ret = FREELIST_EMPTY;
 			goto err;
 		}
 
@@ -1017,7 +1026,7 @@ static int __bch_bucket_alloc_set(struct cache_set *c,
 	}
 
 	rcu_read_unlock();
-	return 0;
+	return ALLOC_SUCCESS;
 err:
 	rcu_read_unlock();
 	bch_bucket_free_never_used(c, k);
@@ -1025,40 +1034,49 @@ err:
 }
 
 int bch_bucket_alloc_set(struct cache_set *c, enum alloc_reserve reserve,
-			 struct bkey *k, int n, struct cache_group *tier,
+			 struct bkey *k, int n, struct cache_group *devs,
 			 struct closure *cl)
 {
-	int ret;
+	struct closure_waitlist *waitlist = NULL;
+	bool waiting = false;
 
-	ret = __bch_bucket_alloc_set(c, reserve, k, n, tier);
-	if (!ret)
-		return 0;
+	while (1) {
+		switch (__bch_bucket_alloc_set(c, reserve, k, n, devs)) {
+		case ALLOC_SUCCESS:
+			if (waitlist)
+				closure_wake_up(waitlist);
 
-	if (ret == -BUCKETS_NOT_AVAILABLE)
-		trace_bcache_buckets_unavailable_fail(c, reserve, cl);
-
-	if (!tier->nr_devices)
-		return -ENOSPC;
-
-	if (cl) {
-		struct closure_waitlist *waitlist =
-			ret == -BUCKETS_NOT_AVAILABLE
-			? &c->buckets_available_wait
-			: &c->freelist_wait;
-
-		closure_wait(waitlist, cl);
-
-		/* Must retry allocation after adding ourself to waitlist */
-
-		if (!__bch_bucket_alloc_set(c, reserve, k, n, tier)) {
-			closure_wake_up(waitlist);
 			return 0;
+
+		case CACHE_SET_FULL:
+			trace_bcache_cache_set_full(c, reserve, cl);
+
+			if (waitlist)
+				closure_wake_up(waitlist);
+			return -ENOSPC;
+
+		case BUCKETS_NOT_AVAILABLE:
+			trace_bcache_buckets_unavailable_fail(c, reserve, cl);
+			waitlist = &c->buckets_available_wait;
+			break;
+
+		case FREELIST_EMPTY:
+			waitlist = &c->freelist_wait;
+			break;
+		default:
+			BUG();
 		}
 
-		return -EAGAIN;
-	}
+		if (!cl)
+			return -ENOSPC;
 
-	return -ENOSPC;
+		if (waiting)
+			return -EAGAIN;
+
+		/* Must retry allocation after adding ourself to waitlist */
+		closure_wait(waitlist, cl);
+		waiting = true;
+	}
 }
 
 static void __bch_open_bucket_put(struct cache_set *c, struct open_bucket *b)
@@ -1139,12 +1157,6 @@ static struct open_bucket *bch_open_bucket_alloc(struct cache_set *c,
 
 	BUG_ON(!wp->group);
 	BUG_ON(!wp->reserve);
-
-	if (wp->throttle && cache_set_full(c)) {
-		trace_bcache_cache_set_full(c, wp->reserve, cl);
-		bch_open_bucket_put(c, b);
-		return ERR_PTR(-ENOSPC);
-	}
 
 	spin_lock(&b->lock);
 	ret = bch_bucket_alloc_set(c, wp->reserve, &b->key,

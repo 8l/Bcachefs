@@ -260,7 +260,7 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 {
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 	int ret = 0;
 	BKEY_PADDED(k) prev_key;
 
@@ -276,8 +276,8 @@ static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 
 		if (!(i->flags & BCH_IOCTL_LIST_VALUES)) {
 			tmp.k = *k;
+			bch_set_val_u64s(&tmp.k, 0);
 			k = &tmp.k;
-			bch_set_val_u64s(k, 0);
 		}
 
 		if (i->btree_id == BTREE_ID_EXTENTS) {
@@ -287,17 +287,17 @@ static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 			}
 
 			if (bkey_cmp(&i->start, &START_KEY(k)) > 0)
-				bch_cut_front(&i->start, k);
+				bch_cut_front(&i->start, &tmp.k);
 
 			if (bkey_cmp(&i->end, k) <= 0)
-				bch_cut_back(&i->end, k);
+				bch_cut_back(&i->end, &tmp.k);
 
 			if (!KEY_SIZE(k))
 				continue;
 
 			if (i->keys_found &&
 			    bch_bkey_try_merge(&iter.nodes[0]->keys,
-					       &prev_key.k, k)) {
+					       &prev_key.k, &tmp.k)) {
 				i->keys_found -= KEY_U64s(&prev_key.k);
 				k = &prev_key.k;
 			} else {
@@ -539,7 +539,7 @@ int bch_copy(struct cache_set *c,
 	bch_btree_iter_init(&iter, c, BTREE_ID_EXTENTS, src);
 
 	while (1) {
-		struct bkey *k = bch_btree_iter_peek(&iter);
+		const struct bkey *k = bch_btree_iter_peek(&iter);
 		BKEY_PADDED(key) copy;
 
 		if (!k || bkey_cmp(&START_KEY(k), &src_end) >= 0) {

@@ -58,7 +58,7 @@ void bch_refill_keybuf(struct cache_set *c, struct keybuf *buf,
 {
 	struct bkey start = buf->last_scanned;
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 	unsigned nr_found = 0;
 
 	cond_resched();

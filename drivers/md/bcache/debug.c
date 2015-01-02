@@ -187,7 +187,7 @@ static ssize_t bch_dump_read(struct file *file, char __user *buf,
 {
 	struct dump_iter *i = file->private_data;
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 	int err;
 
 	i->ubuf = buf;

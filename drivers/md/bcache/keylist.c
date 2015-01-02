@@ -210,7 +210,7 @@ void bch_keylist_recalc_oldest_gens(struct cache_set *c, struct scan_keylist *kl
 	mutex_unlock(&kl->lock);
 }
 
-int bch_scan_keylist_add(struct scan_keylist *kl, struct bkey *k)
+int bch_scan_keylist_add(struct scan_keylist *kl, const struct bkey *k)
 {
 	int ret;
 
@@ -238,7 +238,7 @@ static void bch_refill_scan_keylist(struct cache_set *c,
 {
 	struct bkey start = *last_scanned;
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 	unsigned nr_found = 0;
 
 	cond_resched();

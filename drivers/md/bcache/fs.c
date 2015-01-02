@@ -415,7 +415,7 @@ static int bch_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 {
 	struct cache_set *c = inode->i_sb->s_fs_info;
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 	unsigned ptr;
 	int ret = 0;
 
@@ -969,7 +969,7 @@ static void bch_evict_inode(struct inode *inode)
 static u64 bch_count_inodes(struct cache_set *c)
 {
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 	u64 inodes = 0;
 
 	for_each_btree_key(&iter, c, BTREE_ID_INODES, k, NULL)

@@ -18,7 +18,7 @@
 
 /* Moving GC - IO loop */
 
-static bool moving_pred(struct scan_keylist *kl, struct bkey *k)
+static bool moving_pred(struct scan_keylist *kl, const struct bkey *k)
 {
 	struct cache *ca = container_of(kl, struct cache,
 					moving_gc_queue.keys);
@@ -38,7 +38,7 @@ static bool moving_pred(struct scan_keylist *kl, struct bkey *k)
 
 static int issue_moving_gc_move(struct moving_queue *q,
 				struct moving_context *ctxt,
-				struct bkey *k)
+				const struct bkey *k)
 {
 	struct cache *ca = container_of(q, struct cache, moving_gc_queue);
 	struct cache_set *c = ca->set;

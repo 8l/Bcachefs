@@ -89,7 +89,7 @@ static int __bch_dirent_create(struct cache_set *c, u64 dir_inum,
 			       bool update)
 {
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 	struct keylist keys;
 	struct bch_dirent *dirent;
 	unsigned u64s = DIV_ROUND_UP(sizeof(struct bch_dirent) +
@@ -166,7 +166,7 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 		      const struct qstr *name)
 {
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 	u64 hash = bch_dirent_hash(name);
 	int ret = -ENOENT;
 
@@ -217,7 +217,7 @@ u64 bch_dirent_lookup(struct cache_set *c, u64 dir_inum,
 		      const struct qstr *name)
 {
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 	u64 hash = bch_dirent_hash(name);
 
 	pr_debug("searching for %llu:%llu (%s)",
@@ -249,7 +249,7 @@ u64 bch_dirent_lookup(struct cache_set *c, u64 dir_inum,
 int bch_empty_dir(struct cache_set *c, u64 dir_inum)
 {
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 
 	for_each_btree_key(&iter, c, BTREE_ID_DIRENTS, k,
 			   &KEY(dir_inum, 0, 0)) {
@@ -279,7 +279,7 @@ int bch_readdir(struct file *file, struct dir_context *ctx)
 	struct super_block *sb = inode->i_sb;
 	struct cache_set *c = sb->s_fs_info;
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 
 	if (!dir_emit_dots(file, ctx))
 		return 0;

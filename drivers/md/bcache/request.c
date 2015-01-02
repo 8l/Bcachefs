@@ -405,7 +405,7 @@ static void cached_dev_read(struct cached_dev *dc, struct search *s)
 	struct closure *cl = &s->cl;
 	struct bio *bio = &s->bio.bio;
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 
 	bch_increment_clock(s->iop.c, bio_sectors(&s->bio.bio), READ);
 

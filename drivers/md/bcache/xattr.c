@@ -71,7 +71,7 @@ static int bch_xattr_get(struct dentry *dentry, const char *name,
 	struct cache_set *c = dentry->d_inode->i_sb->s_fs_info;
 	struct qstr qname = (struct qstr) QSTR_INIT(name, strlen(name));
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 
 	if (strcmp(name, "") == 0)
 		return -EINVAL;
@@ -107,7 +107,7 @@ static int bch_xattr_set(struct dentry *dentry, const char *name,
 {
 	struct cache_set *c = dentry->d_inode->i_sb->s_fs_info;
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 	struct qstr qname = (struct qstr) QSTR_INIT((char *) name, strlen(name));
 	int ret = -ENODATA;
 
@@ -200,7 +200,7 @@ ssize_t bch_xattr_list(struct dentry *dentry, char *buffer, size_t buffer_size)
 {
 	struct cache_set *c = dentry->d_sb->s_fs_info;
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 	u64 inum = dentry->d_inode->i_ino;
 	ssize_t ret = 0;
 

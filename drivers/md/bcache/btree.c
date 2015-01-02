@@ -949,12 +949,12 @@ int bch_btree_cache_alloc(struct cache_set *c)
 
 /* Btree in memory cache - hash table */
 
-static struct hlist_head *mca_hash(struct cache_set *c, struct bkey *k)
+static struct hlist_head *mca_hash(struct cache_set *c, const struct bkey *k)
 {
 	return &c->bucket_hash[hash_32(PTR_HASH(c, k), BUCKET_HASH_BITS)];
 }
 
-static inline struct btree *mca_find(struct cache_set *c, struct bkey *k)
+static inline struct btree *mca_find(struct cache_set *c, const struct bkey *k)
 {
 	struct btree *b;
 
@@ -1025,8 +1025,8 @@ static void bch_cannibalize_unlock(struct cache_set *c)
 	}
 }
 
-static struct btree *mca_alloc(struct cache_set *c, struct bkey *k, int level,
-			       enum btree_id id, struct closure *cl)
+static struct btree *mca_alloc(struct cache_set *c, const struct bkey *k,
+			       int level, enum btree_id id, struct closure *cl)
 {
 	struct btree *b = NULL;
 
@@ -1105,7 +1105,8 @@ err:
  * The btree node will have either a read or a write lock held, depending on
  * the @write parameter.
  */
-static struct btree *bch_btree_node_get(struct btree_iter *iter, struct bkey *k,
+static struct btree *bch_btree_node_get(struct btree_iter *iter,
+					const struct bkey *k,
 					int level)
 {
 	int i = 0;
@@ -1410,7 +1411,7 @@ int bch_btree_root_alloc(struct cache_set *c, enum btree_id id,
 }
 
 int bch_btree_root_read(struct cache_set *c, enum btree_id id,
-			struct bkey *k, unsigned level)
+			const struct bkey *k, unsigned level)
 {
 	struct closure cl;
 	struct btree *b;
@@ -2141,19 +2142,19 @@ int bch_btree_iter_unlock(struct btree_iter *iter)
 }
 
 /* peek_all() doesn't skip deleted keys */
-static struct bkey *__btree_iter_peek_all(struct btree_iter *iter)
+static const struct bkey *__btree_iter_peek_all(struct btree_iter *iter)
 {
 	return bch_btree_node_iter_peek_all(&iter->node_iters[iter->level]);
 }
 
-static struct bkey *__btree_iter_peek(struct btree_iter *iter)
+static const struct bkey *__btree_iter_peek(struct btree_iter *iter)
 {
 	return bch_btree_node_iter_peek(&iter->node_iters[iter->level]);
 }
 
 static bool btree_iter_cmp(struct btree_iter *iter,
-			   struct bkey *pos,
-			   struct bkey *k)
+			   const struct bkey *pos,
+			   const struct bkey *k)
 {
 	return iter->is_extents
 		? bkey_cmp(pos, k) < 0
@@ -2186,7 +2187,7 @@ static void btree_iter_lock_root(struct btree_iter *iter, struct bkey *pos)
 
 static int btree_iter_down(struct btree_iter *iter, struct bkey *pos)
 {
-	struct bkey *k = __btree_iter_peek(iter);
+	const struct bkey *k = __btree_iter_peek(iter);
 	struct btree *b = bch_btree_node_get(iter, k, iter->level - 1);
 
 	if (unlikely(IS_ERR(b)))
@@ -2225,7 +2226,7 @@ retry:
 		btree_iter_up(iter);
 
 	if (iter->nodes[iter->level]) {
-		struct bkey *k;
+		const struct bkey *k;
 
 		while ((k = __btree_iter_peek_all(iter)) &&
 		       !btree_iter_cmp(iter, pos, k))
@@ -2314,7 +2315,7 @@ struct btree *bch_btree_iter_next_node(struct btree_iter *iter)
 
 /* Iterate across keys (in leaf nodes only) */
 
-void bch_btree_iter_set_pos(struct btree_iter *iter, struct bkey *new_pos)
+void bch_btree_iter_set_pos(struct btree_iter *iter, const struct bkey *new_pos)
 {
 	BUG_ON(bkey_cmp(new_pos, &iter->pos) < 0);
 	bkey_copy_key(&iter->pos, new_pos);
@@ -2341,9 +2342,10 @@ void bch_btree_iter_advance_pos(struct btree_iter *iter)
 	bch_btree_iter_set_pos(iter, &new_pos);
 }
 
-struct bkey *bch_btree_iter_peek(struct btree_iter *iter)
+const struct bkey *bch_btree_iter_peek(struct btree_iter *iter)
 {
-	struct bkey *k, pos = iter->pos;
+	const struct bkey *k;
+	struct bkey pos = iter->pos;
 
 	while (1) {
 		__bch_btree_iter_traverse(iter, 0, &pos);
@@ -2363,9 +2365,9 @@ struct bkey *bch_btree_iter_peek(struct btree_iter *iter)
 	}
 }
 
-struct bkey *bch_btree_iter_peek_with_holes(struct btree_iter *iter)
+const struct bkey *bch_btree_iter_peek_with_holes(struct btree_iter *iter)
 {
-	struct bkey *k;
+	const struct bkey *k;
 
 	while (1) {
 		__bch_btree_iter_traverse(iter, 0, &iter->pos);
@@ -2414,7 +2416,7 @@ recheck:
 }
 
 void bch_btree_iter_init(struct btree_iter *iter, struct cache_set *c,
-			 enum btree_id btree_id, struct bkey *search)
+			 enum btree_id btree_id, const struct bkey *search)
 {
 	closure_init_stack(&iter->cl);
 

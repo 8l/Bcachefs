@@ -114,7 +114,7 @@ static inline void bch_keylist_enqueue(struct keylist *l)
 	l->top = __bch_keylist_next(l, l->top);
 }
 
-static inline void bch_keylist_add(struct keylist *l, struct bkey *k)
+static inline void bch_keylist_add(struct keylist *l, const struct bkey *k)
 {
 	bkey_copy(l->top, k);
 	bch_keylist_enqueue(l);
@@ -238,8 +238,8 @@ struct bch_write_op {
 };
 
 void bch_write_op_init(struct bch_write_op *, struct cache_set *,
-		       struct bio *, struct write_point *, bool,
-		       bool, bool, struct bkey *, struct bkey *);
+		       struct bio *, struct write_point *, bool, bool,
+		       bool, const struct bkey *, const struct bkey *);
 
 struct bbio {
 	struct cache		*ca;

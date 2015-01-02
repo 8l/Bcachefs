@@ -544,7 +544,8 @@ void bcache_write_super(struct cache_set *c)
 	__bcache_write_super(c);
 }
 
-void bch_check_mark_super_slowpath(struct cache_set *c, struct bkey *k, bool meta)
+void bch_check_mark_super_slowpath(struct cache_set *c,
+				   const struct bkey *k, bool meta)
 {
 	unsigned ptr;
 	struct cache_member *mi;

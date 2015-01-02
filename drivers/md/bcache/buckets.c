@@ -183,9 +183,9 @@ void bch_mark_metadata_bucket(struct cache *ca, struct bucket *g,
 		}							\
 	} while(0)
 
-uint8_t bch_mark_data_bucket(struct cache_set *c, struct cache *ca,
-			     struct btree *b, struct bkey *k, unsigned i,
-			     int sectors, bool dirty)
+u8 bch_mark_data_bucket(struct cache_set *c, struct cache *ca, struct btree *b,
+			const struct bkey *k, unsigned i,
+			int sectors, bool dirty)
 {
 	struct bucket_mark old, new;
 	unsigned long bucket_nr = PTR_BUCKET_NR(c, k, i);

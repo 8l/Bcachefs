@@ -261,15 +261,15 @@ static inline void mark_btree_node_unlocked(struct btree_iter *iter,
 
 int bch_btree_iter_unlock(struct btree_iter *);
 void bch_btree_iter_init(struct btree_iter *, struct cache_set *,
-			 enum btree_id, struct bkey *);
+			 enum btree_id, const struct bkey *);
 
 void bch_btree_iter_traverse(struct btree_iter *);
 struct btree *bch_btree_iter_peek_node(struct btree_iter *);
 struct btree *bch_btree_iter_next_node(struct btree_iter *);
 
-struct bkey *bch_btree_iter_peek(struct btree_iter *);
-struct bkey *bch_btree_iter_peek_with_holes(struct btree_iter *);
-void bch_btree_iter_set_pos(struct btree_iter *, struct bkey *);
+const struct bkey *bch_btree_iter_peek(struct btree_iter *);
+const struct bkey *bch_btree_iter_peek_with_holes(struct btree_iter *);
+void bch_btree_iter_set_pos(struct btree_iter *, const struct bkey *);
 void bch_btree_iter_advance_pos(struct btree_iter *);
 bool bch_btree_iter_upgrade(struct btree_iter *);
 
@@ -327,7 +327,7 @@ int btree_check_reserve(struct btree *, struct btree_iter *,
 
 int bch_btree_root_alloc(struct cache_set *, enum btree_id, struct closure *);
 int bch_btree_root_read(struct cache_set *, enum btree_id,
-			struct bkey *, unsigned);
+			const struct bkey *, unsigned);
 
 int bch_btree_insert_node(struct btree *, struct btree_iter *,
 			  struct keylist *, struct bch_replace_info *,

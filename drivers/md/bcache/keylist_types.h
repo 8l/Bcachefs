@@ -47,6 +47,6 @@ struct scan_keylist {
 	struct moving_queue	*owner;
 };
 
-typedef bool (scan_keylist_pred_fn)(struct scan_keylist *, struct bkey *);
+typedef bool (scan_keylist_pred_fn)(struct scan_keylist *, const struct bkey *);
 
 #endif /* _BCACHE_KEYLIST_TYPES_H */

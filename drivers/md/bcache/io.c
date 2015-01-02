@@ -85,7 +85,7 @@ void bch_bbio_prep(struct bbio *b, struct cache *ca)
 }
 
 void bch_submit_bbio(struct bbio *b, struct cache *ca,
-		     struct bkey *k, unsigned ptr, bool punt)
+		     const struct bkey *k, unsigned ptr, bool punt)
 {
 	struct bio *bio = &b->bio;
 
@@ -103,7 +103,8 @@ void bch_submit_bbio(struct bbio *b, struct cache *ca,
 }
 
 void bch_submit_bbio_replicas(struct bio *bio, struct cache_set *c,
-			      struct bkey *k, unsigned ptrs_from, bool punt)
+			      const struct bkey *k, unsigned ptrs_from,
+			      bool punt)
 {
 	struct cache *ca;
 	unsigned ptr;
@@ -629,7 +630,8 @@ EXPORT_SYMBOL(bch_write);
 void bch_write_op_init(struct bch_write_op *op, struct cache_set *c,
 		       struct bio *bio, struct write_point *wp,
 		       bool wait, bool discard, bool flush,
-		       struct bkey *insert_key, struct bkey *replace_key)
+		       const struct bkey *insert_key,
+		       const struct bkey *replace_key)
 {
 	if (!wp) {
 		unsigned wp_idx = hash_long((unsigned long) current,
@@ -677,11 +679,11 @@ EXPORT_SYMBOL(bch_write_op_init);
  * XXX: this needs to be refactored with inode_truncate, or more
  *	appropriately inode_truncate should call this
  */
-int bch_discard(struct cache_set *c, struct bkey *start_key,
-		struct bkey *end_key, u64 version)
+int bch_discard(struct cache_set *c, const struct bkey *start_key,
+		const struct bkey *end_key, u64 version)
 {
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 	int ret = 0;
 
 	bch_btree_iter_init(&iter, c, BTREE_ID_EXTENTS, start_key);
@@ -800,7 +802,7 @@ static void cache_promote_endio(struct bio *bio, int error)
  * @orig_bio must actually be a bbio with a valid key.
  */
 void __cache_promote(struct cache_set *c, struct bbio *orig_bio,
-		     struct bkey *replace_key)
+		     const struct bkey *replace_key)
 {
 	struct cache_promote_op *op;
 	struct bio *bio;
@@ -863,7 +865,7 @@ out_submit:
  * @bio must actually be a bbio with valid key.
  */
 bool cache_promote(struct cache_set *c, struct bbio *bio,
-		   struct bkey *k, unsigned ptr)
+		   const struct bkey *k, unsigned ptr)
 {
 	if (!CACHE_TIER(&bio->ca->mi)) {
 		generic_make_request(&bio->bio);
@@ -970,7 +972,7 @@ int bch_read_with_versions(struct cache_set *c,
 			   struct bch_versions_result *v)
 {
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 
 	bch_increment_clock(c, bio_sectors(bio), READ);
 

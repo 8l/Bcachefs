@@ -14,7 +14,7 @@
 /**
  * tiering_pred - check if tiering should copy an extent to tier 1
  */
-static bool tiering_pred(struct scan_keylist *kl, struct bkey *k)
+static bool tiering_pred(struct scan_keylist *kl, const struct bkey *k)
 {
 	struct cache *ca = container_of(kl, struct cache,
 					tiering_queue.keys);
@@ -143,7 +143,7 @@ static void tiering_refill(struct cache_set *c, struct tiering_refill *refill)
 {
 	struct scan_keylist *keys;
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 
 	if (bkey_cmp(&refill->start, &MAX_KEY) >= 0)
 		return;

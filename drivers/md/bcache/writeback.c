@@ -333,7 +333,7 @@ void bcache_dev_sectors_dirty_add(struct cache_set *c, unsigned inode,
 	rcu_read_unlock();
 }
 
-static bool dirty_pred(struct keybuf *buf, struct bkey *k)
+static bool dirty_pred(struct keybuf *buf, const struct bkey *k)
 {
 	return !KEY_CACHED(k);
 }
@@ -496,7 +496,7 @@ void bch_sectors_dirty_init(struct cached_dev *dc, struct cache_set *c)
 {
 	struct bcache_device *d = &dc->disk;
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 
 	/*
 	 * We have to do this before the disk is added to the radix tree or we

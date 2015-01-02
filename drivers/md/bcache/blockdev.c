@@ -688,7 +688,7 @@ err:
 int flash_devs_run(struct cache_set *c)
 {
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 	int ret = 0;
 
 	if (test_bit(CACHE_SET_STOPPING, &c->flags))

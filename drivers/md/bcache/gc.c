@@ -23,7 +23,7 @@
 #include <linux/delay.h>
 #include <trace/events/bcache.h>
 
-uint8_t bch_btree_key_recalc_oldest_gen(struct cache_set *c, struct bkey *k)
+u8 bch_btree_key_recalc_oldest_gen(struct cache_set *c, const struct bkey *k)
 {
 	uint8_t max_stale = 0;
 	struct cache *ca;
@@ -46,7 +46,7 @@ uint8_t bch_btree_key_recalc_oldest_gen(struct cache_set *c, struct bkey *k)
 	return max_stale;
 }
 
-uint8_t __bch_btree_mark_key(struct cache_set *c, int level, struct bkey *k)
+u8 __bch_btree_mark_key(struct cache_set *c, int level, const struct bkey *k)
 {
 	uint8_t max_stale;
 	struct cache *ca;
@@ -73,7 +73,8 @@ uint8_t __bch_btree_mark_key(struct cache_set *c, int level, struct bkey *k)
 	return max_stale;
 }
 
-static u8 btree_mark_key(struct cache_set *c, struct btree *b, struct bkey *k)
+static u8 btree_mark_key(struct cache_set *c, struct btree *b,
+			 const struct bkey *k)
 {
 	return __bch_btree_mark_key(c, b->level, k);
 }

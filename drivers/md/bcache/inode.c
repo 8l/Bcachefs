@@ -119,7 +119,7 @@ int bch_inode_create(struct cache_set *c, struct bch_inode *inode,
 		     u64 min, u64 max, u64 *hint)
 {
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 	bool searched_from_start = false;
 	int ret;
 
@@ -205,7 +205,7 @@ int bch_inode_find_by_inum(struct cache_set *c, u64 inode_nr,
 			   struct bch_inode *ret)
 {
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 
 	for_each_btree_key_with_holes(&iter, c, BTREE_ID_INODES, k,
 				      &KEY(inode_nr, 0, 0)) {
@@ -228,7 +228,7 @@ static int __bch_blockdev_inode_find_by_uuid(struct cache_set *c, uuid_le *uuid,
 					     u64 start_inode, u64 end_inode)
 {
 	struct btree_iter iter;
-	struct bkey *k;
+	const struct bkey *k;
 
 	for_each_btree_key(&iter, c, BTREE_ID_INODES, k,
 			   &KEY(start_inode, 0, 0)) {

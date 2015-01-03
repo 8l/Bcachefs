@@ -199,6 +199,7 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 	bch_set_extent_ptrs(&i.extent, 0);
 	SET_KEY_DELETED(&i.extent, 0);
 	SET_KEY_WIPED(&i.extent, 0);
+	SET_KEY_BAD(&i.extent, 0);
 	SET_KEY_CSUM(&i.extent, 0);
 
 	/*

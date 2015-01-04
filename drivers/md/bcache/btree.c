@@ -1319,7 +1319,8 @@ static void bch_btree_set_root(struct btree *b)
 	bch_recalc_btree_reserve(c);
 
 	if (old) {
-		bch_journal_res_put(c, &res, &cl);
+		bch_journal_set_dirty(c, &cl);
+		bch_journal_res_put(c, &res);
 		closure_sync(&cl);
 
 		six_unlock_write(&old->lock);
@@ -1731,9 +1732,7 @@ bch_btree_insert_keys(struct btree *b,
 		six_unlock_write(&b->lock);
 
 		if (res.ref)
-			bch_journal_res_put(iter->c, &res,
-					    bch_keylist_empty(insert_keys)
-					    ? persistent : NULL);
+			bch_journal_res_put(iter->c, &res);
 	}
 
 	if (inserted && b->written) {

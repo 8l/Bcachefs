@@ -306,7 +306,7 @@ int bch_prio_read(struct cache *ca, u64 bucket)
 	size_t b;
 	int ret;
 
-	if (cache_set_init_fault()) {
+	if (cache_set_init_fault(0)) {
 		bch_cache_error(ca, "bch_prio_read() dynamic fault");
 		return -EIO;
 	}

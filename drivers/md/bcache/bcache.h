@@ -197,7 +197,7 @@
 
 #include <linux/dynamic_fault.h>
 
-#define cache_set_init_fault()		dynamic_fault("cache_set_init")
+#define cache_set_init_fault(n)		dynamic_fault("cache_set_init_" #n)
 
 #include "alloc_types.h"
 #include "blockdev_types.h"

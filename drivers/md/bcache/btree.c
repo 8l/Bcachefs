@@ -2109,7 +2109,7 @@ int bch_btree_insert_check_key(struct btree_iter *iter, struct bkey *check_key)
 				 &START_KEY(check_key));
 
 	return bch_btree_insert_at(iter, &keylist_single(&tmp.key), NULL,
-				   NULL, BTREE_INSERT_ATOMIC, iter->btree_id);
+				   NULL, iter->btree_id, BTREE_INSERT_ATOMIC);
 }
 
 /**

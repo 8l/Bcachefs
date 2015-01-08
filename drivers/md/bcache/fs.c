@@ -690,8 +690,7 @@ again:
 
 		closure_init(&w->io->cl, NULL);
 		bch_write_op_init(&w->io->op, w->c, bio, NULL,
-				  true, false, false,
-				  &KEY(w->inum, 0, 0), NULL);
+				  &KEY(w->inum, 0, 0), NULL, 0);
 	}
 
 	if (bch_bio_add_page(&w->io->bio.bio, page)) {
@@ -747,8 +746,7 @@ static int bch_writepage(struct page *page, struct writeback_control *wbc)
 	bio->bi_max_vecs = 1;
 
 	bch_write_op_init(&io->op, c, bio, NULL,
-			  true, false, false,
-			  &KEY(inode->i_ino, 0, 0), NULL);
+			  &KEY(inode->i_ino, 0, 0), NULL, 0);
 
 	bch_bio_add_page(bio, page);
 

@@ -207,6 +207,8 @@ struct bch_write_op {
 		unsigned	wait:1;
 		/* Discard key range? */
 		unsigned	discard:1;
+		/* Mark data as cached? */
+		unsigned	cached:1;
 		/* Wait for journal commit? */
 		unsigned	flush:1;
 		/* Perform a compare-exchange with replace_key? */
@@ -237,9 +239,16 @@ struct bch_write_op {
 	struct bch_replace_info replace_info;
 };
 
+enum bch_write_flags {
+	BCH_WRITE_ALLOC_NOWAIT		= (1 << 0),
+	BCH_WRITE_DISCARD		= (1 << 1),
+	BCH_WRITE_CACHED		= (1 << 2),
+	BCH_WRITE_FLUSH			= (1 << 3),
+};
+
 void bch_write_op_init(struct bch_write_op *, struct cache_set *,
-		       struct bio *, struct write_point *, bool, bool,
-		       bool, const struct bkey *, const struct bkey *);
+		       struct bio *, struct write_point *,
+		       const struct bkey *, const struct bkey *, unsigned);
 
 struct bbio {
 	struct cache		*ca;

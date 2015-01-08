@@ -186,16 +186,16 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 	struct bio *bio;
 	size_t bytes, pages;
 	ssize_t ret;
-	const bool wait = true;
-	const bool discard = false;
-	bool flush;
+	unsigned flags = 0;
 
 	if (copy_from_user(&i, user_write, sizeof(i))) {
 		aio_complete(req, -EFAULT, 0);
 		return;
 	}
 
-	flush = (i.flags & (BCH_IOCTL_WRITE_FLUSH | BCH_IOCTL_WRITE_FUA));
+	if (i.flags & (BCH_IOCTL_WRITE_FLUSH | BCH_IOCTL_WRITE_FUA))
+		flags |= BCH_WRITE_FLUSH;
+
 	bch_set_extent_ptrs(&i.extent, 0);
 	SET_KEY_DELETED(&i.extent, 0);
 	SET_KEY_WIPED(&i.extent, 0);
@@ -230,8 +230,7 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 		bio->bi_io_vec		= bio->bi_inline_vecs;
 
 		bch_write_op_init(&op->iop, c, bio, NULL,
-				  wait, discard, flush,
-				  &i.extent, NULL);
+				  &i.extent, NULL, flags);
 
 		ret = bio_get_user_pages(bio, i.buf,
 					 KEY_SIZE(&i.extent) << 9, 0);

@@ -731,6 +731,16 @@ do {									\
 		bch_cache_set_error(c, __VA_ARGS__);			\
 } while (0)
 
+#define __bcache_io_error(c, fmt, ...)					\
+	printk(KERN_ERR "bcache: IO error on %pU: " fmt "\n",		\
+	       (c)->sb.set_uuid.b, ##__VA_ARGS__)
+
+#define bcache_io_error(c, bio, fmt, ...)				\
+do {									\
+	__bcache_io_error(c, fmt, ##__VA_ARGS__);			\
+	clear_bit(BIO_UPTODATE, &(bio)->bi_flags);			\
+} while (0)
+
 /* Forward declarations */
 
 int bch_extent_store_init_cache_set(struct cache_set *);

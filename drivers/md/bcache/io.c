@@ -95,8 +95,7 @@ void bch_submit_bbio(struct bbio *b, struct cache *ca,
 	b->submit_time_us = local_clock_us();
 
 	if (!ca) {
-		closure_get(bio->bi_private);
-		bio_io_error(bio);
+		bcache_io_error(ca->set, bio, "device has been removed");
 	} else if (punt)
 		closure_bio_submit_punt(bio, bio->bi_private, ca->set);
 	else
@@ -306,8 +305,10 @@ static void bch_write_index(struct closure *cl)
 
 	if (ret == -ESRCH)
 		op->replace_collision = true;
-	else if (ret)
+	else if (ret) {
+		__bcache_io_error(op->c, "btree IO error");
 		op->error = ret;
+	}
 
 	continue_at(cl, bch_write_done, op->c->wq);
 }
@@ -368,9 +369,10 @@ static void bch_write_endio(struct bio *bio, int error)
 
 	if (error) {
 		/* TODO: We could try to recover from this. */
-		if (!KEY_CACHED(&op->insert_key))
+		if (!KEY_CACHED(&op->insert_key)) {
+			__bcache_io_error(op->c, "IO error writing data");
 			op->error = error;
-		else if (!op->replace)
+		} else if (!op->replace)
 			set_closure_fn(cl, bch_write_error, op->c->wq);
 		else
 			set_closure_fn(cl, NULL, NULL);
@@ -474,6 +476,9 @@ err:
 
 		bch_write_discard(cl);
 	} else {
+		if (!op->replace)
+			__bcache_io_error(op->c, "out of space for write %li wait %i",
+					  PTR_ERR(b), op->wait);
 		op->error = -ENOSPC;
 	}
 
@@ -550,6 +555,7 @@ void bch_write(struct closure *cl)
 	}
 
 	if (!percpu_ref_tryget(&c->writes)) {
+		__bcache_io_error(c, "read only");
 		op->error = -EROFS;
 		closure_return(cl);
 	}
@@ -1020,6 +1026,9 @@ static void bch_read_endio(struct bio *bio, int error)
 		}
 	}
 
+	if (error)
+		__bcache_io_error(ca->set, "IO error reading data");
+
 	bio_endio(orig, error);
 	bio_put(bio);
 
@@ -1094,8 +1103,10 @@ int bch_read_with_versions(struct cache_set *c,
 		done = sectors >= bio_sectors(bio);
 
 		ca = bch_extent_pick_ptr(c, k, &ptr);
-		if (IS_ERR(ca))
+		if (IS_ERR(ca)) {
+			bcache_io_error(c, bio, "no device to read from");
 			goto error_out;
+		}
 
 		if (ca) {
 			__BKEY_PADDED(key, 1) tmp;
@@ -1119,7 +1130,7 @@ int bch_read_with_versions(struct cache_set *c,
 					 sector_bytes(KEY_START(&tmp.key)),
 					 sector_bytes(KEY_SIZE(&tmp.key)))) {
 				percpu_ref_put(&ca->ref);
-				goto error_out;
+				goto version_error_out;
 			}
 
 			n = done
@@ -1145,7 +1156,7 @@ int bch_read_with_versions(struct cache_set *c,
 					 KEY_VERSION(k),
 					 sector_bytes(KEY_START(k)),
 					 bytes))
-				goto error_out;
+				goto version_error_out;
 
 			swap(bio->bi_iter.bi_size, bytes);
 			zero_fill_bio(bio);
@@ -1165,13 +1176,13 @@ int bch_read_with_versions(struct cache_set *c,
 	 * reading a btree node
 	 */
 	BUG_ON(!bch_btree_iter_unlock(&iter));
-	bio_io_error(bio);
+	bcache_io_error(c, bio, "btree IO error");
 
 	return 0;
 
+version_error_out:
+	bcache_io_error(c, bio, "unable to add version");
 error_out:
-	atomic_inc(&bio->bi_remaining);
-	bio_io_error(bio);
 	bch_btree_iter_unlock(&iter);
 	return 0;
 }

@@ -1117,8 +1117,10 @@ int bch_read_with_versions(struct cache_set *c,
 			if (!add_version(v,
 					 KEY_VERSION(k),
 					 sector_bytes(KEY_START(&tmp.key)),
-					 sector_bytes(KEY_SIZE(&tmp.key))))
+					 sector_bytes(KEY_SIZE(&tmp.key)))) {
+				percpu_ref_put(&ca->ref);
 				goto error_out;
+			}
 
 			n = done
 				? bio_clone_fast(bio, GFP_NOIO, c->bio_split)

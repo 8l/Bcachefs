@@ -168,7 +168,7 @@ static bool __ptr_invalid(const struct cache_set *c, const struct bkey *k)
 
 	for (i = 0; i < bch_extent_ptrs(k); i++)
 		if ((ca = PTR_CACHE(c, k, i))) {
-			size_t bucket = CACHE_BUCKET_NR(ca, k, i);
+			size_t bucket = PTR_BUCKET_NR(ca, k, i);
 			size_t r = bucket_remainder(ca, PTR_OFFSET(k, i));
 
 			if (KEY_SIZE(k) + r > ca->sb.bucket_size ||
@@ -193,7 +193,7 @@ static const char *bch_ptr_status(const struct cache_set *c,
 		struct cache *ca = PTR_CACHE(c, k, i);
 
 		if (ca) {
-			size_t bucket = CACHE_BUCKET_NR(ca, k, i);
+			size_t bucket = PTR_BUCKET_NR(ca, k, i);
 			size_t r = bucket_remainder(ca, PTR_OFFSET(k, i));
 
 			if (KEY_SIZE(k) + r > ca->sb.bucket_size)
@@ -315,7 +315,7 @@ err:
 	bch_bkey_val_to_text(bk, buf, sizeof(buf), k);
 	btree_bug(b, "inconsistent btree pointer %s: bucket %zi prio %i "
 		  "gen %i oldest_gen %i mark 0x%08x",
-		  buf, CACHE_BUCKET_NR(ca, k, i),
+		  buf, PTR_BUCKET_NR(ca, k, i),
 		  g->read_prio, PTR_BUCKET_GEN(ca, k, i),
 		  g->oldest_gen, g->mark.counter);
 	rcu_read_unlock();
@@ -1128,8 +1128,7 @@ done:
 
 bad_device:
 	bch_bkey_val_to_text(bk, buf, sizeof(buf), k);
-	cache_set_bug(c, "extent pointer %i device missing: %s:\nbucket %zu",
-		      i, buf, PTR_BUCKET_NR(c, k, i));
+	cache_set_bug(c, "extent pointer %i device missing: %s", i, buf);
 	cache_member_info_put();
 	return;
 
@@ -1137,7 +1136,7 @@ bad_ptr:
 	bch_bkey_val_to_text(bk, buf, sizeof(buf), k);
 	cache_set_bug(c, "extent pointer %i bad gc mark: %s:\nbucket %zu prio %i "
 		      "gen %i oldest_gen %i mark 0x%08x", i,
-		      buf, CACHE_BUCKET_NR(ca, k, i),
+		      buf, PTR_BUCKET_NR(ca, k, i),
 		      g->read_prio, PTR_BUCKET_GEN(ca, k, i),
 		      g->oldest_gen, g->mark.counter);
 	cache_member_info_put();
@@ -1223,6 +1222,7 @@ static uint64_t merge_chksums(struct bkey *l, struct bkey *r)
 static bool bch_extent_merge(struct btree_keys *bk, struct bkey *l, struct bkey *r)
 {
 	struct btree *b = container_of(bk, struct btree, keys);
+	struct cache *ca;
 	unsigned i;
 
 	if (key_merging_disabled(b->c))
@@ -1237,11 +1237,28 @@ static bool bch_extent_merge(struct btree_keys *bk, struct bkey *l, struct bkey 
 	     bkey_cmp(l, &START_KEY(r)))
 		return false;
 
-	for (i = 0; i < bch_extent_ptrs(l); i++)
-		if (l->val[i] + PTR(0, KEY_SIZE(l), 0) != r->val[i] ||
-		    PTR_BUCKET_NR(b->c, l, i) !=
-		    PTR_BUCKET_NR(b->c, r, i))
+	for (i = 0; i < bch_extent_ptrs(l); i++) {
+		/*
+		 * compare all the pointer fields at once, adding the size to
+		 * the left pointer's offset:
+		 */
+		if (l->val[i] + PTR(0, KEY_SIZE(l), 0) != r->val[i])
 			return false;
+
+		/*
+		 * we don't allow extent pointers to straddle buckets - if the
+		 * device is offline, we don't know the bucket size so we can't
+		 * check
+		 */
+		rcu_read_lock();
+		if (!(ca = PTR_CACHE(b->c, l, i)) ||
+		    PTR_BUCKET_NR(ca, l, i) !=
+		    PTR_BUCKET_NR(ca, r, i)) {
+			rcu_read_unlock();
+			return false;
+		}
+		rcu_read_unlock();
+	}
 
 	/* Keys with no pointers aren't restricted to one bucket and could
 	 * overflow KEY_SIZE

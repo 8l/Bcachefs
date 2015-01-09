@@ -191,7 +191,7 @@ int bch_inode_rm(struct cache_set *c, u64 inode_nr)
 
 	ret = bch_inode_truncate(c, inode_nr, 0);
 	if (ret < 0)
-		BUG();
+		return ret;
 
 	inode = KEY(inode_nr, 0, 0);
 	SET_KEY_DELETED(&inode, 1);

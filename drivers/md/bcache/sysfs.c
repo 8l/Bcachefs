@@ -9,6 +9,7 @@
 #include "blockdev.h"
 #include "sysfs.h"
 #include "btree.h"
+#include "buckets.h"
 #include "gc.h"
 #include "inode.h"
 #include "journal.h"
@@ -82,6 +83,7 @@ read_attribute(root_usage_percent);
 read_attribute(read_priority_stats);
 read_attribute(write_priority_stats);
 read_attribute(fragmentation_stats);
+read_attribute(oldest_gen_stats);
 read_attribute(reserve_stats);
 read_attribute(btree_cache_size);
 read_attribute(btree_cache_max_chain);
@@ -1041,6 +1043,12 @@ static unsigned bucket_sectors_used_fn(struct cache *ca, struct bucket *g,
 	return bucket_sectors_used(g);
 }
 
+static unsigned bucket_oldest_gen_fn(struct cache *ca, struct bucket *g,
+				     void *private)
+{
+	return bucket_gc_gen(ca, g - ca->buckets);
+}
+
 static ssize_t show_quantiles(struct cache *ca, char *buf,
 			      bucket_map_fn *fn, void *private)
 {
@@ -1154,6 +1162,8 @@ SHOW(__bch_cache)
 		return show_quantiles(ca, buf, bucket_priority_fn, (void *) 1);
 	if (attr == &sysfs_fragmentation_stats)
 		return show_quantiles(ca, buf, bucket_sectors_used_fn, NULL);
+	if (attr == &sysfs_oldest_gen_stats)
+		return show_quantiles(ca, buf, bucket_oldest_gen_fn, NULL);
 	if (attr == &sysfs_reserve_stats)
 		return show_reserve_stats(ca, buf);
 
@@ -1289,6 +1299,7 @@ static struct attribute *bch_cache_files[] = {
 	&sysfs_read_priority_stats,
 	&sysfs_write_priority_stats,
 	&sysfs_fragmentation_stats,
+	&sysfs_oldest_gen_stats,
 	&sysfs_reserve_stats,
 	&sysfs_available_buckets,
 	&sysfs_dirty_data,

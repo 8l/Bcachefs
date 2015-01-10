@@ -1268,7 +1268,6 @@ static void bch_btree_set_root(struct btree *b)
 	struct btree *old;
 
 	memset(&res, 0, sizeof(res));
-	closure_init_stack(&cl);
 
 	trace_bcache_btree_set_root(b);
 	BUG_ON(!b->written);
@@ -1291,9 +1290,12 @@ static void bch_btree_set_root(struct btree *b)
 	bch_recalc_btree_reserve(c);
 
 	if (old) {
-		bch_journal_set_dirty(c);
-		bch_journal_res_put(c, &res, &cl);
-		closure_sync(&cl);
+		if (res.ref) {
+			closure_init_stack(&cl);
+			bch_journal_set_dirty(c);
+			bch_journal_res_put(c, &res, &cl);
+			closure_sync(&cl);
+		}
 
 		six_unlock_write(&old->lock);
 	}
@@ -1518,9 +1520,10 @@ void bch_btree_insert_and_journal(struct btree *b,
 					      c->btree_flush_delay * HZ);
 	}
 
-	if (res->ref &&
-	    test_bit(JOURNAL_REPLAY_DONE, &c->journal.flags)) {
+	if (res->ref) {
 		struct btree_write *w = btree_current_write(b);
+
+		BUG_ON(!test_bit(JOURNAL_REPLAY_DONE, &c->journal.flags));
 
 		if (!w->journal) {
 			w->journal = &fifo_back(&c->journal.pin);
@@ -1685,8 +1688,7 @@ bch_btree_insert_keys(struct btree *b,
 				break;
 			}
 
-			if (!b->level &&
-			    jset_u64s(KEY_U64s(k)) > res.nkeys)
+			if (!b->level && journal_res_full(&res, k))
 				break;
 
 			attempted = true;

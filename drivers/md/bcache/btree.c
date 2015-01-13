@@ -1647,7 +1647,7 @@ bch_btree_insert_keys(struct btree *b,
 		      struct bch_replace_info *replace,
 		      struct closure *persistent)
 {
-	bool done = false, inserted = false, attempted = false, need_split = false;
+	bool done = false, inserted = false, need_split = false;
 	struct journal_res res = { 0, 0 };
 	struct bkey *k = bch_keylist_front(insert_keys);
 
@@ -1700,7 +1700,6 @@ bch_btree_insert_keys(struct btree *b,
 			if (!b->level && journal_res_full(&res, k))
 				break;
 
-			attempted = true;
 			if (btree_insert_key(iter, b, insert_keys,
 					     replace, &res))
 				inserted = true;
@@ -1733,9 +1732,6 @@ bch_btree_insert_keys(struct btree *b,
 	}
 
 	iter->lock_seq[b->level] = b->lock.state.seq;
-
-	if (attempted && !inserted)
-		iter->insert_collision = true;
 
 	BUG_ON(!bch_keylist_empty(insert_keys) && inserted && b->level);
 
@@ -2154,7 +2150,7 @@ int bch_btree_insert(struct cache_set *c, enum btree_id id,
 	ret = bch_btree_insert_at(&iter, keys, replace, persistent, 0, 0);
 	ret2 = bch_btree_iter_unlock(&iter);
 
-	return ret ?: ret2 ?: iter.insert_collision ? -ESRCH : 0;
+	return ret ?: ret2;
 }
 
 /* Btree iterator: */
@@ -2458,7 +2454,6 @@ void bch_btree_iter_init(struct btree_iter *iter, struct cache_set *c,
 	iter->locks_want		= -1;
 	iter->btree_id			= btree_id;
 	iter->error			= 0;
-	iter->insert_collision		= 0;
 	iter->c				= c;
 	iter->pos			= search ? *search : ZERO_KEY;
 	iter->nodes[iter->level]	= (void *) 1;

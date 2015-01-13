@@ -241,8 +241,7 @@ static inline u64 cache_sectors_used(struct cache *ca)
 {
 	struct bucket_stats stats = bucket_stats_read(ca);
 
-	return ((stats.buckets_alloc +
-		 stats.buckets_meta) << ca->bucket_bits) +
+	return (stats.buckets_meta << ca->bucket_bits) +
 		stats.sectors_dirty;
 }
 

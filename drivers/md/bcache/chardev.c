@@ -295,14 +295,33 @@ err:
 	return ret;
 }
 
+static long bch_ioctl_disk_failed(struct bch_ioctl_disk_failed *arg)
+{
+	int ret = 0;
+	const char *err;
+	struct bch_ioctl_disk_failed df;
+
+	if (copy_from_user(&df, arg, sizeof(struct bch_ioctl_disk_failed))) {
+		ret = -EFAULT;
+		goto err;
+	}
+
+	err = set_disk_failed(df.dev_uuid, df.set_uuid);
+	if (err) {
+		ret = -EINVAL;
+		pr_err("Unable to set bcache device %s to failed", err);
+	}
+
+err:
+	return ret;
+}
+
 static long bch_chardev_ioctl(struct file *filp, unsigned int cmd,
 			 unsigned long arg)
 {
 	const char __user *const __user *path;
 	struct bch_ioctl_add_disks ia;
 	struct bch_ioctl_rm_disk ir;
-
-
 
 	switch (cmd) {
 	case BCH_IOCTL_REGISTER:
@@ -318,11 +337,16 @@ static long bch_chardev_ioctl(struct file *filp, unsigned int cmd,
 					sizeof(struct bch_ioctl_add_disks)))
 			return -EFAULT;
 		return bch_ioctl_add_devs(&ia);
+
 	case BCH_IOCTL_RM_DISK:
 		if (copy_from_user(&ir, (struct bch_ioctl_rm_disk *)arg,
 					sizeof(struct bch_ioctl_rm_disk)))
 			return -EFAULT;
 		return bch_ioctl_rm_dev(&ir);
+
+	case BCH_IOCTL_SET_DISK_FAILED:
+		return bch_ioctl_disk_failed((struct bch_ioctl_disk_failed *)arg);
+
 	default:
 		return -ENOTTY;
 	}

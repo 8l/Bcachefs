@@ -11,6 +11,8 @@ extern "C" {
 #define BCH_IOCTL_ADD_DISKS    _IOW('a', 2, struct bch_ioctl_add_disks)
 #define BCH_IOCTL_RM_DISK      _IOW('r', 3, struct bch_ioctl_rm_disk)
 #define BCH_IOCTL_UNREGISTER   _IOW('r', 4, char *)
+#define BCH_IOCTL_SET_DISK_FAILED _IOW('r', 5, struct bch_ioctl_disk_failed)
+
 
 /* Ioctl interface */
 
@@ -129,6 +131,11 @@ struct bch_ioctl_add_disks {
 struct bch_ioctl_rm_disk {
 	const char		*dev;
 	int			force;
+};
+
+struct bch_ioctl_disk_failed {
+	uuid_le			dev_uuid;
+	uuid_le			set_uuid;
 };
 
 /*

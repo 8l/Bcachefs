@@ -2428,6 +2428,59 @@ err:
 	return err;
 }
 
+const char *set_disk_failed(uuid_le dev_uuid, uuid_le set_uuid)
+{
+	struct cache_set *c;
+	int i;
+	bool dev_found = false;
+	const char *err;
+
+	mutex_lock(&bch_register_lock);
+	rcu_read_lock();
+
+	list_for_each_entry(c, &bch_cache_sets, list) {
+		if (!memcmp(&c->sb.set_uuid, &set_uuid, sizeof(set_uuid))) {
+			/*
+			 * Find the disk which we are setting to failed,
+			 * write_super will commit this updated state to
+			 * disk for each cache in the cacheset.
+			 */
+			struct cache_member_rcu *mi = cache_member_info_get(c);
+
+			for (i = 0; i < c->sb.nr_in_set; i++) {
+				struct cache_member *m = &mi->m[i];
+				uuid_le tmp = m->uuid;
+
+				if (!memcmp(&tmp, &dev_uuid, sizeof(dev_uuid))) {
+					SET_CACHE_STATE(m, CACHE_FAILED);
+					dev_found = true;
+				}
+			}
+
+			rcu_read_unlock();
+			cache_member_info_put();
+			if (!dev_found) {
+				err = "Unable to find device with this UUID";
+				goto err;
+			}
+			/*
+			 * Only write the super block if we actually
+			 * found the device we were looking for.
+			 */
+			bcache_write_super(c);
+			mutex_unlock(&bch_register_lock);
+			return NULL;
+		}
+	}
+
+	rcu_read_unlock();
+	err = "Bad cacheset UUID";
+
+err:
+	mutex_unlock(&bch_register_lock);
+	return err;
+}
+
 static int bcache_reboot(struct notifier_block *n, unsigned long code, void *x)
 {
 	if (code == SYS_DOWN ||

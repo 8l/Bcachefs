@@ -49,8 +49,11 @@ struct dfault_query {
 	const char	*module;
 	const char	*function;
 	const char	*class;
-	unsigned int	first_lineno, last_lineno;
+	unsigned int	first_line, last_line;
 	unsigned int	first_index, last_index;
+
+	unsigned	match_line:1;
+	unsigned	match_index:1;
 
 	unsigned	set_enabled:1;
 	unsigned	enabled:2;
@@ -89,7 +92,7 @@ bool __dynamic_fault_enabled(struct _dfault *df)
 	} while ((v = cmpxchg(&df->state.v, old.v, new.v)) != old.v);
 
 	if (ret)
-		pr_debug("returned true for %s:%u", df->filename, df->lineno);
+		pr_debug("returned true for %s:%u", df->filename, df->line);
 
 	return ret;
 }
@@ -133,9 +136,9 @@ static char *dfault_describe_flags(struct _dfault *df, char *buf, size_t buflen)
  */
 static int dfault_change(const struct dfault_query *query)
 {
-	int i;
 	struct dfault_table *dt;
 	unsigned int nfound = 0;
+	unsigned i, index = 0;
 	char flagbuf[16];
 
 	/* search for matching dfaults */
@@ -173,22 +176,18 @@ static int dfault_change(const struct dfault_query *query)
 			}
 
 			/* match against the line number range */
-			if (query->first_lineno &&
-			    df->lineno < query->first_lineno)
-				continue;
-			if (query->last_lineno &&
-			    df->lineno > query->last_lineno)
+			if (query->match_line &&
+			    (df->line < query->first_line ||
+			     df->line > query->last_line))
 				continue;
 
 			/* match against the fault index */
-			if (query->first_index &&
-			    df->index < query->first_index)
+			if (query->match_index &&
+			    (index < query->first_index ||
+			     index > query->last_index)) {
+				index++;
 				continue;
-			if (query->last_index &&
-			    df->index > query->last_index)
-				continue;
-
-			nfound++;
+			}
 
 			if (query->set_enabled &&
 			    query->enabled != df->state.enabled) {
@@ -204,10 +203,13 @@ static int dfault_change(const struct dfault_query *query)
 				df->frequency = query->frequency;
 
 			pr_debug("changed %s:%d [%s]%s #%d %s",
-				 df->filename, df->lineno,
-				 dt->mod_name, df->function, df->index,
+				 df->filename, df->line, dt->mod_name,
+				 df->function, index,
 				 dfault_describe_flags(df, flagbuf,
 						       sizeof(flagbuf)));
+
+			index++;
+			nfound++;
 		}
 	}
 	mutex_unlock(&dfault_lock);
@@ -357,9 +359,12 @@ static int dfault_parse_command(struct dfault_query *query,
 		query->filename = words[i++];
 		return 1;
 	case TOK_LINE:
-		parse_range(words[i++],
-			    &query->first_lineno,
-			    &query->last_lineno);
+		ret = parse_range(words[i++],
+				  &query->first_line,
+				  &query->last_line);
+		if (ret)
+			return ret;
+		query->match_line = true;
 		break;
 	case TOK_MODULE:
 		query->module = words[i++];
@@ -368,20 +373,23 @@ static int dfault_parse_command(struct dfault_query *query,
 		query->class = words[i++];
 		break;
 	case TOK_INDEX:
-		parse_range(words[i++],
-			    &query->first_index,
-			    &query->last_index);
+		ret = parse_range(words[i++],
+				  &query->first_index,
+				  &query->last_index);
+		if (ret)
+			return ret;
+		query->match_index = true;
 		break;
 	case TOK_DISABLE:
-		query->set_enabled = 1;
+		query->set_enabled = true;
 		query->enabled = DFAULT_DISABLED;
 		break;
 	case TOK_ENABLE:
-		query->set_enabled = 1;
+		query->set_enabled = true;
 		query->enabled = DFAULT_ENABLED;
 		break;
 	case TOK_ONESHOT:
-		query->set_enabled = 1;
+		query->set_enabled = true;
 		query->enabled = DFAULT_ONESHOT;
 		break;
 	case TOK_FREQUENCY:
@@ -431,9 +439,9 @@ static int dfault_parse_query(struct dfault_query *query,
 	}
 
 	pr_debug("q->function=\"%s\" q->filename=\"%s\" "
-		 "q->module=\"%s\" q->lineno=%u-%u\n q->index=%u-%u",
+		 "q->module=\"%s\" q->line=%u-%u\n q->index=%u-%u",
 		 query->function, query->filename, query->module,
-		 query->first_lineno, query->last_lineno,
+		 query->first_line, query->last_line,
 		 query->first_index, query->last_index);
 
 	return 0;
@@ -580,12 +588,9 @@ static int dfault_proc_show(struct seq_file *m, void *p)
 
 	pr_debug("m=%p p=%p", m, p);
 
-	seq_printf(m, "%s:%u class:%s module:%s func:%s index:%d %s \"",
-		   df->filename, df->lineno,
-		   df->class,
-		   iter->table->mod_name,
-		   df->function,
-		   df->index,
+	seq_printf(m, "%s:%u class:%s module:%s func:%s %s \"",
+		   df->filename, df->line, df->class,
+		   iter->table->mod_name, df->function,
 		   dfault_describe_flags(df, flagsbuf, sizeof(flagsbuf)));
 	seq_puts(m, "\"\n");
 
@@ -653,8 +658,7 @@ int dfault_add_module(struct _dfault *tab, unsigned int n,
 {
 	struct dfault_table *dt;
 	char *new_name;
-	const char *func;
-	unsigned index;
+	const char *func = NULL;
 	int i;
 
 	dt = kzalloc(sizeof(*dt), GFP_KERNEL);
@@ -673,17 +677,10 @@ int dfault_add_module(struct _dfault *tab, unsigned int n,
 	list_add_tail(&dt->link, &dfault_tables);
 	mutex_unlock(&dfault_lock);
 
-	index = 1;
-	func = NULL;
-
 	/* __attribute__(("section")) emits things in reverse order */
-	for (i = n - 1; i >= 0; i--) {
-		if (!func || strcmp(tab[i].function, func)) {
-			index = 1;
+	for (i = n - 1; i >= 0; i--)
+		if (!func || strcmp(tab[i].function, func))
 			func = tab[i].function;
-		}
-		tab[i].index = index++;
-	}
 
 	pr_debug("%u debug prints in module %s", n, dt->mod_name);
 	return 0;

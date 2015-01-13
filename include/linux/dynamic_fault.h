@@ -33,8 +33,7 @@ struct _dfault {
 	const char		*filename;
 	const char		*class;
 
-	const u16		lineno;
-	u16			index;
+	const u16		line;
 
 	unsigned		frequency;
 	union dfault_state	state;
@@ -56,7 +55,7 @@ bool __dynamic_fault_enabled(struct _dfault *);
 		.modname	= KBUILD_MODNAME,			\
 		.function	= __func__,				\
 		.filename	= __FILE__,				\
-		.lineno		= __LINE__,				\
+		.line		= __LINE__,				\
 		.class		= _class,				\
 	};								\
 									\

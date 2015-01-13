@@ -1385,6 +1385,7 @@ const struct btree_keys_ops *bch_btree_ops[] = {
 	[BTREE_ID_INODES]	= &bch_inode_ops,
 	[BTREE_ID_DIRENTS]	= &bch_dirent_ops,
 	[BTREE_ID_XATTRS]	= &bch_xattr_ops,
+	[BTREE_ID_SHARED]	= &bch_extent_ops,
 };
 
 void bch_insert_check_key(struct btree_keys *bk, struct bkey *k)

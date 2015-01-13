@@ -549,12 +549,13 @@ static inline __u64 bset_magic(struct cache_sb *sb)
 	DEF_BTREE_ID(BTREE_ID_INODES,  1, "inodes")			\
 	DEF_BTREE_ID(BTREE_ID_DIRENTS, 2, "dirents")			\
 	DEF_BTREE_ID(BTREE_ID_XATTRS,  3, "attributes")			\
+	DEF_BTREE_ID(BTREE_ID_SHARED,  4, "shared extents")
 
 #define DEF_BTREE_ID(kwd, val, name) kwd = val,
 
 enum btree_id {
 	DEFINE_BCH_BTREE_IDS()
-	BTREE_ID_NR			= 4,
+	BTREE_ID_NR			= 5,
 };
 
 #undef DEF_BTREE_ID

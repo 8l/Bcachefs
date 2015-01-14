@@ -414,7 +414,6 @@ static int bch_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	struct cache_set *c = inode->i_sb->s_fs_info;
 	struct btree_iter iter;
 	const struct bkey *k;
-	unsigned ptr;
 	int ret = 0;
 
 	if (start + len < start)
@@ -424,15 +423,16 @@ static int bch_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 			   POS(inode->i_ino, start))
 		if (k->type == BCH_EXTENT) {
 			const struct bkey_i_extent *e = bkey_i_to_extent_c(k);
+			const struct bch_extent_ptr *ptr;
 
 			if (bkey_cmp(bkey_start_pos(&e->k),
 				     POS(inode->i_ino, start + len)) >= 0)
 				break;
 
-			for (ptr = 0; ptr < bch_extent_ptrs(&e->k); ptr++) {
+			extent_for_each_ptr(e, ptr) {
 				ret = fiemap_fill_next_extent(fieinfo,
 							      bkey_start_offset(&e->k),
-							      PTR_OFFSET(&e->v.ptr[ptr]),
+							      PTR_OFFSET(ptr),
 							      e->k.size, 0);
 				if (ret < 0)
 					goto out;

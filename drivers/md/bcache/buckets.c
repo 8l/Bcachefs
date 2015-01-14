@@ -184,14 +184,12 @@ void bch_mark_metadata_bucket(struct cache *ca, struct bucket *g,
 	} while(0)
 
 u8 bch_mark_data_bucket(struct cache_set *c, struct cache *ca, struct btree *b,
-			const struct bkey *k, unsigned i,
+			const struct bch_extent_ptr *ptr,
 			int sectors, bool dirty)
 {
 	struct bucket_mark old, new;
-	const struct bkey_i_extent *e = bkey_i_to_extent_c(k);
-	unsigned long bucket_nr = PTR_BUCKET_NR(ca, &e->v, i);
-	unsigned gen = PTR_GEN(&e->v.ptr[i]);
-	uint8_t stale;
+	unsigned long bucket_nr = PTR_BUCKET_NR(ca, ptr);
+	u8 stale;
 	unsigned saturated;
 	bool is_gc = !b;
 
@@ -210,7 +208,7 @@ u8 bch_mark_data_bucket(struct cache_set *c, struct cache *ca, struct btree *b,
 		 * the allocator invalidating a bucket after we've already
 		 * checked the gen
 		 */
-		stale = gen_after(ca->bucket_gens[bucket_nr], gen);
+		stale = gen_after(ca->bucket_gens[bucket_nr], PTR_GEN(ptr));
 		if (stale)
 			return stale;
 

@@ -78,20 +78,21 @@ void bch_bbio_prep(struct bbio *b, struct cache *ca)
 	struct bvec_iter *iter = &b->bio.bi_iter;
 
 	b->ca				= ca;
-	b->bio.bi_iter.bi_sector	=
-		PTR_OFFSET(&bkey_i_to_extent_c(&b->key)->v.ptr[0]);
+	b->bio.bi_iter.bi_sector	= PTR_OFFSET(&b->ptr);
 	b->bio.bi_bdev			= ca ? ca->bdev : NULL;
 
 	b->bi_idx			= iter->bi_idx;
 	b->bi_bvec_done			= iter->bi_bvec_done;
 }
 
-void bch_submit_bbio(struct bbio *b, struct cache *ca,
-		     const struct bkey *k, unsigned ptr, bool punt)
+void bch_submit_bbio(struct bbio *b, struct cache *ca, const struct bkey *k,
+		     const struct bch_extent_ptr *ptr, bool punt)
 {
 	struct bio *bio = &b->bio;
 
-	bch_bkey_copy_single_ptr(&b->key, k, ptr);
+	b->key = *k;
+	b->ptr = *ptr;
+	bch_set_extent_ptrs(&b->key, 1);
 	bch_bbio_prep(b, ca);
 	b->submit_time_us = local_clock_us();
 
@@ -115,13 +116,13 @@ void bch_submit_bbio_replicas(struct bio *bio, struct cache_set *c,
 	     ptr < bch_extent_ptrs(&e->k);
 	     ptr++) {
 		rcu_read_lock();
-		ca = PTR_CACHE(c, &e->v, ptr);
+		ca = PTR_CACHE(c, &e->v.ptr[ptr]);
 		if (ca)
 			percpu_ref_get(&ca->ref);
 		rcu_read_unlock();
 
 		if (!ca) {
-			bch_submit_bbio(to_bbio(bio), ca, &e->k, ptr, punt);
+			bch_submit_bbio(to_bbio(bio), ca, &e->k, &e->v.ptr[ptr], punt);
 			break;
 		}
 
@@ -130,9 +131,9 @@ void bch_submit_bbio_replicas(struct bio *bio, struct cache_set *c,
 						       ca->replica_set);
 			n->bi_end_io		= bio->bi_end_io;
 			n->bi_private		= bio->bi_private;
-			bch_submit_bbio(to_bbio(n), ca, &e->k, ptr, punt);
+			bch_submit_bbio(to_bbio(n), ca, &e->k, &e->v.ptr[ptr], punt);
 		} else {
-			bch_submit_bbio(to_bbio(bio), ca, &e->k, ptr, punt);
+			bch_submit_bbio(to_bbio(bio), ca, &e->k, &e->v.ptr[ptr], punt);
 		}
 	}
 }
@@ -833,7 +834,7 @@ static void cache_promote_endio(struct bio *bio, int error)
 
 	if (error)
 		op->iop.error = error;
-	else if (b->ca && ptr_stale(b->ca, &bkey_i_to_extent_c(&b->key)->v, 0))
+	else if (b->ca && ptr_stale(b->ca, &b->ptr))
 		op->stale = 1;
 
 	bch_bbio_endio(b, error, "reading from cache");
@@ -846,7 +847,7 @@ static uint64_t calculate_start_sector(const struct bkey *full,
 	struct bkey *need = &bbio->key;
 	struct cache *ca = bbio->ca;
 	struct cache *ca2;
-	unsigned ptr;
+	const struct bch_extent_ptr *ptr;
 
 	BUG_ON(ca == NULL);
 	BUG_ON(bch_extent_ptrs(need) != 1);
@@ -871,7 +872,7 @@ static uint64_t calculate_start_sector(const struct bkey *full,
 	if (!IS_ERR_OR_NULL(ca2))
 		percpu_ref_put(&ca2->ref);
 
-	return PTR_OFFSET(&bkey_i_to_extent_c(full)->v.ptr[ptr]);
+	return PTR_OFFSET(ptr);
 }
 
 /**
@@ -977,8 +978,7 @@ out_submit:
  *
  * @bio must actually be a bbio with valid key.
  */
-bool cache_promote(struct cache_set *c, struct bbio *bio,
-		   const struct bkey *k, unsigned ptr)
+bool cache_promote(struct cache_set *c, struct bbio *bio, const struct bkey *k)
 {
 	if (!CACHE_TIER(&bio->ca->mi)) {
 		generic_make_request(&bio->bio);
@@ -1017,7 +1017,7 @@ static void bch_read_endio(struct bio *bio, int error)
 
 	if (!error && ca &&
 	    (race_fault() ||
-	     ptr_stale(ca, &bkey_i_to_extent_c(&b->key)->v, 0))) {
+	     ptr_stale(ca, &b->ptr))) {
 		/* Read bucket invalidate race */
 		atomic_long_inc(&ca->set->cache_read_races);
 
@@ -1098,7 +1098,8 @@ int bch_read_with_versions(struct cache_set *c,
 		struct bio *n;
 		struct bbio *bbio;
 		struct cache *ca;
-		unsigned sectors, ptr;
+		unsigned sectors;
+		const struct bch_extent_ptr *ptr;
 		bool done;
 
 		BUG_ON(bkey_cmp(bkey_start_pos(k),
@@ -1119,10 +1120,10 @@ int bch_read_with_versions(struct cache_set *c,
 			const struct bkey_i_extent *e = bkey_i_to_extent_c(k);
 			__BKEY_PADDED(key, 1) tmp;
 
-			PTR_BUCKET(ca, &e->v, ptr)->read_prio =
+			PTR_BUCKET(ca, ptr)->read_prio =
 				c->prio_clock[READ].hand;
 
-			bch_bkey_copy_single_ptr(&tmp.key, &e->k, ptr);
+			bch_bkey_copy_single_ptr(&tmp.key, &e->k, ptr - e->v.ptr);
 
 			/* Trim the key to match what we're actually reading */
 			bch_cut_front(POS(inode, bio->bi_iter.bi_sector),
@@ -1153,7 +1154,7 @@ int bch_read_with_versions(struct cache_set *c,
 			bkey_copy(&bbio->key, &tmp.key);
 			bch_bbio_prep(bbio, ca);
 
-			cache_promote(c, bbio, k, ptr);
+			cache_promote(c, bbio, k);
 		} else {
 			unsigned bytes = min_t(unsigned, sectors,
 					       bio_sectors(bio)) << 9;

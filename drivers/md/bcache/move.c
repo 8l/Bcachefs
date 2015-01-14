@@ -96,7 +96,7 @@ static void moving_io_destructor(struct closure *cl)
 	BUG_ON(!q->count);
 	q->count--;
 
-	if (!io->read_completed) {
+	if (io->read_issued) {
 		BUG_ON(!q->read_count);
 		q->read_count--;
 	}
@@ -360,7 +360,9 @@ static void read_moving_endio(struct bio *bio, int error)
 
 	trace_bcache_move_read_done(q, &io->key);
 
+	BUG_ON(!io->read_issued);
 	BUG_ON(io->read_completed);
+	io->read_issued = 0;
 	io->read_completed = 1;
 	BUG_ON(!q->read_count);
 	q->read_count--;
@@ -434,6 +436,8 @@ void bch_data_move(struct moving_queue *q,
 	if (q->stopped)
 		stopped = true;
 	else {
+		BUG_ON(io->read_issued);
+		io->read_issued = 1;
 		q->count++;
 		q->read_count++;
 		list_add_tail(&io->list, &q->pending);

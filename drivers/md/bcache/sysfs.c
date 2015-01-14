@@ -163,6 +163,7 @@ rw_attribute(cache_replacement_policy);
 rw_attribute(checksum_type);
 rw_attribute(btree_shrinker_disabled);
 rw_attribute(cache_full_extents);
+rw_attribute(cmpxchg_atomic);
 
 rw_attribute(copy_gc_enabled);
 sysfs_queue_attribute(copy_gc);
@@ -690,6 +691,8 @@ SHOW(__bch_cache_set)
 
 	sysfs_printf(cache_full_extents,	"%u",
 		     test_bit(CACHE_SET_CACHE_FULL_EXTENTS, &c->flags));
+	sysfs_printf(cmpxchg_atomic,		"%u",
+		     test_bit(CACHE_SET_CMPXCHG_ATOMIC, &c->flags));
 
 	return 0;
 }
@@ -855,6 +858,15 @@ STORE(__bch_cache_set)
 			set_bit(CACHE_SET_CACHE_FULL_EXTENTS, &c->flags);
 		else
 			clear_bit(CACHE_SET_CACHE_FULL_EXTENTS, &c->flags);
+	}
+
+	if (attr == &sysfs_cmpxchg_atomic) {
+		unsigned v = strtoul_restrict_or_return(buf, 1, 1);
+
+		if (v)
+			set_bit(CACHE_SET_CMPXCHG_ATOMIC, &c->flags);
+		else
+			clear_bit(CACHE_SET_CMPXCHG_ATOMIC, &c->flags);
 	}
 
 	sysfs_strtoul(pd_controllers_update_seconds,

@@ -366,6 +366,7 @@ struct gc_stat {
 
 /* Additional flag bits that control the operation of the whole cache set */
 #define CACHE_SET_CACHE_FULL_EXTENTS	10
+#define CACHE_SET_CMPXCHG_ATOMIC	11
 
 struct prio_clock {
 	/* All fields protected by bucket_lock */

@@ -613,10 +613,9 @@ static int issue_migration_move(struct cache *ca,
 	bch_write_op_init(&io->op, c, &io->bio.bio,
 			  wp, k, k, 0);
 
-#if (0)
-	/* For testing only */
-	io->op.replace_info.replace_exact = true;
-#endif
+	if (test_bit(CACHE_SET_CMPXCHG_ATOMIC, &c->flags)) {
+		io->op.replace_info.replace_exact = true;
+	}
 
 	BUG_ON(q->wq == NULL);
 	io->op.io_wq = q->wq;

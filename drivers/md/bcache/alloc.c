@@ -853,11 +853,8 @@ void bch_bucket_free(struct cache_set *c, struct bkey *k)
 	struct cache *ca;
 
 	rcu_read_lock();
-
-	extent_for_each_ptr(e, ptr)
-		if ((ca = PTR_CACHE(c, ptr)))
+	extent_for_each_online_device(c, e, ptr, ca)
 			__bch_bucket_free(ca, PTR_BUCKET(ca, ptr));
-
 	rcu_read_unlock();
 }
 
@@ -871,20 +868,19 @@ static void bch_bucket_free_never_used(struct cache_set *c, struct bkey *k)
 
 	rcu_read_lock();
 
-	extent_for_each_ptr(e, ptr)
-		if ((ca = PTR_CACHE(c, ptr))) {
-			r = PTR_BUCKET_NR(ca, ptr);
-			g = PTR_BUCKET(ca, ptr);
+	extent_for_each_online_device(c, e, ptr, ca) {
+		r = PTR_BUCKET_NR(ca, ptr);
+		g = PTR_BUCKET(ca, ptr);
 
-			spin_lock(&ca->freelist_lock);
-			verify_not_on_freelist(ca, r);
+		spin_lock(&ca->freelist_lock);
+		verify_not_on_freelist(ca, r);
 
-			if (__bch_allocator_push(ca, r))
-				bch_mark_alloc_bucket(ca, g);
-			else
-				__bch_bucket_free(ca, g);
-			spin_unlock(&ca->freelist_lock);
-		}
+		if (__bch_allocator_push(ca, r))
+			bch_mark_alloc_bucket(ca, g);
+		else
+			__bch_bucket_free(ca, g);
+		spin_unlock(&ca->freelist_lock);
+	}
 
 	bch_set_extent_ptrs(&e->k, 0);
 
@@ -1083,9 +1079,8 @@ static void __bch_open_bucket_put(struct cache_set *c, struct open_bucket *b)
 	lockdep_assert_held(&c->open_buckets_lock);
 
 	rcu_read_lock();
-	extent_for_each_ptr(e, ptr)
-		if ((ca = PTR_CACHE(c, ptr)))
-			bch_unmark_open_bucket(ca, PTR_BUCKET(ca, ptr));
+	extent_for_each_online_device(c, e, ptr, ca)
+		bch_unmark_open_bucket(ca, PTR_BUCKET(ca, ptr));
 	rcu_read_unlock();
 
 	list_move(&b->list, &c->open_buckets_free);
@@ -1171,10 +1166,9 @@ static struct open_bucket *bch_open_bucket_alloc(struct cache_set *c,
 	e = bkey_i_to_extent(&b->key);
 
 	/* This is still wrong - we waste space with different sized buckets */
-	extent_for_each_ptr(e, ptr)
-		if ((ca = PTR_CACHE(c, ptr)))
-			b->sectors_free = min_t(unsigned, b->sectors_free,
-						ca->sb.bucket_size);
+	extent_for_each_online_device(c, e, ptr, ca)
+		b->sectors_free = min_t(unsigned, b->sectors_free,
+					ca->sb.bucket_size);
 
 	rcu_read_unlock();
 
@@ -1240,9 +1234,8 @@ static void verify_not_stale(struct cache_set *c, const struct bkey *k)
 	struct cache *ca;
 
 	rcu_read_lock();
-	extent_for_each_ptr(e, ptr)
-		if ((ca = PTR_CACHE(c, ptr)))
-			BUG_ON(ptr_stale(ca, ptr));
+	extent_for_each_online_device(c, e, ptr, ca)
+		BUG_ON(ptr_stale(ca, ptr));
 	rcu_read_unlock();
 #endif
 }
@@ -1274,6 +1267,7 @@ struct open_bucket *bch_alloc_sectors(struct cache_set *c,
 	struct bkey_i_extent *src, *dst;
 	struct bch_extent_ptr *ptr;
 	struct open_bucket *b;
+	struct cache *ca;
 	unsigned sectors, nptrs;
 
 retry:
@@ -1321,16 +1315,13 @@ retry:
 	else
 		BUG_ON(xchg(&wp->b, NULL) != b);
 
-	rcu_read_lock();
-	extent_for_each_ptr(src, ptr) {
-		struct cache *ca;
-
+	extent_for_each_ptr(src, ptr)
 		if (b->sectors_free)
 			SET_PTR_OFFSET(ptr, PTR_OFFSET(ptr) + sectors);
 
-		if ((ca = PTR_CACHE(c, ptr)))
-			atomic_long_add(sectors, &ca->sectors_written);
-	}
+	rcu_read_lock();
+	extent_for_each_online_device(c, src, ptr, ca)
+		atomic_long_add(sectors, &ca->sectors_written);
 	rcu_read_unlock();
 
 	spin_unlock(&b->lock);

@@ -33,8 +33,8 @@ struct moving_context {
 	struct task_struct	*task;
 
 	/* Key and sector moves issued, updated from submission context */
-	uint64_t		keys_moved;
-	uint64_t		sectors_moved;
+	u64			keys_moved;
+	u64			sectors_moved;
 
 	/* Last key scanned */
 	struct bpos		last_scanned;

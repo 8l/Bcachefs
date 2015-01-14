@@ -52,6 +52,12 @@ static void bch_moving_notify(struct moving_context *ctxt)
 	wake_up_process(ctxt->task);
 }
 
+static void bch_queue_write(struct moving_queue *q)
+{
+	BUG_ON(q->wq == NULL);
+	queue_work(q->wq, &q->work);
+}
+
 static void moving_init(struct moving_io *io)
 {
 	struct bio *bio = &io->bio.bio;
@@ -109,8 +115,7 @@ static void moving_io_destructor(struct closure *cl)
 	}
 
 	spin_unlock_irqrestore(&q->lock, flags);
-	BUG_ON(q->wq == NULL);
-	queue_work(q->wq, &q->work);
+	bch_queue_write(q);
 
 	kfree(io);
 
@@ -361,8 +366,7 @@ static void read_moving_endio(struct bio *bio, int error)
 	BUG_ON(!q->read_count);
 	q->read_count--;
 	spin_unlock_irqrestore(&q->lock, flags);
-	BUG_ON(q->wq == NULL);
-	queue_work(q->wq, &q->work);
+	bch_queue_write(q);
 
 	bch_moving_notify(ctxt);
 }
@@ -371,7 +375,7 @@ static void __bch_data_move(struct closure *cl)
 {
 	struct moving_io *io = container_of(cl, struct moving_io, cl);
 	struct cache *ca;
-	uint64_t size = io->key.size;
+	u64 size = io->key.size;
 	const struct bch_extent_ptr *ptr;
 
 	ca = bch_extent_pick_ptr_avoiding(io->op.c, &io->key, &ptr,
@@ -398,6 +402,9 @@ static void __bch_data_move(struct closure *cl)
 	bch_submit_bbio(&io->bio, ca, &io->key, ptr, false);
 }
 
+/*
+ * bch_queue_full() - return if more reads can be queued with bch_data_move().
+ */
 bool bch_queue_full(struct moving_queue *q)
 {
 	unsigned long flags;
@@ -674,7 +681,7 @@ int bch_move_data_off_device(struct cache *ca)
 	struct bkey *k;
 	int ret, ret2;
 	unsigned pass;
-	uint64_t seen_key_count;
+	u64 seen_key_count;
 	unsigned last_error_count;
 	unsigned last_error_flags;
 	struct moving_context context;
@@ -735,7 +742,7 @@ int bch_move_data_off_device(struct cache *ca)
 		atomic_set(&context.error_flags, 0);
 		context.last_scanned = POS_MIN;
 
-		while(1) {
+		while (1) {
 			if (CACHE_STATE(&ca->mi) != CACHE_RO &&
 			    CACHE_STATE(&ca->mi) != CACHE_ACTIVE) {
 				ret = -EACCES;

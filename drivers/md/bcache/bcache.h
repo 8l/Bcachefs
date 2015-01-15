@@ -758,4 +758,11 @@ int bch_fs_init(void);
 int bch_chardev_init(void);
 void bch_chardev_exit(void);
 
+/*
+ * Used by ioctl.c to pass the cache_set struct into
+ * ioctls defined in chardev.c
+ */
+long bch_cacheset_ioctl(struct cache_set *c, unsigned int cmd,
+		unsigned long arg);
+
 #endif /* _BCACHE_H */

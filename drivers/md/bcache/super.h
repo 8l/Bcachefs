@@ -133,8 +133,8 @@ struct cache_set *bch_cache_set_open_by_uuid(uuid_le *);
 
 bool bch_cache_remove(struct cache *, bool force);
 int bch_cache_add(struct cache_set *, const char *);
-const char *remove_bcache_device(char *path, bool force);
-const char *set_disk_failed(uuid_le, uuid_le);
+const char *remove_bcache_device(char *path, bool force, struct cache_set *);
+const char *set_disk_failed(uuid_le, struct cache_set *c);
 
 void bch_cache_group_remove_cache(struct cache_group *, struct cache *);
 void bch_cache_group_add_cache(struct cache_group *, struct cache *);

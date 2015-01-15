@@ -125,7 +125,6 @@ struct bch_ioctl_versioned_discard {
 
 struct bch_ioctl_add_disks {
 	char *const		*devs;
-	const char		*uuid;
 };
 
 struct bch_ioctl_rm_disk {
@@ -135,7 +134,6 @@ struct bch_ioctl_rm_disk {
 
 struct bch_ioctl_disk_failed {
 	uuid_le			dev_uuid;
-	uuid_le			set_uuid;
 };
 
 /*

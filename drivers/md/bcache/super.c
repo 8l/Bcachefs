@@ -2381,10 +2381,9 @@ err:
 	return err;
 }
 
-const char *remove_bcache_device(char *path, bool force)
+const char *remove_bcache_device(char *path, bool force, struct cache_set *c)
 {
 	const char *err;
-	struct cache_set *c;
 	struct cache *ca = NULL;
 	struct block_device *bdev = NULL;
 	struct bcache_superblock sb;
@@ -2409,15 +2408,14 @@ const char *remove_bcache_device(char *path, bool force)
 		goto err;
 
 	rcu_read_lock();
-	list_for_each_entry(c, &bch_cache_sets, list)
-		for_each_cache_rcu(ca, c, i)
-			if (ca->bdev == bdev) {
-				rcu_read_unlock();
-				if (!bch_cache_remove(ca, force))
-					err = "Unable to remove cache";
-				goto err;
-			}
-
+	for_each_cache_rcu(ca, c, i) {
+		if (ca->bdev == bdev) {
+			rcu_read_unlock();
+			if (!bch_cache_remove(ca, force))
+				err = "Unable to remove cache";
+			goto err;
+		}
+	}
 	rcu_read_unlock();
 
 	err = "Could not find cache for this path";
@@ -2428,56 +2426,55 @@ err:
 	return err;
 }
 
-const char *set_disk_failed(uuid_le dev_uuid, uuid_le set_uuid)
+const char *set_disk_failed(uuid_le dev_uuid, struct cache_set *c)
 {
-	struct cache_set *c;
+	struct cache *ca;
 	int i;
 	bool dev_found = false;
-	const char *err;
+	struct cache_member_rcu *mi;
+	const char *err = NULL;
 
 	mutex_lock(&bch_register_lock);
-	rcu_read_lock();
 
-	list_for_each_entry(c, &bch_cache_sets, list) {
-		if (!memcmp(&c->sb.set_uuid, &set_uuid, sizeof(set_uuid))) {
-			/*
-			 * Find the disk which we are setting to failed,
-			 * write_super will commit this updated state to
-			 * disk for each cache in the cacheset.
-			 */
-			struct cache_member_rcu *mi = cache_member_info_get(c);
+	/*
+	 * Find the disk which we are setting to failed,
+	 * write_super will commit this updated state to
+	 * disk for each cache in the cacheset.
+	 */
+	mi = cache_member_info_get(c);
 
-			for (i = 0; i < c->sb.nr_in_set; i++) {
-				struct cache_member *m = &mi->m[i];
-				uuid_le tmp = m->uuid;
+	for (i = 0; i < c->sb.nr_in_set; i++) {
+		struct cache_member *m = &mi->m[i];
+		uuid_le tmp = m->uuid;
 
-				if (!memcmp(&tmp, &dev_uuid, sizeof(dev_uuid))) {
-					SET_CACHE_STATE(m, CACHE_FAILED);
-					dev_found = true;
-				}
-			}
-
-			rcu_read_unlock();
-			cache_member_info_put();
-			if (!dev_found) {
-				err = "Unable to find device with this UUID";
-				goto err;
-			}
-			/*
-			 * Only write the super block if we actually
-			 * found the device we were looking for.
-			 */
-			bcache_write_super(c);
-			mutex_unlock(&bch_register_lock);
-			return NULL;
+		if (!memcmp(&tmp, &dev_uuid, sizeof(dev_uuid))) {
+			SET_CACHE_STATE(m, CACHE_FAILED);
+			dev_found = true;
 		}
 	}
 
-	rcu_read_unlock();
-	err = "Bad cacheset UUID";
+	if (!dev_found) {
+		cache_member_info_put();
+		mutex_unlock(&bch_register_lock);
+		return "Unable to find device with this UUID";
+	}
+
+	/* If the device was in the cache_set then remove it before
+	 * telling all the other devices that this one is dead */
+	for_each_cache(ca, c, i) {
+		if (!memcmp(&ca->sb.uuid, &dev_uuid, sizeof(dev_uuid))) {
+			cache_member_info_put();
+			if (!bch_cache_remove(ca, false))
+				err = "Unable to remove cache";
+			goto err;
+		}
+	}
+	cache_member_info_put();
 
 err:
+	bcache_write_super(c);
 	mutex_unlock(&bch_register_lock);
+
 	return err;
 }
 

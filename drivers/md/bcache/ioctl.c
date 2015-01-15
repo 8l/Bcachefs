@@ -819,9 +819,9 @@ static long bch_aio_ioctl(struct kiocb *req, unsigned int cmd,
 	case BCH_IOCTL_VERSIONED_READ:
 		bch_ioctl_versioned_read(req, c, arg);
 		return -EIOCBQUEUED;
+	default:
+		return bch_cacheset_ioctl(c, cmd, arg);
 	}
-
-	return -ENOSYS;
 }
 
 static long bch_ioctl(struct file *file, unsigned int cmd, unsigned long arg)

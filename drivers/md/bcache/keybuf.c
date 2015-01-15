@@ -207,29 +207,6 @@ struct keybuf_key *bch_keybuf_next(struct keybuf *buf)
 	return w;
 }
 
-struct keybuf_key *bch_keybuf_next_rescan(struct cache_set *c,
-					  struct keybuf *buf,
-					  struct bkey *end,
-					  keybuf_pred_fn *pred)
-{
-	struct keybuf_key *ret;
-
-	while (1) {
-		ret = bch_keybuf_next(buf);
-		if (ret)
-			break;
-
-		if (bkey_cmp(&buf->last_scanned, end) >= 0) {
-			pr_debug("scan finished");
-			break;
-		}
-
-		bch_refill_keybuf(c, buf, end, pred);
-	}
-
-	return ret;
-}
-
 void bch_keybuf_resize(struct keybuf *buf, unsigned new_size)
 {
 	spin_lock(&buf->lock);

@@ -1071,7 +1071,7 @@ static bool __journal_res_get(struct cache_set *c, struct journal_res *res,
 	bool write_oldest;
 
 	BUG_ON(res->ref);
-	BUG_ON(nkeys_max < nkeys_max);
+	BUG_ON(nkeys_max < nkeys_min);
 
 	if (!test_bit(JOURNAL_REPLAY_DONE, &c->journal.flags))
 		return true;
@@ -1079,7 +1079,7 @@ static bool __journal_res_get(struct cache_set *c, struct journal_res *res,
 	spin_lock(&c->journal.lock);
 
 	while (1) {
-		if (nkeys_max < c->journal.u64s_remaining) {
+		if (nkeys_min < c->journal.u64s_remaining) {
 			res->nkeys = min_t(unsigned, nkeys_max,
 					   c->journal.u64s_remaining - 1);
 			res->ref = 1;

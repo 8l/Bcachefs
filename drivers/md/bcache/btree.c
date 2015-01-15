@@ -826,6 +826,8 @@ static unsigned long bch_mca_scan(struct shrinker *shrink,
 	unsigned long i, nr = sc->nr_to_scan;
 	unsigned long freed = 0;
 
+	u64 start_time = local_clock();
+
 	if (c->shrinker_disabled)
 		return SHRINK_STOP;
 
@@ -882,6 +884,9 @@ static unsigned long bch_mca_scan(struct shrinker *shrink,
 	}
 
 	mutex_unlock(&c->btree_cache_lock);
+
+	bch_time_stats_update(&c->mca_scan_time, start_time);
+
 	return freed * c->btree_pages;
 }
 
@@ -1078,6 +1083,8 @@ static struct btree *mca_alloc(struct cache_set *c, const struct bkey *k,
 {
 	struct btree *b = NULL;
 
+	u64 start_time = local_clock();
+
 	mutex_lock(&c->btree_cache_lock);
 
 	if (mca_find(c, k))
@@ -1131,6 +1138,9 @@ out:
 
 out_unlock:
 	mutex_unlock(&c->btree_cache_lock);
+
+	bch_time_stats_update(&c->mca_alloc_time, start_time);
+
 	return b;
 err:
 	if (b) {

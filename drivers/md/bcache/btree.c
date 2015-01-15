@@ -823,8 +823,11 @@ static unsigned long bch_mca_scan(struct shrinker *shrink,
 	struct cache_set *c = container_of(shrink, struct cache_set,
 					   btree_cache_shrink);
 	struct btree *b, *t;
-	unsigned long i, nr = sc->nr_to_scan;
+	unsigned long nr = sc->nr_to_scan;
+	unsigned long can_free;
+	unsigned long touched = 0;
 	unsigned long freed = 0;
+	unsigned i;
 
 	u64 start_time = local_clock();
 
@@ -848,10 +851,13 @@ static unsigned long bch_mca_scan(struct shrinker *shrink,
 	 * IO can always make forward progress:
 	 */
 	nr /= c->btree_pages;
-	nr = min_t(unsigned long, nr, mca_can_free(c));
+	can_free = mca_can_free(c);
+	nr = min_t(unsigned long, nr, can_free);
 
 	i = 0;
 	list_for_each_entry_safe(b, t, &c->btree_cache_freeable, list) {
+		touched++;
+
 		if (freed >= nr)
 			break;
 
@@ -865,6 +871,8 @@ static unsigned long bch_mca_scan(struct shrinker *shrink,
 	}
 
 	list_for_each_entry_safe(b, t, &c->btree_cache, list) {
+		touched++;
+
 		if (freed >= nr) {
 			/* Save position */
 			if (&t->list != &c->btree_cache)
@@ -887,7 +895,13 @@ static unsigned long bch_mca_scan(struct shrinker *shrink,
 
 	bch_time_stats_update(&c->mca_scan_time, start_time);
 
-	return freed * c->btree_pages;
+	trace_bcache_mca_scan(c,
+			      touched * c->btree_pages,
+			      freed * c->btree_pages,
+			      can_free * c->btree_pages,
+			      sc->nr_to_scan);
+
+	return (unsigned long) freed * c->btree_pages;
 }
 
 static unsigned long bch_mca_count(struct shrinker *shrink,

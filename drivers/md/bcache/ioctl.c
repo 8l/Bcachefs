@@ -292,9 +292,6 @@ static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 			if (bkey_cmp(&i->end, k) <= 0)
 				bch_cut_back(&i->end, &tmp.k);
 
-			if (!KEY_SIZE(k))
-				continue;
-
 			if (i->keys_found &&
 			    bch_bkey_try_merge(&iter.nodes[0]->keys,
 					       &prev_key.k, &tmp.k)) {

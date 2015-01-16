@@ -444,10 +444,13 @@ STORE(__bch_flash_dev)
 	sysfs_strtoul(data_csum,	d->data_csum);
 
 	if (attr == &sysfs_size) {
-		uint64_t v = strtoi_h_or_return(buf);
+		u64 v = strtoi_h_or_return(buf);
+		u64 inode = KEY_INODE(&d->inode.i_inode.i_key);
 
 		mutex_lock(&d->inode_lock);
 
+		if (v < d->inode.i_inode.i_size)
+			bch_inode_truncate(d->c, inode, v >> 9);
 		d->inode.i_inode.i_size = v;
 		bch_inode_update(d->c, &d->inode.i_inode);
 		set_capacity(d->disk, d->inode.i_inode.i_size >> 9);

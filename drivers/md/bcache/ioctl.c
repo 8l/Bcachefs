@@ -384,7 +384,7 @@ static long bch_ioctl_inode_update(struct cache_set *c, unsigned long arg)
 	if (copy_from_user(&i, user_i, sizeof(i)))
 		return -EFAULT;
 
-	if (bch_inode_invalid(&i.inode.k)) {
+	if (bkey_invalid(c, BKEY_TYPE_INODES, &i.inode.k)) {
 		char status[80];
 
 		bch_inode_status(status, sizeof(status), &i.inode.k);

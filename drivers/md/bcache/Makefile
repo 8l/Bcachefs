@@ -3,6 +3,7 @@ obj-$(CONFIG_BCACHE)	+= bcache.o
 
 bcache-y		:= alloc.o\
 	bkey.o\
+	bkey_methods.o\
 	blockdev.o\
 	bset.o\
 	btree.o\

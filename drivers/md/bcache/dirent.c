@@ -53,14 +53,11 @@ static int dirent_cmp(const struct bkey_i_dirent *d, const struct qstr *q)
 	return len - q->len ?: memcmp(d->v.d_name, q->name, len);
 }
 
-static bool bch_dirent_invalid(const struct btree_keys *bk,
+static bool bch_dirent_invalid(const struct cache_set *c,
 			       const struct bkey *k)
 {
-	if (k->size)
+	if (k->type != BCH_DIRENT)
 		return true;
-
-	if (bkey_deleted(k))
-		return false;
 
 	if (bkey_bytes(k) < sizeof(struct bkey_i_dirent))
 		return true;
@@ -68,7 +65,7 @@ static bool bch_dirent_invalid(const struct btree_keys *bk,
 	return false;
 }
 
-static void bch_dirent_to_text(const struct btree_keys *bk, char *buf,
+static void bch_dirent_to_text(const struct btree *b, char *buf,
 			       size_t size, const struct bkey *k)
 {
 	const struct bkey_i_dirent *d = bkey_i_to_dirent_c(k);
@@ -78,6 +75,9 @@ static void bch_dirent_to_text(const struct btree_keys *bk, char *buf,
 
 const struct btree_keys_ops bch_dirent_ops = {
 	.sort_fixup	= bch_generic_sort_fixup,
+};
+
+const struct bkey_ops bch_bkey_dirent_ops = {
 	.key_invalid	= bch_dirent_invalid,
 	.val_to_text	= bch_dirent_to_text,
 };

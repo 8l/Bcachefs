@@ -44,12 +44,12 @@ static int xattr_cmp(const struct bch_xattr *xattr, const struct qstr *q)
 	return len - q->len ?: memcmp(xattr->x_name, q->name, len);
 }
 
-static bool bch_xattr_invalid(const struct btree_keys *bk, const struct bkey *k)
+static bool bch_xattr_invalid(const struct cache_set *c, const struct bkey *k)
 {
-	if (bkey_bytes(k) < sizeof(struct bkey_i_xattr))
+	if (k->type != BCH_XATTR)
 		return true;
 
-	if (k->size)
+	if (bkey_bytes(k) < sizeof(struct bkey_i_xattr))
 		return true;
 
 	return false;
@@ -57,6 +57,9 @@ static bool bch_xattr_invalid(const struct btree_keys *bk, const struct bkey *k)
 
 const struct btree_keys_ops bch_xattr_ops = {
 	.sort_fixup	= bch_generic_sort_fixup,
+};
+
+const struct bkey_ops bch_bkey_xattr_ops = {
 	.key_invalid	= bch_xattr_invalid,
 };
 

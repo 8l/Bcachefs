@@ -2,6 +2,7 @@
 #define _BCACHE_DIRENT_H
 
 extern const struct btree_keys_ops bch_dirent_ops;
+extern const struct bkey_ops bch_bkey_dirent_ops;
 
 struct qstr;
 struct file;

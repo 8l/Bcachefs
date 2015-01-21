@@ -1029,7 +1029,7 @@ static void bch_read_endio(struct bio *bio, int error)
 		}
 	}
 
-	if (error)
+	if (error && ca)
 		__bcache_io_error(ca->set, "IO error reading data");
 
 	bio_endio(orig, error);

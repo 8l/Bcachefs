@@ -255,9 +255,8 @@ struct cache {
 	 * prio_last_buckets[] contains the last buckets we wrote priorities to (so
 	 * gc can mark them as metadata).
 	 */
-	uint64_t		*prio_buckets;
-	uint64_t		*prio_last_buckets;
-	uint64_t		prio_journal_bucket;
+	u64			*prio_buckets;
+	u64			*prio_last_buckets;
 	spinlock_t		prio_buckets_lock;
 	struct bio		*bio_prio;
 

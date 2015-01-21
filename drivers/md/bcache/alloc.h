@@ -9,7 +9,7 @@ struct cache;
 struct cache_set;
 struct cache_group;
 
-int bch_prio_read(struct cache *, u64);
+int bch_prio_read(struct cache *);
 
 void bch_recalc_min_prio(struct cache *, int);
 void bch_increment_clock_slowpath(struct cache_set *, int);

@@ -73,6 +73,10 @@ bool __dynamic_fault_enabled(struct _dfault *);
 #define krealloc(...)							\
 	(memory_fault() ? NULL	: krealloc(__VA_ARGS__))
 
+#define mempool_alloc(pool, gfp_mask)					\
+	((!((gfp_mask) & __GFP_WAIT) && memory_fault())			\
+		? NULL : mempool_alloc(pool, gfp_mask))
+
 #define __get_free_pages(...)						\
 	(memory_fault() ? 0	: __get_free_pages(__VA_ARGS__))
 #define alloc_pages_node(...)						\

@@ -45,11 +45,18 @@ struct bch_ioctl_read {
 };
 
 struct bch_ioctl_write {
-	struct bkey		extent;
+	__u64			inode;
+	__u64			offset;		/* in sectors */
+	__u64			sectors;
+	__u64			version_high;
+	__u64			version_low;
+
 	__u64			buf;
 	__u32			flags;
 #define BCH_IOCTL_WRITE_FLUSH		(1 << 0)
 #define BCH_IOCTL_WRITE_FUA		(1 << 1)
+#define BCH_IOCTL_WRITE_CACHED		(1 << 2)
+#define BCH_IOCTL_WRITE_ALLOC_NOWAIT	(1 << 3)
 };
 
 struct bch_ioctl_copy {
@@ -73,8 +80,8 @@ struct bch_ioctl_list_keys {
 	__u32			flags;
 #define BCH_IOCTL_LIST_VALUES		(1 << 0)
 
-	struct bkey		start;
-	struct bkey		end;
+	struct bpos		start;
+	struct bpos		end;
 
 	__u64			buf;
 	__u32			buf_size;	/* in bytes */
@@ -84,11 +91,11 @@ struct bch_ioctl_list_keys {
 /* XXX: should not be blockdev inode specific */
 
 struct bch_ioctl_inode_update {
-	struct bch_inode_blockdev inode;
+	struct bkey_i_inode_blockdev inode;
 };
 
 struct bch_ioctl_inode_create {
-	struct bch_inode_blockdev inode;
+	struct bkey_i_inode_blockdev inode;
 };
 
 struct bch_ioctl_inode_delete {
@@ -97,7 +104,7 @@ struct bch_ioctl_inode_delete {
 
 struct bch_ioctl_blockdev_find_by_uuid {
 	__u8			uuid[16];
-	struct bch_inode_blockdev inode;
+	struct bkey_i_inode_blockdev inode;
 };
 
 /* Returns cache set uuid */

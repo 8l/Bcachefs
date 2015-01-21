@@ -183,6 +183,7 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 	struct bch_ioctl_write __user *user_write = (void __user *) arg;
 	struct bch_ioctl_write i;
 	struct bch_ioctl_write_op *op;
+	struct bkey extent;
 	struct bio *bio;
 	size_t bytes, pages;
 	ssize_t ret;
@@ -196,11 +197,14 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 	if (i.flags & (BCH_IOCTL_WRITE_FLUSH | BCH_IOCTL_WRITE_FUA))
 		flags |= BCH_WRITE_FLUSH;
 
-	bch_set_extent_ptrs(&i.extent, 0);
-	SET_KEY_DELETED(&i.extent, 0);
-	SET_KEY_WIPED(&i.extent, 0);
-	SET_KEY_BAD(&i.extent, 0);
-	SET_KEY_CSUM(&i.extent, 0);
+	if (i.flags & BCH_IOCTL_WRITE_CACHED)
+		flags |= BCH_WRITE_CACHED;
+
+	if (i.flags & BCH_IOCTL_WRITE_ALLOC_NOWAIT)
+		flags |= BCH_WRITE_ALLOC_NOWAIT;
+
+	extent = KEY(i.inode, i.offset + i.sectors, i.sectors);
+	extent.version = i.version_low;
 
 	/*
 	 * Hack: may need multiple bios, so I'm using spare fields in the kiocb
@@ -209,8 +213,8 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 	atomic_set(ref, 1);
 	req->ki_pos = 0;
 
-	while (KEY_SIZE(&i.extent)) {
-		bytes = KEY_SIZE(&i.extent) << 9;
+	while (extent.size) {
+		bytes = extent.size << 9;
 		pages = DIV_ROUND_UP(bytes, PAGE_SIZE);
 
 		op = kmalloc(sizeof(*op) + sizeof(struct bio_vec) * pages,
@@ -226,15 +230,15 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 
 		bio = &op->bio.bio;
 		bio_init(bio);
-		bio->bi_iter.bi_sector	= KEY_START(&i.extent);
+		bio->bi_iter.bi_sector	= bkey_start_offset(&extent);
 		bio->bi_max_vecs	= pages;
 		bio->bi_io_vec		= bio->bi_inline_vecs;
 
 		bch_write_op_init(&op->iop, c, bio, NULL,
-				  &i.extent, NULL, flags);
+				  &extent, NULL, flags);
 
 		ret = bio_get_user_pages(bio, i.buf,
-					 KEY_SIZE(&i.extent) << 9, 0);
+					 extent.size << 9, 0);
 		if (ret < 0) {
 			op->iop.error = ret;
 			closure_return_with_destructor_noreturn(&op->cl,
@@ -242,8 +246,7 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 			break;
 		}
 
-		SET_KEY_SIZE(&i.extent,
-			     KEY_SIZE(&i.extent) - bio_sectors(bio));
+		extent.size -= bio_sectors(bio);
 		i.buf += bio_sectors(bio) << 9;
 
 		closure_call(&op->iop.cl, bch_write, NULL, &op->cl);
@@ -268,15 +271,15 @@ static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 	    i->btree_id != BTREE_ID_INODES)
 		return -EINVAL;
 
-	for_each_btree_key(&iter, c, i->btree_id, k, &i->start) {
+	for_each_btree_key(&iter, c, i->btree_id, k, i->start) {
 		BKEY_PADDED(k) tmp;
 
-		if (bkey_cmp(&START_KEY(k), &i->end) >= 0)
+		if (bkey_cmp(bkey_start_pos(k), i->end) >= 0)
 			break;
 
 		if (!(i->flags & BCH_IOCTL_LIST_VALUES)) {
 			tmp.k = *k;
-			bch_set_val_u64s(&tmp.k, 0);
+			set_bkey_deleted(&tmp.k);
 			k = &tmp.k;
 		}
 
@@ -286,23 +289,23 @@ static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 				k = &tmp.k;
 			}
 
-			if (bkey_cmp(&i->start, &START_KEY(k)) > 0)
-				bch_cut_front(&i->start, &tmp.k);
+			if (bkey_cmp(i->start, bkey_start_pos(k)) > 0)
+				bch_cut_front(i->start, &tmp.k);
 
-			if (bkey_cmp(&i->end, k) <= 0)
-				bch_cut_back(&i->end, &tmp.k);
+			if (bkey_cmp(i->end, k->p) <= 0)
+				bch_cut_back(i->end, &tmp.k);
 
 			if (i->keys_found &&
 			    bch_bkey_try_merge(&iter.nodes[0]->keys,
 					       &prev_key.k, &tmp.k)) {
-				i->keys_found -= KEY_U64s(&prev_key.k);
+				i->keys_found -= prev_key.k.u64s;
 				k = &prev_key.k;
 			} else {
 				bkey_copy(&prev_key.k, k);
 			}
 		}
 
-		if (i->keys_found + KEY_U64s(k) >
+		if (i->keys_found + k->u64s >
 		    i->buf_size / sizeof(u64)) {
 			ret = -ENOSPC;
 			break;
@@ -315,7 +318,7 @@ static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 			break;
 		}
 
-		i->keys_found += KEY_U64s(k);
+		i->keys_found += k->u64s;
 	}
 	bch_btree_iter_unlock(&iter);
 
@@ -323,7 +326,7 @@ static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 }
 
 int bch_list_keys(struct cache_set *c, unsigned btree_id,
-		  struct bkey *start, struct bkey *end,
+		  struct bpos start, struct bpos end,
 		  struct bkey *buf, size_t buf_size,
 		  unsigned flags, unsigned *keys_found)
 {
@@ -337,10 +340,10 @@ int bch_list_keys(struct cache_set *c, unsigned btree_id,
 	memset(&i, 0, sizeof(i));
 
 	i.btree_id	= btree_id;
-	i.flags	= flags;
-	i.start	= *start;
-	i.end	= *end;
-	i.buf	= (unsigned long) buf;
+	i.flags		= flags;
+	i.start		= start;
+	i.end		= end;
+	i.buf		= (unsigned long) buf;
 	i.buf_size	= buf_size;
 
 	ret = __bch_list_keys(c, &i);
@@ -381,15 +384,15 @@ static long bch_ioctl_inode_update(struct cache_set *c, unsigned long arg)
 	if (copy_from_user(&i, user_i, sizeof(i)))
 		return -EFAULT;
 
-	if (bch_inode_invalid(&i.inode.i_inode.i_key)) {
+	if (bch_inode_invalid(&i.inode.k)) {
 		char status[80];
 
-		bch_inode_status(status, sizeof(status), &i.inode.i_inode.i_key);
+		bch_inode_status(status, sizeof(status), &i.inode.k);
 		pr_err("invalid inode: %s", status);
 		return -EINVAL;
 	}
 
-	bch_inode_update(c, &i.inode.i_inode);
+	bch_inode_update(c, &i.inode.k);
 	return 0;
 }
 
@@ -403,13 +406,13 @@ static long bch_ioctl_inode_create(struct cache_set *c, unsigned long arg)
 	if (copy_from_user(&i, user_i, sizeof(i)))
 		return -EFAULT;
 
-	ret = bch_inode_create(c, &i.inode.i_inode, 0, BLOCKDEV_INODE_MAX,
+	ret = bch_inode_create(c, &i.inode.k, 0, BLOCKDEV_INODE_MAX,
 			       &c->unused_inode_hint);
 	if (ret)
 		return ret;
 
 	if (copy_to_user(&user_i->inode, &i.inode, sizeof(i.inode))) {
-		bch_inode_rm(c, KEY_INODE(&i.inode.i_inode.i_key));
+		bch_inode_rm(c, i.inode.k.p.inode);
 		return -EFAULT;
 	}
 
@@ -465,7 +468,7 @@ static long bch_ioctl_blockdev_find_by_uuid(struct cache_set *c, unsigned long a
 	struct bch_ioctl_blockdev_find_by_uuid __user *user_i =
 		(void __user *) arg;
 	uuid_le uuid;
-	struct bch_inode_blockdev inode;
+	struct bkey_i_inode_blockdev inode;
 
 	if (copy_from_user(&uuid, user_i->uuid, sizeof(user_i->uuid)))
 		return -EFAULT;
@@ -497,9 +500,8 @@ static long bch_query_uuid(struct cache_set *c, unsigned long arg)
  * bch_copy - copy a range of size @sectors beginning @src_begin
  *	      to a destination beginning @dst_begin.
  * @c		cache set
- * @src_start	pointer to start location the copy source
- * @dst_start	pointer to start location of the copy destination
- *		NOTE: both starts begin at KEY_START(begin)
+ * @src		pointer to start location the copy source
+ * @dst		pointer to start location of the copy destination
  * @sectors	how many sectors to copy
  * @version	Version to use for new extents, 0ULL to preserve source versions
  *
@@ -513,20 +515,16 @@ static long bch_query_uuid(struct cache_set *c, unsigned long arg)
  * XXX: this needs to be moved to generic io code
  */
 int bch_copy(struct cache_set *c,
-	     struct bkey *src,
-	     struct bkey *dst,
+	     struct bpos src,
+	     struct bpos dst,
 	     unsigned long sectors,
 	     unsigned long version)
 {
 	struct scan_keylist *keys;
 	struct btree_iter iter;
-	struct bkey src_end = KEY(KEY_INODE(src),
-				  KEY_OFFSET(src) + sectors,
-				  0);
+	struct bpos src_end = POS(src.inode,
+				  src.offset + sectors);
 	int ret = 0;
-
-	if (KEY_SIZE(src) || KEY_SIZE(dst))
-		return -EINVAL;
 
 	keys = kmalloc(sizeof(*keys), GFP_KERNEL);
 	if (!keys)
@@ -539,7 +537,7 @@ int bch_copy(struct cache_set *c,
 		const struct bkey *k = bch_btree_iter_peek(&iter);
 		BKEY_PADDED(key) copy;
 
-		if (!k || bkey_cmp(&START_KEY(k), &src_end) >= 0) {
+		if (!k || bkey_cmp(bkey_start_pos(k), src_end) >= 0) {
 			if (!bch_keylist_empty(&keys->list))
 				goto insert; /* insert any keys on our keylist */
 			break;
@@ -548,17 +546,17 @@ int bch_copy(struct cache_set *c,
 		/* cut pointers to size */
 		bkey_copy(&copy.key, k);
 		bch_cut_front(src, &copy.key);
-		bch_cut_back(&src_end, &copy.key);
+		bch_cut_back(src_end, &copy.key);
 
 		/* modify copy to reference destination */
-		SET_KEY_INODE(&copy.key, KEY_INODE(dst));
-		SET_KEY_OFFSET(&copy.key, KEY_OFFSET(&copy.key) -
-			       KEY_OFFSET(src) +  KEY_OFFSET(dst));
+		copy.key.p.inode = dst.inode;
+		copy.key.p.offset -= src.offset;
+		copy.key.p.offset += dst.offset;
 
 		if (version != ((u64) 0ULL)) {
 			/* Version 0 means retain the source version */
 			/* Else use the new version */
-			SET_KEY_VERSION(&copy.key, version);
+			copy.key.version = version;
 		}
 
 		/*
@@ -606,11 +604,11 @@ static void bch_ioctl_copy_work(struct work_struct *work)
 {
 	struct bch_ioctl_copy_op *op =
 		container_of(work, struct bch_ioctl_copy_op, work);
-	struct bkey src_start = KEY(op->i.src_inode, op->i.src_offset, 0);
-	struct bkey dst_start = KEY(op->i.dst_inode, op->i.dst_offset, 0);
 
-	int ret = bch_copy(op->c, &src_start, &dst_start, op->i.sectors,
-			   op->i.version);
+	int ret = bch_copy(op->c,
+			   POS(op->i.src_inode, op->i.src_offset),
+			   POS(op->i.dst_inode, op->i.dst_offset),
+			   op->i.sectors, op->i.version);
 
 	aio_complete(op->req, ret < 0 ? ret : 0, 0);
 	kfree(op);
@@ -706,10 +704,11 @@ static void bch_ioctl_discard_work(struct work_struct *work)
 {
 	struct bch_ioctl_discard_op *op =
 		container_of(work, struct bch_ioctl_discard_op, work);
-	struct bkey start_key = KEY(op->inum, op->offset, 0);
-	struct bkey end_key = KEY(op->inum, op->offset + op->sectors, 0);
 
-	int ret = bch_discard(op->c, &start_key, &end_key, op->version);
+	int ret = bch_discard(op->c,
+			      POS(op->inum, op->offset),
+			      POS(op->inum, op->offset + op->sectors),
+			      op->version);
 
 	aio_complete(op->req, ret, 0);
 	kfree(op);

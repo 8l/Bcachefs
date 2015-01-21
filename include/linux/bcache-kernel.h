@@ -11,6 +11,21 @@
 struct cache_set;
 struct bkey;
 
+#define __bkey_idx(_set, _offset)				\
+	((_set)->_data + (_offset))
+
+#define bkey_idx(_set, _offset)					\
+	((typeof(&(_set)->start[0])) __bkey_idx((_set), (_offset)))
+
+#define bkey_next(_k)						\
+	((typeof(_k)) __bkey_idx(_k, (_k)->u64s))
+
+#define __bset_bkey_last(_set)					\
+	 __bkey_idx((_set), (_set)->keys)
+
+#define bset_bkey_last(_set)					\
+	 bkey_idx((_set), (_set)->keys)
+
 #define BKEY_EXTENT_PTRS_MAX	4
 #define BKEY_EXTENT_MAX_U64s	(BKEY_U64s + BKEY_EXTENT_PTRS_MAX)
 
@@ -110,7 +125,7 @@ static inline struct bkey *__bch_keylist_next(struct keylist *l, struct bkey *k)
 
 static inline void bch_keylist_enqueue(struct keylist *l)
 {
-	BUG_ON(!bch_keylist_fits(l, KEY_U64s(l->top)));
+	BUG_ON(!bch_keylist_fits(l, l->top->u64s));
 	l->top = __bch_keylist_next(l, l->top);
 }
 
@@ -265,14 +280,16 @@ struct bbio {
 int bch_read(struct cache_set *, struct bio *, u64);
 void bch_write(struct closure *);
 
-int bch_list_keys(struct cache_set *, unsigned, struct bkey *, struct bkey *,
+int bch_list_keys(struct cache_set *, unsigned, struct bpos, struct bpos,
 		  struct bkey *, size_t, unsigned, unsigned *);
 
 void bch_cache_set_close(struct cache_set *);
 struct cache_set *bch_cache_set_open(unsigned);
 struct cache_set *bch_cache_set_open_by_uuid(uuid_le *);
 
+struct bkey_i_inode_blockdev;
+
 int bch_blockdev_inode_find_by_uuid(struct cache_set *, uuid_le *,
-				    struct bch_inode_blockdev *);
+				    struct bkey_i_inode_blockdev *);
 
 #endif /* _LINUX_BCACHE_OPEN_H */

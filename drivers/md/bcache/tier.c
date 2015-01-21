@@ -20,34 +20,38 @@ static bool tiering_pred(struct scan_keylist *kl, const struct bkey *k)
 					tiering_queue.keys);
 	struct cache_set *c = ca->set;
 	struct cache_member_rcu *mi;
+	const struct bkey_i_extent *e;
 	unsigned replicas = CACHE_SET_DATA_REPLICAS_WANT(&c->sb);
 	unsigned dev;
-	bool ret;
+	bool ret = false;
 
-	if (!bch_extent_ptrs(k))
+	switch (k->type) {
+	case BCH_EXTENT:
+		e = bkey_i_to_extent_c(k);
+		/*
+		 * Should not happen except in a pathological situation (too
+		 * many pointers on the wrong tier?
+		 */
+		if (bch_extent_ptrs(k) == BKEY_EXTENT_PTRS_MAX)
+			return false;
+
+		/* Need at least CACHE_SET_DATA_REPLICAS_WANT ptrs not on tier 0 */
+		if (bch_extent_ptrs(k) < replicas)
+			return true;
+
+		dev = PTR_DEV(&e->v.ptr[bch_extent_ptrs(k) - replicas]);
+		mi = cache_member_info_get(c);
+		ret = dev < mi->nr_in_set && !CACHE_TIER(&mi->m[dev]);
+		cache_member_info_put();
+
+		return ret;
+	default:
 		return false;
-
-	/*
-	 * Should not happen except in a pathological situation (too many
-	 * pointers on the wrong tier?
-	 */
-	if (bch_extent_ptrs(k) == BKEY_EXTENT_PTRS_MAX)
-		return false;
-
-	/* Need at least CACHE_SET_DATA_REPLICAS_WANT ptrs not on tier 0 */
-	if (bch_extent_ptrs(k) < replicas)
-		return true;
-
-	dev = PTR_DEV(k, bch_extent_ptrs(k) - replicas);
-	mi = cache_member_info_get(c);
-	ret = dev < mi->nr_in_set && !CACHE_TIER(&mi->m[dev]);
-	cache_member_info_put();
-
-	return ret;
+	}
 }
 
 struct tiering_refill {
-	struct bkey		start;
+	struct bpos		start;
 	struct cache		*ca;
 	int			cache_iter;
 	uint64_t		sectors;
@@ -104,7 +108,7 @@ static void refill_init(struct cache_set *c, struct tiering_refill *refill)
 	struct cache_group *tier;
 
 	memset(refill, 0, sizeof(*refill));
-	refill->start = ZERO_KEY;
+	refill->start = POS_MIN;
 
 	rcu_read_lock();
 	tier = &c->cache_tiers[1];
@@ -147,7 +151,7 @@ static void tiering_refill(struct cache_set *c, struct tiering_refill *refill)
 	struct btree_iter iter;
 	const struct bkey *k;
 
-	if (bkey_cmp(&refill->start, &MAX_KEY) >= 0)
+	if (bkey_cmp(refill->start, POS_MAX) >= 0)
 		return;
 
 	if (refill->ca == NULL)
@@ -158,11 +162,11 @@ static void tiering_refill(struct cache_set *c, struct tiering_refill *refill)
 
 	trace_bcache_tiering_refill_start(c);
 
-	for_each_btree_key(&iter, c, BTREE_ID_EXTENTS, k, &refill->start) {
+	for_each_btree_key(&iter, c, BTREE_ID_EXTENTS, k, refill->start) {
 		keys = &refill->ca->tiering_queue.keys;
 
 		if (!tiering_pred(keys, k)) {
-			refill->start = *k;
+			refill->start = k->p;
 			continue;
 		}
 
@@ -171,8 +175,8 @@ static void tiering_refill(struct cache_set *c, struct tiering_refill *refill)
 			goto done;
 
 		/* TODO: split key if refill->sectors is now > stripe_size */
-		refill->sectors += KEY_SIZE(k);
-		refill->start = *k;
+		refill->sectors += k->size;
+		refill->start = k->p;
 
 		/* Check if we've added enough keys to this keylist */
 		if (tiering_keylist_full(refill)) {
@@ -196,7 +200,7 @@ static void tiering_refill(struct cache_set *c, struct tiering_refill *refill)
 		}
 	}
 	/* Reached the end of the keyspace */
-	refill->start = MAX_KEY;
+	refill->start = POS_MAX;
 done:
 	bch_btree_iter_unlock(&iter);
 
@@ -213,7 +217,7 @@ static int issue_tiering_move(struct moving_queue *q,
 
 	io = moving_io_alloc(k);
 	if (!io) {
-		trace_bcache_tiering_alloc_fail(c, KEY_SIZE(k));
+		trace_bcache_tiering_alloc_fail(c, k->size);
 		return -ENOMEM;
 	}
 

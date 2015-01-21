@@ -451,7 +451,7 @@ static int cache_sb_to_cache_set(struct cache_set *c, struct cache *ca)
 		return -ENOMEM;
 
 	new->nr_in_set = ca->sb.nr_in_set;
-	memcpy(&new->m, ca->disk_sb.sb->d,
+	memcpy(&new->m, ca->disk_sb.sb->members,
 	       ca->sb.nr_in_set * sizeof(new->m[0]));
 
 	rcu_assign_pointer(c->members, new);
@@ -488,14 +488,15 @@ static int cache_sb_from_cache_set(struct cache_set *c, struct cache *ca)
 		ca->sb.keys = keys;
 
 		memmove(__journal_buckets(ca),
-			ca->disk_sb.sb->d + old_offset,
+			ca->disk_sb.sb->_data + old_offset,
 			bch_nr_journal_buckets(&ca->sb) * sizeof(u64));
 	}
 
 	mi = cache_member_info_get(c);
 	ca->mi = mi->m[ca->sb.nr_this_dev];
 
-	memcpy(ca->disk_sb.sb->d, mi->m, mi->nr_in_set * sizeof(mi->m[0]));
+	memcpy(ca->disk_sb.sb->_data, mi->m,
+	       mi->nr_in_set * sizeof(mi->m[0]));
 	cache_member_info_put();
 
 	ca->sb.version		= BCACHE_SB_VERSION_CDEV;
@@ -549,6 +550,7 @@ void bch_check_mark_super_slowpath(struct cache_set *c,
 {
 	unsigned ptr;
 	struct cache_member *mi;
+	const struct bkey_i_extent *e = bkey_i_to_extent_c(k);
 
 	down(&c->sb_write_mutex);
 
@@ -560,10 +562,10 @@ void bch_check_mark_super_slowpath(struct cache_set *c,
 
 	mi = cache_member_info_get(c)->m;
 
-	for (ptr = 0; ptr < bch_extent_ptrs(k); ptr++)
+	for (ptr = 0; ptr < bch_extent_ptrs(&e->k); ptr++)
 		(meta
 		 ? SET_CACHE_HAS_METADATA
-		 : SET_CACHE_HAS_DATA)(mi + PTR_DEV(k, ptr), true);
+		 : SET_CACHE_HAS_DATA)(mi + PTR_DEV(&e->v.ptr[ptr]), true);
 
 	cache_member_info_put();
 
@@ -641,7 +643,7 @@ static void bch_cache_set_read_only(struct cache_set *c)
 		d = rcu_dereference_protected(*slot,
 				lockdep_is_held(&bch_register_lock));
 
-		if (!INODE_FLASH_ONLY(&d->inode)) {
+		if (!INODE_FLASH_ONLY(&d->inode.v)) {
 			dc = container_of(d, struct cached_dev, disk);
 			bch_cached_dev_writeback_stop(dc);
 		}
@@ -780,7 +782,7 @@ static void __cache_set_unregister(struct closure *cl)
 	radix_tree_for_each_slot(slot, &c->devices, &iter, 0) {
 		d = radix_tree_deref_slot(slot);
 
-		if (!INODE_FLASH_ONLY(&d->inode) &&
+		if (!INODE_FLASH_ONLY(&d->inode.v) &&
 		    test_bit(CACHE_SET_UNREGISTERING, &c->flags)) {
 			dc = container_of(d, struct cached_dev, disk);
 			bch_cached_dev_detach(dc);
@@ -1042,7 +1044,7 @@ const char *bch_run_cache_set(struct cache_set *c)
 
 		for_each_jset_jkeys(jk, j)
 			if (JKEYS_TYPE(jk) == JKEYS_PRIO_PTRS) {
-				prio_bucket_ptrs = jk->d;
+				prio_bucket_ptrs = jk->_data;
 				break;
 			}
 
@@ -1114,7 +1116,7 @@ const char *bch_run_cache_set(struct cache_set *c)
 		bch_journal_replay(c, &journal);
 		set_bit(JOURNAL_REPLAY_DONE, &c->journal.flags);
 	} else {
-		struct bch_inode inode;
+		struct bkey_i_inode inode;
 
 		pr_notice("invalidating existing data");
 
@@ -1150,13 +1152,13 @@ const char *bch_run_cache_set(struct cache_set *c)
 		bch_journal_next(&c->journal);
 		bch_journal_meta(c, &cl);
 
-		BCH_INODE_INIT(&inode);
-		SET_KEY_INODE(&inode.i_key, BCACHE_ROOT_INO);
-		inode.i_mode = S_IFDIR|S_IRWXU|S_IRGRP|S_IXGRP|S_IROTH|S_IXOTH;
-		inode.i_nlink = 2;
+		bkey_inode_init(&inode.k);
+		inode.k.p.inode = BCACHE_ROOT_INO;
+		inode.v.i_mode = S_IFDIR|S_IRWXU|S_IRUGO|S_IXUGO;
+		inode.v.i_nlink = 2;
 
 		err = "error creating root directory";
-		if (bch_inode_update(c, &inode))
+		if (bch_inode_update(c, &inode.k))
 			goto err;
 	}
 

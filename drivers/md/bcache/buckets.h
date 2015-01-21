@@ -26,10 +26,10 @@ static inline uint8_t bucket_gc_gen(struct cache *ca, struct bucket *g)
 }
 
 static inline struct cache *PTR_CACHE(const struct cache_set *c,
-				      const struct bkey *k,
+				      const struct bch_extent *e,
 				      unsigned ptr)
 {
-	unsigned dev = PTR_DEV(k, ptr);
+	unsigned dev = PTR_DEV(&e->ptr[ptr]);
 
 	/* The range test covers PTR_LOST_DEV and PTR_CHECK_DEV  */
 
@@ -39,10 +39,10 @@ static inline struct cache *PTR_CACHE(const struct cache_set *c,
 }
 
 static inline size_t PTR_BUCKET_NR(const struct cache *ca,
-				   const struct bkey *k,
+				   const struct bch_extent *e,
 				   unsigned ptr)
 {
-	return sector_to_bucket(ca, PTR_OFFSET(k, ptr));
+	return sector_to_bucket(ca, PTR_OFFSET(&e->ptr[ptr]));
 }
 
 /*
@@ -53,28 +53,32 @@ static inline size_t PTR_BUCKET_NR_TRACE(const struct cache_set *c,
 					 unsigned ptr)
 {
 	const struct cache *ca;
-	size_t bucket;
+	size_t bucket = 0;
 
-	rcu_read_lock();
-	bucket = (bch_extent_ptrs(k) && (ca = PTR_CACHE(c, k, ptr)))
-		? PTR_BUCKET_NR(ca, k, ptr) : 0;
-	rcu_read_unlock();
+	if (k->type == BCH_EXTENT) {
+		const struct bkey_i_extent *e = bkey_i_to_extent_c(k);
+
+		rcu_read_lock();
+		if ((ca = PTR_CACHE(c, &e->v, ptr)))
+			bucket = PTR_BUCKET_NR(ca, &e->v, ptr);
+		rcu_read_unlock();
+	}
 
 	return bucket;
 }
 
 static inline u8 PTR_BUCKET_GEN(const struct cache *ca,
-				const struct bkey *k,
+				const struct bch_extent *e,
 				unsigned ptr)
 {
-	return ca->bucket_gens[PTR_BUCKET_NR(ca, k, ptr)];
+	return ca->bucket_gens[PTR_BUCKET_NR(ca, e, ptr)];
 }
 
 static inline struct bucket *PTR_BUCKET(struct cache *ca,
-					const struct bkey *k,
+					const struct bch_extent *e,
 					unsigned ptr)
 {
-	return ca->buckets + PTR_BUCKET_NR(ca, k, ptr);
+	return ca->buckets + PTR_BUCKET_NR(ca, e, ptr);
 }
 
 static inline uint8_t __gen_after(uint8_t a, uint8_t b)
@@ -98,10 +102,11 @@ static inline uint8_t gen_after(uint8_t a, uint8_t b)
  *
  * Warning: PTR_CACHE(c, k, ptr) must equal ca.
  */
-static inline uint8_t ptr_stale(const struct cache *ca,
-				const struct bkey *k, unsigned ptr)
+static inline u8 ptr_stale(const struct cache *ca,
+			   const struct bch_extent *e,
+			   unsigned ptr)
 {
-	return gen_after(PTR_BUCKET_GEN(ca, k, ptr), PTR_GEN(k, ptr));
+	return gen_after(PTR_BUCKET_GEN(ca, e, ptr), PTR_GEN(&e->ptr[ptr]));
 }
 
 /* bucket heaps */

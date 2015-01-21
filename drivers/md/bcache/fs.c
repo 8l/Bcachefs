@@ -16,7 +16,7 @@
 static struct bio_set *bch_fs_bioset;
 
 struct bch_inode_info {
-	struct bch_inode	inode;
+	struct bkey_i_inode	inode;
 	struct inode		vfs_inode;
 };
 
@@ -24,7 +24,7 @@ struct bch_inode_info {
 
 static struct kmem_cache *bch_inode_cache;
 
-static void bch_inode_init(struct bch_inode_info *);
+static void bch_vfs_inode_init(struct bch_inode_info *);
 static int bch_read_single_page(struct page *, struct address_space *);
 
 static struct inode *bch_vfs_inode_get(struct super_block *sb, u64 inum)
@@ -52,9 +52,9 @@ static struct inode *bch_vfs_inode_get(struct super_block *sb, u64 inum)
 		return ERR_PTR(ret);
 	}
 
-	BUG_ON(KEY_U64s(&ei->inode.i_key) != sizeof(ei->inode) / sizeof(u64));
+	BUG_ON(ei->inode.k.u64s != sizeof(ei->inode) / sizeof(u64));
 
-	bch_inode_init(ei);
+	bch_vfs_inode_init(ei);
 	unlock_new_inode(inode);
 
 	return inode;
@@ -74,13 +74,11 @@ static struct inode *bch_vfs_inode_create(struct cache_set *c,
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
 
-	ei = to_bch_ei(inode);
-	bi = &ei->inode;
-
-	BCH_INODE_INIT(bi);
-
 	inode_init_owner(inode, parent, mode);
 
+	ei = to_bch_ei(inode);
+
+	bi = &bkey_inode_init(&ei->inode.k)->v;
 	bi->i_uid	= i_uid_read(inode);
 	bi->i_gid	= i_gid_read(inode);
 
@@ -91,7 +89,7 @@ static struct inode *bch_vfs_inode_create(struct cache_set *c,
 	bi->i_nlink	= S_ISDIR(mode) ? 2 : 1;
 	/* XXX: init bch_inode */
 
-	ret = bch_inode_create(c, bi,
+	ret = bch_inode_create(c, &ei->inode.k,
 			       BLOCKDEV_INODE_MAX,
 			       BCACHE_USER_INODE_RANGE,
 			       &c->unused_inode_hint);
@@ -100,7 +98,7 @@ static struct inode *bch_vfs_inode_create(struct cache_set *c,
 		return ERR_PTR(ret);
 	}
 
-	bch_inode_init(ei);
+	bch_vfs_inode_init(ei);
 	insert_inode_hash(inode);
 
 	return inode;
@@ -132,7 +130,7 @@ static int __bch_write_inode(struct inode *inode)
 {
 	struct cache_set *c = inode->i_sb->s_fs_info;
 	struct bch_inode_info *ei = to_bch_ei(inode);
-	struct bch_inode *bi = &ei->inode;
+	struct bch_inode *bi = &ei->inode.v;
 
 	pr_debug("i_size now %llu", inode->i_size);
 
@@ -146,7 +144,7 @@ static int __bch_write_inode(struct inode *inode)
 	bi->i_mtime	= timespec_to_ns(&inode->i_mtime);
 	bi->i_ctime	= timespec_to_ns(&inode->i_ctime);
 
-	bch_inode_update(c, bi);
+	bch_inode_update(c, &ei->inode.k);
 
 	return 0;
 }
@@ -423,20 +421,23 @@ static int bch_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		return -EINVAL;
 
 	for_each_btree_key(&iter, c, BTREE_ID_EXTENTS, k,
-			   &KEY(inode->i_ino, start, 0)) {
-		if (bkey_cmp(&START_KEY(k),
-			     &KEY(inode->i_ino, start + len, 0)) >= 0)
-			break;
+			   POS(inode->i_ino, start))
+		if (k->type == BCH_EXTENT) {
+			const struct bkey_i_extent *e = bkey_i_to_extent_c(k);
 
-		for (ptr = 0; ptr < bch_extent_ptrs(k); ptr++) {
-			ret = fiemap_fill_next_extent(fieinfo,
-						      KEY_START(k),
-						      PTR_OFFSET(k, ptr),
-						      KEY_SIZE(k), 0);
-			if (ret < 0)
-				goto out;
+			if (bkey_cmp(bkey_start_pos(&e->k),
+				     POS(inode->i_ino, start + len)) >= 0)
+				break;
+
+			for (ptr = 0; ptr < bch_extent_ptrs(&e->k); ptr++) {
+				ret = fiemap_fill_next_extent(fieinfo,
+							      bkey_start_offset(&e->k),
+							      PTR_OFFSET(&e->v.ptr[ptr]),
+							      e->k.size, 0);
+				if (ret < 0)
+					goto out;
+			}
 		}
-	}
 out:
 	bch_btree_iter_unlock(&iter);
 	return ret;
@@ -652,7 +653,7 @@ static void bch_writepage_do_io(struct bch_writepage_io *io)
 {
 	pr_debug("writing %u sectors to %llu:%llu",
 		 bio_sectors(&io->bio.bio),
-		 KEY_INODE(&io->op.insert_key),
+		 io->op.insert_key.p.inode,
 		 (u64) io->bio.bio.bi_iter.bi_sector);
 
 	closure_call(&io->op.cl, bch_write, NULL, &io->cl);
@@ -879,19 +880,19 @@ static const struct address_space_operations bch_address_space_operations = {
 	.error_remove_page	= generic_error_remove_page,
 };
 
-static void bch_inode_init(struct bch_inode_info *ei)
+static void bch_vfs_inode_init(struct bch_inode_info *ei)
 {
 	struct inode *inode = &ei->vfs_inode;
-	struct bch_inode *bi = &ei->inode;
+	struct bch_inode *bi = &ei->inode.v;
 
 	pr_debug("init inode %llu with mode %o",
-		 KEY_INODE(&bi->i_key), bi->i_mode);
+		 ei->inode.k.p.inode, bi->i_mode);
 
 	inode->i_mode	= bi->i_mode;
 	i_uid_write(inode, bi->i_uid);
 	i_gid_write(inode, bi->i_gid);
 
-	inode->i_ino	= KEY_INODE(&bi->i_key);
+	inode->i_ino	= ei->inode.k.p.inode;
 	set_nlink(inode, bi->i_nlink);
 	inode->i_rdev	= bi->i_dev;
 	inode->i_size	= bi->i_size;
@@ -970,7 +971,7 @@ static u64 bch_count_inodes(struct cache_set *c)
 	const struct bkey *k;
 	u64 inodes = 0;
 
-	for_each_btree_key(&iter, c, BTREE_ID_INODES, k, NULL)
+	for_each_btree_key(&iter, c, BTREE_ID_INODES, k, POS_MIN)
 		inodes++;
 
 	bch_btree_iter_unlock(&iter);

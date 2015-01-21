@@ -402,13 +402,13 @@ int bch_cached_dev_attach(struct cached_dev *dc, struct cache_set *c)
 		struct closure cl;
 		closure_init_stack(&cl);
 
-		BCH_INODE_INIT(&dc->disk.inode);
-		dc->disk.inode.i_uuid = dc->sb.uuid;
-		memcpy(dc->disk.inode.i_label, dc->sb.label, SB_LABEL_SIZE);
-		dc->disk.inode.i_inode.i_ctime = rtime;
-		dc->disk.inode.i_inode.i_mtime = rtime;
+		bkey_inode_blockdev_init(&dc->disk.inode.k);
+		dc->disk.inode.v.i_uuid = dc->sb.uuid;
+		memcpy(dc->disk.inode.v.i_label, dc->sb.label, SB_LABEL_SIZE);
+		dc->disk.inode.v.i_inode.i_ctime = rtime;
+		dc->disk.inode.v.i_inode.i_mtime = rtime;
 
-		ret = bch_inode_create(c, &dc->disk.inode.i_inode,
+		ret = bch_inode_create(c, &dc->disk.inode.k,
 				       0, BLOCKDEV_INODE_MAX,
 				       &c->unused_inode_hint);
 		if (ret) {
@@ -424,8 +424,8 @@ int bch_cached_dev_attach(struct cached_dev *dc, struct cache_set *c)
 		bch_write_bdev_super(dc, &cl);
 		closure_sync(&cl);
 	} else {
-		dc->disk.inode.i_inode.i_mtime = rtime;
-		bch_inode_update(c, &dc->disk.inode.i_inode);
+		dc->disk.inode.v.i_inode.i_mtime = rtime;
+		bch_inode_update(c, &dc->disk.inode.k);
 	}
 
 	/* Count dirty sectors before attaching */
@@ -647,7 +647,8 @@ static void flash_dev_flush(struct closure *cl)
 	continue_at(cl, flash_dev_free, system_wq);
 }
 
-static int flash_dev_run(struct cache_set *c, struct bch_inode_blockdev *inode)
+static int flash_dev_run(struct cache_set *c,
+			 const struct bkey_i_inode_blockdev *inode)
 {
 	struct bcache_device *d = kzalloc(sizeof(struct bcache_device),
 					  GFP_KERNEL);
@@ -663,7 +664,7 @@ static int flash_dev_run(struct cache_set *c, struct bch_inode_blockdev *inode)
 
 	kobject_init(&d->kobj, &bch_flash_dev_ktype);
 
-	ret = bcache_device_init(d, block_bytes(c), inode->i_inode.i_size >> 9);
+	ret = bcache_device_init(d, block_bytes(c), inode->v.i_inode.i_size >> 9);
 	if (ret)
 		goto err;
 
@@ -689,19 +690,22 @@ int flash_devs_run(struct cache_set *c)
 {
 	struct btree_iter iter;
 	const struct bkey *k;
+	const struct bkey_i_inode_blockdev *inode;
 	int ret = 0;
 
 	if (test_bit(CACHE_SET_STOPPING, &c->flags))
 		return -EINVAL;
 
-	for_each_btree_key(&iter, c, BTREE_ID_INODES, k, NULL) {
-		struct bch_inode_blockdev *inode =
-			container_of(k, struct bch_inode_blockdev, i_inode.i_key);
-
-		if (KEY_INODE(k) >= BLOCKDEV_INODE_MAX)
+	for_each_btree_key(&iter, c, BTREE_ID_INODES, k, POS_MIN) {
+		if (k->p.inode >= BLOCKDEV_INODE_MAX)
 			break;
 
-		if (INODE_FLASH_ONLY(inode)) {
+		if (k->type != BCH_INODE_BLOCKDEV)
+			continue;
+
+		inode = bkey_i_to_inode_blockdev_c(k);
+
+		if (INODE_FLASH_ONLY(&inode->v)) {
 			ret = flash_dev_run(c, inode);
 			if (ret) {
 				bch_cache_set_error(c, "can't bring up flash volumes: %i", ret);
@@ -717,17 +721,17 @@ int flash_devs_run(struct cache_set *c)
 int bch_flash_dev_create(struct cache_set *c, u64 size)
 {
 	s64 rtime = timekeeping_clocktai_ns();
-	struct bch_inode_blockdev inode;
+	struct bkey_i_inode_blockdev inode;
 	int ret;
 
-	BCH_INODE_INIT(&inode);
-	get_random_bytes(&inode.i_uuid, sizeof(inode.i_uuid));
-	inode.i_inode.i_ctime = rtime;
-	inode.i_inode.i_mtime = rtime;
-	inode.i_inode.i_size = size;
-	SET_INODE_FLASH_ONLY(&inode, 1);
+	bkey_inode_blockdev_init(&inode.k);
+	get_random_bytes(&inode.v.i_uuid, sizeof(inode.v.i_uuid));
+	inode.v.i_inode.i_ctime = rtime;
+	inode.v.i_inode.i_mtime = rtime;
+	inode.v.i_inode.i_size = size;
+	SET_INODE_FLASH_ONLY(&inode.v, 1);
 
-	ret = bch_inode_create(c, &inode.i_inode, 0, BLOCKDEV_INODE_MAX,
+	ret = bch_inode_create(c, &inode.k, 0, BLOCKDEV_INODE_MAX,
 			       &c->unused_inode_hint);
 	if (ret) {
 		pr_err("Can't create volume: %d", ret);

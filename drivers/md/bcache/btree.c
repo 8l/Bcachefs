@@ -1181,7 +1181,7 @@ retry:
 			mark_btree_node_intent_locked(iter, level);
 		} else {
 			mark_btree_node_read_locked(iter, level);
-			six_lock_convert(&b->lock, intent, read);
+			BUG_ON(!six_trylock_convert(&b->lock, intent, read));
 		}
 	} else {
 		/*

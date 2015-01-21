@@ -20,8 +20,6 @@
 #define trace_six_unlock(lock, type)
 #define trace_six_trylock_convert(lock, from, to)
 #define trace_six_trylock_convert_fail(lock, from, to)
-#define trace_six_lock_convert_wait(lock, from, to)
-#define trace_six_lock_convert(lock, from, to)
 #endif
 
 /*
@@ -93,8 +91,6 @@ do {									\
 
 bool __six_trylock_convert(struct six_lock *, unsigned long,
 			   unsigned long, unsigned long);
-void __six_lock_convert(struct six_lock *, unsigned long,
-			unsigned long, unsigned long);
 bool __six_trylock(struct six_lock *, unsigned long, unsigned long);
 bool __six_relock(struct six_lock *, unsigned long, unsigned long, unsigned);
 void __six_lock(struct six_lock *, unsigned long, unsigned long);
@@ -195,15 +191,5 @@ __SIX_LOCK(write)
 		trace_six_trylock_convert_fail(lock, #from, #to);	\
 	__ret;								\
 })
-
-#define six_lock_convert(lock, from, to)				\
-do {									\
-	trace_six_lock_convert_wait(lock, #from, #to);			\
-	__six_lock_convert(lock,					\
-			   __SIX_UNLOCK_VAL_##from,			\
-			   __SIX_LOCK_VAL_##to,				\
-			   __SIX_LOCK_FAIL_##to);			\
-	trace_six_lock_convert(lock, #from, #to);			\
-} while (0)
 
 #endif /* _BCACHE_SIX_H */

@@ -102,26 +102,3 @@ bool __six_trylock_convert(struct six_lock *lock,
 		old.v = v;
 	}
 }
-
-void __six_lock_convert(struct six_lock *lock,
-			unsigned long unlock_val,
-			unsigned long lock_val,
-			unsigned long lock_fail)
-{
-	if (!__six_trylock_convert(lock, unlock_val, lock_val, lock_fail)) {
-		DEFINE_WAIT(wait);
-
-		prepare_to_wait(&lock->wait, &wait, TASK_UNINTERRUPTIBLE);
-		atomic64_add(__SIX_VAL_WAIT, &lock->state.counter);
-
-		while (!__six_trylock_convert(lock, unlock_val,
-					      lock_val, lock_fail)) {
-			schedule();
-			prepare_to_wait(&lock->wait, &wait,
-					TASK_UNINTERRUPTIBLE);
-		}
-
-		atomic64_sub(__SIX_VAL_WAIT, &lock->state.counter);
-		finish_wait(&lock->wait, &wait);
-	}
-}

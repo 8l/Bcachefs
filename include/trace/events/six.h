@@ -87,16 +87,6 @@ DEFINE_EVENT(six_convert, six_trylock_convert_fail,
 	TP_ARGS(lock, from, to)
 );
 
-DEFINE_EVENT(six_convert, six_lock_convert_wait,
-	TP_PROTO(void *lock, const char *from, const char *to),
-	TP_ARGS(lock, from, to)
-);
-
-DEFINE_EVENT(six_convert, six_lock_convert,
-	TP_PROTO(void *lock, const char *from, const char *to),
-	TP_ARGS(lock, from, to)
-);
-
 #endif /* _TRACE_SIX_H */
 
 /* This part must be outside protection */

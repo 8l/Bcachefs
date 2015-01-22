@@ -81,7 +81,7 @@ bool bch_insert_fixup_key(struct btree *b, struct bkey *insert,
 
 		if (!bkey_cmp(k->p, insert->p) && !bkey_deleted(k)) {
 			__set_bkey_deleted(k);
-			b->keys.nr_live_keys -= k->u64s;
+			b->keys.nr_live_u64s -= k->u64s;
 		}
 
 		bch_btree_node_iter_next_all(iter);
@@ -898,7 +898,7 @@ static void overwrite_full_key(struct btree *b, struct bkey *insert,
 			       struct bkey *k)
 {
 	if (!bkey_deleted(k))
-		b->keys.nr_live_keys -= k->u64s;
+		b->keys.nr_live_u64s -= k->u64s;
 
 	bch_drop_subtract(b, k);
 	/*

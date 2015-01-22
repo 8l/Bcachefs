@@ -207,7 +207,7 @@ struct btree_keys {
 	 * Amount of live metadata (i.e. size of node after a compaction) in
 	 * units of u64s
 	 */
-	unsigned		nr_live_keys;
+	unsigned		nr_live_u64s;
 
 	/*
 	 * Sets of sorted keys - the real btree node - plus a binary search tree
@@ -256,14 +256,14 @@ static inline unsigned bset_sector_offset(struct btree_keys *b, struct bset *i)
 	return bset_byte_offset(b, i) >> 9;
 }
 
-#define __set_bytes(i, nr_keys)	(sizeof(*(i)) + (nr_keys) * sizeof(u64))
-#define set_bytes(i)		__set_bytes(i, i->keys)
+#define __set_bytes(_i, _u64s)	(sizeof(*(_i)) + (_u64s) * sizeof(u64))
+#define set_bytes(_i)		__set_bytes(_i, (_i)->u64s)
 
-#define __set_blocks(i, nr_keys, block_bytes)				\
-	DIV_ROUND_UP((size_t) __set_bytes(i, nr_keys), block_bytes)
+#define __set_blocks(_i, _u64s, _block_bytes)				\
+	DIV_ROUND_UP((size_t) __set_bytes((_i), (_u64s)), (_block_bytes))
 
-#define set_blocks(i, block_bytes)					\
-	__set_blocks(i, (i)->keys, block_bytes)
+#define set_blocks(_i, _block_bytes)					\
+	__set_blocks((_i), (_i)->u64s, (_block_bytes))
 
 static inline size_t bch_btree_keys_u64s_remaining(struct btree_keys *b)
 {
@@ -522,12 +522,12 @@ struct bset_stats {
 
 void bch_btree_keys_stats(struct btree_keys *, struct bset_stats *);
 
-size_t bch_btree_count_keys(struct btree_keys *);
+size_t bch_btree_count_u64s(struct btree_keys *);
 
-static inline void verify_nr_live_keys(struct btree_keys *b)
+static inline void verify_nr_live_u64s(struct btree_keys *b)
 {
 #ifdef CONFIG_BCACHE_DEBUG
-	BUG_ON(b->nr_live_keys != bch_btree_count_keys(b));
+	BUG_ON(b->nr_live_u64s != bch_btree_count_u64s(b));
 #endif
 }
 

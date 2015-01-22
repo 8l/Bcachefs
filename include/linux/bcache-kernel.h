@@ -21,10 +21,10 @@ struct bkey;
 	((typeof(_k)) __bkey_idx(_k, (_k)->u64s))
 
 #define __bset_bkey_last(_set)					\
-	 __bkey_idx((_set), (_set)->keys)
+	 __bkey_idx((_set), (_set)->u64s)
 
 #define bset_bkey_last(_set)					\
-	 bkey_idx((_set), (_set)->keys)
+	 bkey_idx((_set), (_set)->u64s)
 
 #define BKEY_EXTENT_PTRS_MAX	4
 #define BKEY_EXTENT_MAX_U64s	(BKEY_U64s + BKEY_EXTENT_PTRS_MAX)

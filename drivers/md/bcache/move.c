@@ -86,7 +86,27 @@ struct moving_io *moving_io_alloc(const struct bkey *k)
 
 	bkey_copy(&io->key, k);
 
+	moving_init(io);
+
+	if (bio_alloc_pages(&io->bio.bio, GFP_KERNEL)) {
+		kfree(io);
+		return NULL;
+	}
+
 	return io;
+}
+
+static void moving_io_free(struct moving_io *io)
+{
+	struct bio *bio = &io->bio.bio;
+	struct bio_vec *bv;
+	int i;
+
+	bio_for_each_segment_all(bv, bio, i)
+		if (bv->bv_page)
+			__free_page(bv->bv_page);
+
+	kfree(io);
 }
 
 static void moving_io_destructor(struct closure *cl)
@@ -95,13 +115,6 @@ static void moving_io_destructor(struct closure *cl)
 	struct moving_queue *q = io->q;
 	struct moving_context *ctxt = io->context;
 	unsigned long flags;
-	struct bio *bio = &io->bio.bio;
-	struct bio_vec *bv;
-	int i;
-
-	bio_for_each_segment_all(bv, bio, i)
-		if (bv->bv_page)
-			__free_page(bv->bv_page);
 
 	if (io->op.replace_collision)
 		trace_bcache_copy_collision(q, &io->key);
@@ -132,7 +145,7 @@ static void moving_io_destructor(struct closure *cl)
 	spin_unlock_irqrestore(&q->lock, flags);
 	bch_queue_write(q);
 
-	kfree(io);
+	moving_io_free(io);
 
 	bch_moving_notify(ctxt);
 }
@@ -404,14 +417,6 @@ static void __bch_data_move(struct closure *cl)
 	if (io->context->rate)
 		bch_ratelimit_increment(io->context->rate, size);
 
-	moving_init(io);
-
-	if (bio_alloc_pages(&io->bio.bio, GFP_KERNEL)) {
-		moving_error(io->context, MOVING_FLAG_ALLOC);
-		percpu_ref_put(&ca->ref);
-		closure_return_with_destructor(&io->cl, moving_io_destructor);
-	}
-
 	io->bio.bio.bi_rw	= READ;
 	io->bio.bio.bi_end_io	= read_moving_endio;
 
@@ -462,7 +467,7 @@ void bch_data_move(struct moving_queue *q,
 	spin_unlock_irqrestore(&q->lock, flags);
 
 	if (stopped)
-		kfree(io);
+		moving_io_free(io);
 	else
 		closure_call(&io->cl, __bch_data_move, NULL, &ctxt->cl);
 	return;
@@ -656,7 +661,7 @@ static int issue_migration_move(struct cache *ca,
 
 	case MIGRATE_IGNORE:
 		/* The pointer to this device was stale. */
-		kfree(io);
+		moving_io_free(io);
 		ret = 1;
 		break;
 	}

@@ -198,7 +198,7 @@ rw_attribute(cache_reserve_percent);
 static struct attribute sysfs_state_rw =
 	{ .name = "state", .mode = S_IRUGO|S_IWUSR };
 
-SHOW(__bch_cached_dev)
+SHOW(bch_cached_dev)
 {
 	struct cached_dev *dc = container_of(kobj, struct cached_dev,
 					     disk.kobj);
@@ -248,7 +248,6 @@ SHOW(__bch_cached_dev)
 #undef var
 	return 0;
 }
-SHOW_LOCKED(bch_cached_dev)
 
 STORE(__cached_dev)
 {
@@ -593,7 +592,7 @@ static unsigned bch_average_key_size(struct cache_set *c)
 		: 0;
 }
 
-SHOW(__bch_cache_set)
+SHOW(bch_cache_set)
 {
 	struct cache_set *c = container_of(kobj, struct cache_set, kobj);
 
@@ -702,7 +701,6 @@ SHOW(__bch_cache_set)
 
 	return 0;
 }
-SHOW_LOCKED(bch_cache_set)
 
 STORE(__bch_cache_set)
 {
@@ -1144,7 +1142,7 @@ static ssize_t show_reserve_stats(struct cache *ca, char *buf)
 	return ret;
 }
 
-SHOW(__bch_cache)
+SHOW(bch_cache)
 {
 	struct cache *ca = container_of(kobj, struct cache, kobj);
 	struct bucket_stats stats = bucket_stats_read(ca);
@@ -1208,7 +1206,6 @@ SHOW(__bch_cache)
 
 	return 0;
 }
-SHOW_LOCKED(bch_cache)
 
 STORE(__bch_cache)
 {

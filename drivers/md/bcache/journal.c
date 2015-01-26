@@ -1365,7 +1365,7 @@ int bch_journal_move(struct cache *ca)
 	 * journal entries written to ca become stale and are no
 	 * longer needed.
 	 */
-	bch_btree_flush(c, true);
+	bch_btree_flush(c);
 
 	/*
 	 * Force a meta-data journal entry to be written so that

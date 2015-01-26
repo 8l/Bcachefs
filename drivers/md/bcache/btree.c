@@ -601,8 +601,7 @@ static void bch_btree_node_write_sync(struct btree *b, struct btree_iter *iter)
 static void bch_btree_node_write_dirty(struct btree *b, struct closure *parent)
 {
 	six_lock_read(&b->lock);
-	if (btree_node_dirty(b))
-		__bch_btree_node_write(b, NULL);
+	__bch_btree_node_write(b, parent);
 	six_unlock_read(&b->lock);
 }
 
@@ -652,7 +651,7 @@ void bch_btree_write_oldest(struct cache_set *c, u64 oldest_seq)
 /*
  * Write all dirty btree nodes to disk, including roots
  */
-void bch_btree_flush(struct cache_set *c, bool wait)
+void bch_btree_flush(struct cache_set *c)
 {
 	struct closure cl;
 	struct btree *b;
@@ -660,7 +659,7 @@ void bch_btree_flush(struct cache_set *c, bool wait)
 
 	closure_init_stack(&cl);
 	for_each_cached_btree(b, c, iter)
-		bch_btree_node_write_dirty(b, wait ? &cl : NULL);
+		bch_btree_node_write_dirty(b, &cl);
 	closure_sync(&cl);
 }
 

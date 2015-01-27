@@ -749,7 +749,7 @@ int bch_extent_store_init_cache_set(struct cache_set *);
 void bch_extent_store_exit_cache_set(struct cache_set *);
 
 void bch_debug_exit(void);
-int bch_debug_init(struct kobject *);
+int bch_debug_init(void);
 void bch_extent_store_exit(void);
 int bch_extent_store_init(void);
 void bch_fs_exit(void);

@@ -46,7 +46,7 @@ static const uuid_le invalid_uuid = {
 	}
 };
 
-static struct kobject *bcache_kobj;
+static struct kset *bcache_kset;
 struct mutex bch_register_lock;
 LIST_HEAD(bch_cache_sets);
 
@@ -893,6 +893,7 @@ static const char *bch_cache_set_alloc(struct cache_sb *sb,
 	closure_set_stopped(&c->cl);
 	closure_put(&c->cl);
 
+	c->kobj.kset = bcache_kset;
 	kobject_init(&c->kobj, &bch_cache_set_ktype);
 	kobject_init(&c->internal, &bch_cache_set_internal_ktype);
 
@@ -1007,7 +1008,7 @@ static const char *bch_cache_set_alloc(struct cache_sb *sb,
 	set_bit(CACHE_SET_CACHE_FULL_EXTENTS, &c->flags);
 
 	err = "error creating kobject";
-	if (kobject_add(&c->kobj, bcache_kobj, "%pU", c->sb.user_uuid.b) ||
+	if (kobject_add(&c->kobj, NULL, "%pU", c->sb.user_uuid.b) ||
 	    kobject_add(&c->internal, &c->kobj, "internal") ||
 	    bch_cache_accounting_add_kobjs(&c->accounting, &c->kobj))
 		goto err;
@@ -2352,8 +2353,8 @@ static void bcache_exit(void)
 	bch_extent_store_exit();
 	bch_fs_exit();
 	bch_blockdev_exit();
-	if (bcache_kobj)
-		kobject_put(bcache_kobj);
+	if (bcache_kset)
+		kset_unregister(bcache_kset);
 	if (bcache_io_wq)
 		destroy_workqueue(bcache_io_wq);
 	bch_chardev_exit();
@@ -2378,12 +2379,12 @@ static int __init bcache_init(void)
 		goto err;
 
 	if (!(bcache_io_wq = create_workqueue("bcache_io")) ||
-	    !(bcache_kobj = kobject_create_and_add("bcache", fs_kobj)) ||
-	    sysfs_create_files(bcache_kobj, files) ||
+	    !(bcache_kset = kset_create_and_add("bcache", NULL, fs_kobj)) ||
+	    sysfs_create_files(&bcache_kset->kobj, files) ||
 	    bch_blockdev_init() ||
 	    bch_fs_init() ||
 	    bch_extent_store_init() ||
-	    bch_debug_init(bcache_kobj))
+	    bch_debug_init())
 		goto err;
 
 	return 0;

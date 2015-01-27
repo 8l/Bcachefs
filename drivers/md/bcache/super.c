@@ -18,6 +18,7 @@
 #include "keylist.h"
 #include "move.h"
 #include "movinggc.h"
+#include "notify.h"
 #include "stats.h"
 #include "super.h"
 #include "tier.h"
@@ -670,6 +671,8 @@ static void bch_cache_set_read_only(struct cache_set *c)
 		c->journal.work.work.func(&c->journal.work.work);
 	}
 
+	bch_notify_cache_set_read_only(c);
+
 	trace_bcache_cache_set_read_only_done(c);
 }
 
@@ -742,6 +745,8 @@ static void cache_set_free(struct closure *cl)
 	mutex_lock(&bch_register_lock);
 	list_del(&c->list);
 	mutex_unlock(&bch_register_lock);
+
+	bch_notify_cache_set_stopped(c);
 
 	pr_info("Cache set %pU unregistered", c->sb.set_uuid.b);
 
@@ -938,6 +943,8 @@ static const char *bch_cache_set_alloc(struct cache_sb *sb,
 	c->foreground_target_percent = 20;
 	c->bucket_reserve_percent = 10;
 	c->sector_reserve_percent = 20;
+
+	mutex_init(&c->uevent_lock);
 
 	c->search = mempool_create_slab_pool(32, bch_search_cache);
 	if (!c->search)
@@ -1163,6 +1170,8 @@ static const char *run_cache_set(struct cache_set *c)
 
 	closure_put(&c->caching);
 
+	bch_notify_cache_set_read_write(c);
+
 	return NULL;
 err:
 	closure_sync(&cl);
@@ -1264,6 +1273,9 @@ static void __bch_cache_read_only(struct cache *ca)
 	 * This will suspend the running task until outstanding writes complete.
 	 */
 	bch_await_scheduled_data_writes(ca);
+
+	bch_notify_cache_read_only(ca);
+
 	/*
 	 * Device data write barrier -- no non-meta-data writes should
 	 * occur after this point.  However, writes to btree buckets,
@@ -1387,6 +1399,8 @@ const char *bch_cache_read_write(struct cache *ca)
 		err = NULL;
 
 	wake_up_process(ca->set->tiering_read);
+
+	bch_notify_cache_read_write(ca);
 
 	return err;
 }
@@ -1693,6 +1707,9 @@ static void bch_cache_remove_work(struct work_struct *work)
 	mutex_lock(&bch_register_lock);
 	bch_cache_stop(ca);
 	mutex_unlock(&bch_register_lock);
+
+	bch_notify_cache_removed(ca);
+
 	return;
 }
 
@@ -1700,6 +1717,8 @@ bool bch_cache_remove(struct cache *ca, bool force)
 {
 	if (test_and_set_bit(CACHE_DEV_REMOVING, &ca->flags))
 		return false;
+
+	bch_notify_cache_removing(ca);
 
 	if (force)
 		set_bit(CACHE_DEV_FORCE_REMOVE, &ca->flags);
@@ -1998,6 +2017,8 @@ have_slot:
 	err = "journal alloc failed";
 	if (bch_cache_journal_alloc(ca))
 		goto err_put;
+
+	bch_notify_cache_added(ca);
 
 	err = bch_cache_read_write(ca);
 	if (err)

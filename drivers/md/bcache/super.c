@@ -18,6 +18,7 @@
 #include "keylist.h"
 #include "move.h"
 #include "movinggc.h"
+#include "notify.h"
 #include "stats.h"
 #include "super.h"
 #include "tier.h"
@@ -695,6 +696,8 @@ static void bch_cache_set_read_only(struct cache_set *c)
 		c->journal.work.work.func(&c->journal.work.work);
 	}
 
+	bch_notify_cache_set_read_only(c);
+
 	trace_bcache_cache_set_read_only_done(c);
 }
 
@@ -766,6 +769,10 @@ static void cache_set_free(struct closure *cl)
 	mutex_lock(&bch_register_lock);
 	list_del(&c->list);
 	mutex_unlock(&bch_register_lock);
+
+	bch_notify_cache_set_stopped(c);
+
+	kfree(c->uevent_env);
 
 	pr_info("Cache set %pU unregistered", c->sb.set_uuid.b);
 
@@ -938,26 +945,7 @@ static const char *bch_cache_set_alloc(struct cache_sb *sb,
 	INIT_WORK(&c->bio_submit_work, bch_bio_submit_work);
 	spin_lock_init(&c->bio_submit_lock);
 
-	c->search = mempool_create_slab_pool(32, bch_search_cache);
-	if (!c->search)
-		goto err;
-
-	iter_size = (btree_blocks(c) + 1) *
-		sizeof(struct btree_node_iter_set);
-
-	if (!(c->bio_meta = mempool_create_kmalloc_pool(2,
-				sizeof(struct bbio) + sizeof(struct bio_vec) *
-				c->btree_pages)) ||
-	    !(c->fill_iter = mempool_create_kmalloc_pool(1, iter_size)) ||
-	    !(c->bio_split = bioset_create(4, offsetof(struct bbio, bio))) ||
-	    !(c->wq = create_workqueue("bcache")) ||
-	    !(c->prio_clock[READ].rescale_percpu = alloc_percpu(unsigned)) ||
-	    !(c->prio_clock[WRITE].rescale_percpu = alloc_percpu(unsigned)) ||
-	    percpu_ref_init(&c->writes, bch_writes_disabled) ||
-	    bch_journal_alloc(c) ||
-	    bch_btree_cache_alloc(c) ||
-	    bch_bset_sort_state_init(&c->sort, ilog2(c->btree_pages)))
-		goto err;
+	mutex_init(&c->uevent_lock);
 
 	c->btree_flush_delay = 30;
 
@@ -1006,6 +994,31 @@ static const char *bch_cache_set_alloc(struct cache_sb *sb,
 	c->cache_reserve_percent = DFLT_CACHE_SET_CACHE_RESERVE_PERCENT;
 
 	set_bit(CACHE_SET_CACHE_FULL_EXTENTS, &c->flags);
+
+	c->search = mempool_create_slab_pool(32, bch_search_cache);
+	if (!c->search)
+		goto err;
+
+	iter_size = (btree_blocks(c) + 1) *
+		sizeof(struct btree_node_iter_set);
+
+	if (!(c->bio_meta = mempool_create_kmalloc_pool(2,
+				sizeof(struct bbio) + sizeof(struct bio_vec) *
+				c->btree_pages)) ||
+	    !(c->fill_iter = mempool_create_kmalloc_pool(1, iter_size)) ||
+	    !(c->bio_split = bioset_create(4, offsetof(struct bbio, bio))) ||
+	    !(c->wq = create_workqueue("bcache")) ||
+	    !(c->prio_clock[READ].rescale_percpu = alloc_percpu(unsigned)) ||
+	    !(c->prio_clock[WRITE].rescale_percpu = alloc_percpu(unsigned)) ||
+	    percpu_ref_init(&c->writes, bch_writes_disabled) ||
+	    bch_journal_alloc(c) ||
+	    bch_btree_cache_alloc(c) ||
+	    bch_bset_sort_state_init(&c->sort, ilog2(c->btree_pages)))
+		goto err;
+
+	c->uevent_env = kzalloc(sizeof(struct kobj_uevent_env), GFP_KERNEL);
+	if (c->uevent_env == NULL)
+		goto err;
 
 	err = "error creating kobject";
 	if (kobject_add(&c->kobj, NULL, "%pU", c->sb.user_uuid.b) ||
@@ -1226,6 +1239,8 @@ const char *bch_run_cache_set(struct cache_set *c)
 
 	closure_put(&c->caching);
 
+	bch_notify_cache_set_read_write(c);
+
 	return NULL;
 err:
 	closure_sync(&cl);
@@ -1378,6 +1393,9 @@ static void __bch_cache_read_only(struct cache *ca)
 	 * This will suspend the running task until outstanding writes complete.
 	 */
 	bch_await_scheduled_data_writes(ca);
+
+	bch_notify_cache_read_only(ca);
+
 	/*
 	 * Device data write barrier -- no non-meta-data writes should
 	 * occur after this point.  However, writes to btree buckets,
@@ -1501,6 +1519,8 @@ const char *bch_cache_read_write(struct cache *ca)
 		err = NULL;
 
 	wake_up_process(ca->set->tiering_read);
+
+	bch_notify_cache_read_write(ca);
 
 	return err;
 }
@@ -1807,6 +1827,9 @@ static void bch_cache_remove_work(struct work_struct *work)
 	mutex_lock(&bch_register_lock);
 	bch_cache_stop(ca);
 	mutex_unlock(&bch_register_lock);
+
+	bch_notify_cache_removed(ca);
+
 	return;
 }
 
@@ -1814,6 +1837,8 @@ bool bch_cache_remove(struct cache *ca, bool force)
 {
 	if (test_and_set_bit(CACHE_DEV_REMOVING, &ca->flags))
 		return false;
+
+	bch_notify_cache_removing(ca);
 
 	if (force)
 		set_bit(CACHE_DEV_FORCE_REMOVE, &ca->flags);
@@ -2106,6 +2131,8 @@ have_slot:
 	err = "journal alloc failed";
 	if (bch_cache_journal_alloc(ca))
 		goto err_put;
+
+	bch_notify_cache_added(ca);
 
 	err = bch_cache_read_write(ca);
 	if (err)

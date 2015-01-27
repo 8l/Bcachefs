@@ -655,6 +655,10 @@ struct cache_set {
 	/* The following is clampd by the sysfs code so that it is
 	   always legal (between 0 and 100 inclusive) */
 	unsigned		cache_reserve_percent;
+
+	/* Notifications */
+	struct mutex		uevent_lock;
+	struct kobj_uevent_env	*uevent_env;
 };
 
 static inline unsigned bucket_pages(const struct cache *ca)

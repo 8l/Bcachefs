@@ -22,6 +22,7 @@ bcache-y		:= alloc.o\
 	keylist.o\
 	move.o\
 	movinggc.o\
+	notify.o\
 	request.o\
 	six.o\
 	six_trace.o\

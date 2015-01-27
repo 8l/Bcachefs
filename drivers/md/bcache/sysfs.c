@@ -1066,6 +1066,8 @@ static struct attribute *bch_cache_set_internal_files[] = {
 
 	&sysfs_cache_full_extents,
 
+	&sysfs_cmpxchg_atomic,
+
 	NULL
 };
 KTYPE(bch_cache_set_internal);

@@ -72,6 +72,7 @@ write_attribute(prune_cache);
 write_attribute(flash_vol_create);
 write_attribute(add_device);
 
+read_attribute(uuid);
 read_attribute(bucket_size);
 read_attribute(bucket_size_bytes);
 read_attribute(block_size);
@@ -1159,6 +1160,8 @@ SHOW(bch_cache)
 	struct cache *ca = container_of(kobj, struct cache, kobj);
 	struct bucket_stats stats = bucket_stats_read(ca);
 
+	sysfs_printf(uuid,		"%pU\n", ca->sb.disk_uuid.b);
+
 	sysfs_hprint(bucket_size,	bucket_bytes(ca));
 	sysfs_print(bucket_size_bytes,	bucket_bytes(ca));
 	sysfs_hprint(block_size,	block_bytes(ca));
@@ -1332,6 +1335,7 @@ STORE(__bch_cache)
 STORE_LOCKED(bch_cache)
 
 static struct attribute *bch_cache_files[] = {
+	&sysfs_uuid,
 	&sysfs_unregister,
 	&sysfs_bucket_size,
 	&sysfs_bucket_size_bytes,

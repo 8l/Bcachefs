@@ -686,9 +686,9 @@ do {									\
 
 #define __bch_cache_error(ca, fmt, ...)					\
 do {									\
-	char buf[BDEVNAME_SIZE];					\
+	char _buf[BDEVNAME_SIZE];					\
 	__bch_cache_set_error((ca)->set, "%s: " fmt,			\
-			      bdevname((ca)->bdev, buf),		\
+			      bdevname((ca)->bdev, _buf),		\
 			      ##__VA_ARGS__);				\
 } while (0)
 

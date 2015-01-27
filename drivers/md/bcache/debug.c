@@ -55,7 +55,7 @@ void bch_btree_verify(struct btree *b)
 
 	ca = PTR_CACHE(b->c, &e->v.ptr[0]);
 	bio = bch_bbio_alloc(b->c);
-	bio->bi_bdev		= ca->bdev;
+	bio->bi_bdev		= ca->disk_sb.bdev;
 	bio->bi_iter.bi_sector	= PTR_OFFSET(&e->v.ptr[0]);
 	bio->bi_iter.bi_size	= btree_bytes(b->c);
 	bch_bio_map(bio, sorted);
@@ -134,7 +134,7 @@ void bch_data_verify(struct cached_dev *dc, struct bio *bio)
 					bv.bv_len),
 				 dc->disk.c,
 				 "verify failed at dev %s sector %llu",
-				 bdevname(dc->bdev, name),
+				 bdevname(dc->disk_sb.bdev, name),
 				 (uint64_t) bio->bi_iter.bi_sector);
 
 		kunmap_atomic(p1);

@@ -7,10 +7,10 @@
 extern "C" {
 #endif
 
-#define BCH_IOCTL_REGISTER     _IOW('r', 1, char **)
-#define BCH_IOCTL_ADD_DISKS    _IOW('a', 2, struct bch_ioctl_add_disks)
-#define BCH_IOCTL_RM_DISK      _IOW('r', 3, struct bch_ioctl_rm_disk)
-#define BCH_IOCTL_UNREGISTER   _IOW('r', 4, char *)
+#define BCH_IOCTL_REGISTER	_IOW('r', 1, char **)
+#define BCH_IOCTL_STOP		_IO('r', 4)
+#define BCH_IOCTL_ADD_DISKS	_IOW('a', 2, struct bch_ioctl_add_disks)
+#define BCH_IOCTL_RM_DISK	_IOW('r', 3, struct bch_ioctl_rm_disk)
 #define BCH_IOCTL_SET_DISK_FAILED _IOW('r', 5, struct bch_ioctl_disk_failed)
 
 

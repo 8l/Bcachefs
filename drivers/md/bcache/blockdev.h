@@ -14,8 +14,7 @@ void bch_cached_dev_run(struct cached_dev *);
 void bcache_device_stop(struct bcache_device *);
 
 bool bch_is_open_backing(struct block_device *);
-const char *register_bdev(struct bcache_superblock *, struct block_device *,
-			  struct cached_dev **);
+const char *register_bdev(struct bcache_superblock *, struct cached_dev **);
 int flash_devs_run(struct cache_set *);
 int bch_flash_dev_create(struct cache_set *, u64);
 

@@ -1087,7 +1087,8 @@ static struct dentry *bch_mount(struct file_system_type *fs_type,
 	sb->s_fs_info		= c;
 
 	/* XXX */
-	sb->s_bdi		= &bdev_get_queue(c->cache[0]->bdev)->backing_dev_info;
+	sb->s_bdi		=
+		&bdev_get_queue(c->cache[0]->disk_sb.bdev)->backing_dev_info;
 
 	inode = bch_vfs_inode_get(sb, BCACHE_ROOT_INO);
 	sb->s_root = d_make_root(inode);

@@ -107,13 +107,13 @@ static inline void bch_check_mark_super(struct cache_set *c,
 	bch_check_mark_super_slowpath(c, k, meta);
 }
 
-int bch_super_realloc(struct cache *, unsigned);
+void free_super(struct bcache_superblock *);
+int bch_super_realloc(struct bcache_superblock *, unsigned);
 void bcache_write_super(struct cache_set *);
 void __write_super(struct cache_set *, struct bcache_superblock *,
-		   struct block_device *, struct cache_sb *);
+		   struct cache_sb *);
 
-const char *validate_super(struct bcache_superblock *, struct block_device *,
-			   struct cache_sb *);
+const char *validate_super(struct bcache_superblock *, struct cache_sb *);
 
 void bch_cache_set_fail(struct cache_set *);
 
@@ -124,13 +124,12 @@ void bch_cache_set_unregister(struct cache_set *);
 void bch_cache_set_stop(struct cache_set *);
 
 const char *register_bcache_devices(char **, int, struct cache_set **);
-const char *unregister_bcache_devices(char **, int);
 const char *bch_run_cache_set(struct cache_set *);
 
 struct cache_set *bch_cache_set_open_by_uuid(uuid_le *);
 
 bool bch_cache_remove(struct cache *, bool force);
-int bch_cache_add(struct cache_set *, const char *);
+int bch_cache_set_add_cache(struct cache_set *, const char *);
 const char *remove_bcache_device(char *path, bool force, struct cache_set *);
 const char *set_disk_failed(uuid_le, struct cache_set *c);
 

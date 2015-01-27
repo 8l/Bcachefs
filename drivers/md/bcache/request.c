@@ -561,7 +561,7 @@ static void cached_dev_write(struct cached_dev *dc, struct search *s)
 		 * supports discards. Otherwise, we simply discard the key
 		 * range from the cache and don't touch the backing device. */
 		if (!(bio->bi_rw & REQ_DISCARD) ||
-		    blk_queue_discard(bdev_get_queue(dc->bdev)))
+		    blk_queue_discard(bdev_get_queue(dc->disk_sb.bdev)))
 			closure_bio_submit(bio, cl);
 	} else if (writeback) {
 		insert_bio = bio;
@@ -627,7 +627,7 @@ static void cached_dev_make_request(struct request_queue *q, struct bio *bio)
 	part_stat_add(cpu, &d->disk->part0, sectors[rw], bio_sectors(bio));
 	part_stat_unlock();
 
-	bio->bi_bdev = dc->bdev;
+	bio->bi_bdev = dc->disk_sb.bdev;
 	bio->bi_iter.bi_sector += dc->sb.bdev_data_offset;
 
 	if (cached_dev_get(dc)) {
@@ -652,7 +652,7 @@ static void cached_dev_make_request(struct request_queue *q, struct bio *bio)
 		}
 	} else {
 		if ((bio->bi_rw & REQ_DISCARD) &&
-		    !blk_queue_discard(bdev_get_queue(dc->bdev)))
+		    !blk_queue_discard(bdev_get_queue(dc->disk_sb.bdev)))
 			bio_endio(bio, 0);
 		else
 			generic_make_request(bio);
@@ -663,14 +663,14 @@ static int cached_dev_ioctl(struct bcache_device *d, fmode_t mode,
 			    unsigned int cmd, unsigned long arg)
 {
 	struct cached_dev *dc = container_of(d, struct cached_dev, disk);
-	return __blkdev_driver_ioctl(dc->bdev, mode, cmd, arg);
+	return __blkdev_driver_ioctl(dc->disk_sb.bdev, mode, cmd, arg);
 }
 
 static int cached_dev_congested(void *data, int bits)
 {
 	struct bcache_device *d = data;
 	struct cached_dev *dc = container_of(d, struct cached_dev, disk);
-	struct request_queue *q = bdev_get_queue(dc->bdev);
+	struct request_queue *q = bdev_get_queue(dc->disk_sb.bdev);
 	int ret = 0;
 
 	if (bdi_congested(&q->backing_dev_info, bits))
@@ -681,7 +681,7 @@ static int cached_dev_congested(void *data, int bits)
 		struct cache *ca;
 
 		for_each_cache(ca, d->c, i) {
-			q = bdev_get_queue(ca->bdev);
+			q = bdev_get_queue(ca->disk_sb.bdev);
 			ret |= bdi_congested(&q->backing_dev_info, bits);
 		}
 
@@ -771,7 +771,7 @@ static int flash_dev_congested(void *data, int bits)
 	int ret = 0;
 
 	for_each_cache(ca, d->c, i) {
-		q = bdev_get_queue(ca->bdev);
+		q = bdev_get_queue(ca->disk_sb.bdev);
 		ret |= bdi_congested(&q->backing_dev_info, bits);
 	}
 

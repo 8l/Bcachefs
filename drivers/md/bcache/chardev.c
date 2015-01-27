@@ -105,7 +105,7 @@ static int ioctl_init(const char __user *const __user *argv,
 	if (count <= 0)
 		return -EINVAL;
 
-	*path = kmalloc((sizeof(char *)) * (count + 1), GFP_KERNEL);
+	*path = kzalloc((sizeof(char *)) * (count + 1), GFP_KERNEL);
 	if (!*path) {
 		pr_err("Could not allocate memory to path");
 		return -ENOMEM;
@@ -162,31 +162,10 @@ err:
 	return ret;
 }
 
-static long bch_ioctl_unregister(const char __user *const __user *argv)
+static long bch_ioctl_cache_set_stop(struct cache_set *c)
 {
-	int ret = 0, i = 0, count = 0;
-	char **path = NULL;
-	const char *err;
-
-	ret = ioctl_init(argv, &path, &count);
-	if (ret) {
-		pr_err("Unable to initialize unregister ioctl, "
-				"returned with %d", ret);
-		goto err;
-	}
-
-	err = unregister_bcache_devices(path, count);
-	if(err) {
-		ret = -EINVAL;
-		pr_err("Unable to unregister bcache_devices: %s", err);
-	}
-
-err:
-	for (i = 0; i < count; i++)
-		kfree(path[i]);
-	kfree(path);
-
-	return ret;
+	bch_cache_set_stop(c);
+	return 0;
 }
 
 static long bch_ioctl_add_devs(struct cache_set *c,
@@ -208,9 +187,7 @@ static long bch_ioctl_add_devs(struct cache_set *c,
 	}
 
 	for (i = 0; i < count; i++) {
-		mutex_lock(&bch_register_lock);
-		ret = bch_cache_add(c, path[i]);
-		mutex_unlock(&bch_register_lock);
+		ret = bch_cache_set_add_cache(c, path[i]);
 		if(ret)
 			goto err;
 	}
@@ -288,9 +265,6 @@ static long bch_chardev_ioctl(struct file *filp, unsigned int cmd,
 	case BCH_IOCTL_REGISTER:
 		path = (void __user *)arg;
 		return bch_ioctl_register(path);
-	case BCH_IOCTL_UNREGISTER:
-		path = (void __user *)arg;
-		return bch_ioctl_unregister(path);
 
 	default:
 		return -ENOSYS;
@@ -305,6 +279,8 @@ long bch_cacheset_ioctl(struct cache_set *c, unsigned int cmd,
 		unsigned long arg)
 {
 	switch (cmd) {
+	case BCH_IOCTL_STOP:
+		return bch_ioctl_cache_set_stop(c);
 	case BCH_IOCTL_ADD_DISKS:
 		return bch_ioctl_add_devs(c,
 			(struct bch_ioctl_add_disks *) arg);

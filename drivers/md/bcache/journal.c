@@ -202,6 +202,8 @@ reread:		left = ca->mi.bucket_size - offset;
 		bch_bio_map(bio, data);
 
 		ret = submit_bio_wait(READ_SYNC, bio);
+		if (bch_meta_read_fault("journal"))
+			ret = -EIO;
 		if (ret) {
 			__bch_cache_error(ca,
 				"IO error %d reading journal from offset %zu",
@@ -220,7 +222,7 @@ reread:		left = ca->mi.bucket_size - offset;
 			size_t blocks, bytes = set_bytes(j);
 			u64 got, expect;
 
-			if (cache_set_init_fault("journal_read"))
+			if (bch_meta_read_fault("journal"))
 				goto err;
 
 			if (j->magic != jset_magic(&c->sb)) {
@@ -476,7 +478,7 @@ const char *bch_journal_read(struct cache_set *c, struct list_head *list)
 	       prio_ptrs->_data,
 	       prio_ptrs->u64s * sizeof(u64));
 
-	return 0;
+	return NULL;
 }
 
 void bch_journal_mark(struct cache_set *c, struct list_head *list)
@@ -921,7 +923,7 @@ static void journal_write_endio(struct bio *bio, int error)
 	struct cache *ca = container_of(bio, struct cache, journal.bio);
 	struct journal_write *w = bio->bi_private;
 
-	if (error)
+	if (error || bch_meta_write_fault("journal"))
 		bch_cache_error(ca, "IO error %d writing journal", error);
 
 	closure_put(&w->c->journal.io);

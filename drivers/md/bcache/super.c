@@ -1007,7 +1007,7 @@ static const char *bch_cache_set_alloc(struct cache_sb *sb,
 	set_bit(CACHE_SET_CACHE_FULL_EXTENTS, &c->flags);
 
 	err = "error creating kobject";
-	if (kobject_add(&c->kobj, bcache_kobj, "%pU", c->sb.set_uuid.b) ||
+	if (kobject_add(&c->kobj, bcache_kobj, "%pU", c->sb.user_uuid.b) ||
 	    kobject_add(&c->internal, &c->kobj, "internal") ||
 	    bch_cache_accounting_add_kobjs(&c->accounting, &c->kobj))
 		goto err;
@@ -1314,7 +1314,7 @@ struct cache_set *bch_cache_set_open_by_uuid(uuid_le *uuid)
 	mutex_lock(&bch_register_lock);
 
 	list_for_each_entry(c, &bch_cache_sets, list)
-		if (!memcmp(uuid, &c->sb.set_uuid, sizeof(*uuid))) {
+		if (!memcmp(uuid, &c->sb.user_uuid, sizeof(*uuid))) {
 			c = bch_cache_set_get(c);
 			goto out;
 		}

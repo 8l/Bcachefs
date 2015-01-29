@@ -197,7 +197,9 @@
 
 #include <linux/dynamic_fault.h>
 
-#define cache_set_init_fault()		dynamic_fault("cache_set_init")
+#define cache_set_init_fault(name)	dynamic_fault("bcache:cache_set_init:" name)
+#define bch_meta_read_fault(name)	dynamic_fault("bcache:meta:read:" name)
+#define bch_meta_write_fault(name)	dynamic_fault("bcache:meta:write:" name)
 
 #include "alloc_types.h"
 #include "bkey_methods.h"

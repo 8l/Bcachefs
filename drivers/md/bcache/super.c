@@ -354,7 +354,7 @@ retry:
 		goto err;
 
 	err = "dynamic fault";
-	if (cache_set_init_fault())
+	if (cache_set_init_fault("read_super"))
 		goto err;
 
 	bio_reset(sb->bio);
@@ -1230,7 +1230,7 @@ const char *bch_run_cache_set(struct cache_set *c)
 	bch_debug_init_cache_set(c);
 
 	err = "dynamic fault";
-	if (cache_set_init_fault())
+	if (cache_set_init_fault("run_cache_set"))
 		goto err;
 
 	set_bit(CACHE_SET_RUNNING, &c->flags);
@@ -1888,7 +1888,7 @@ static const char *cache_alloc(struct bcache_superblock *sb,
 	memset(sb, 0, sizeof(*sb));
 
 	err = "dynamic fault";
-	if (cache_set_init_fault())
+	if (cache_set_init_fault("cache_alloc"))
 		goto err;
 
 	err = validate_super(&ca->disk_sb, &ca->sb);

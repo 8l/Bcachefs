@@ -261,7 +261,6 @@ int bch_btree_iter_unlock(struct btree_iter *);
 void bch_btree_iter_init(struct btree_iter *, struct cache_set *,
 			 enum btree_id, struct bpos);
 
-void bch_btree_iter_traverse(struct btree_iter *);
 struct btree *bch_btree_iter_peek_node(struct btree_iter *);
 struct btree *bch_btree_iter_next_node(struct btree_iter *);
 

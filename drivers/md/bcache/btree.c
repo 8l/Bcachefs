@@ -42,6 +42,8 @@
 #include <linux/rcupdate.h>
 #include <trace/events/bcache.h>
 
+static void bch_btree_iter_traverse(struct btree_iter *);
+
 static int __bch_btree_insert_node(struct btree *, struct btree_iter *,
 				   struct keylist *, struct bch_replace_info *,
 				   struct closure *, enum alloc_reserve,
@@ -2105,7 +2107,7 @@ int bch_btree_insert_at(struct btree_iter *iter,
 			enum alloc_reserve reserve,
 			unsigned flags)
 {
-	int ret = -EINTR;;
+	int ret = -EINTR;
 
 	BUG_ON(iter->level);
 
@@ -2348,7 +2350,7 @@ retry:
 		}
 }
 
-void bch_btree_iter_traverse(struct btree_iter *iter)
+static void bch_btree_iter_traverse(struct btree_iter *iter)
 {
 	__bch_btree_iter_traverse(iter, iter->level, iter->pos);
 }

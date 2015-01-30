@@ -515,14 +515,12 @@ static inline void verify_nr_live_u64s(struct btree_keys *b)
 #ifdef CONFIG_BCACHE_DEBUG
 
 s64 bch_count_data(struct btree_keys *);
-void __bch_check_keys(struct btree_keys *, const char *, ...);
 void bch_dump_bucket(struct btree_keys *);
 void bch_btree_node_iter_verify(struct btree_keys *, struct btree_node_iter *);
 
 #else
 
 static inline s64 bch_count_data(struct btree_keys *b) { return -1; }
-static inline void __bch_check_keys(struct btree_keys *b, const char *fmt, ...) {}
 static inline void bch_dump_bucket(struct btree_keys *b) {}
 static inline void bch_btree_node_iter_verify(struct btree_keys *b,
 					 struct btree_node_iter *iter) {}
@@ -530,11 +528,5 @@ static inline void bch_btree_node_iter_verify(struct btree_keys *b,
 #endif
 
 void bch_dump_bset(struct btree_keys *, struct bset *, unsigned);
-
-#define bch_check_keys(b, ...)						\
-do {									\
-	if (btree_keys_expensive_checks(b))				\
-		__bch_check_keys(b, __VA_ARGS__);			\
-} while (0)
 
 #endif

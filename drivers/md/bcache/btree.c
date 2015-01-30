@@ -42,7 +42,7 @@
 #include <linux/rcupdate.h>
 #include <trace/events/bcache.h>
 
-static void bch_btree_iter_traverse(struct btree_iter *);
+static int bch_btree_iter_traverse(struct btree_iter *);
 
 static int __bch_btree_insert_node(struct btree *, struct btree_iter *,
 				   struct keylist *, struct bch_replace_info *,
@@ -2144,7 +2144,9 @@ traverse:
 		bch_btree_iter_set_pos(iter,
 			bkey_start_pos(bch_keylist_front(insert_keys)));
 
-		bch_btree_iter_traverse(iter);
+		ret = bch_btree_iter_traverse(iter);
+		if (ret)
+			break;
 	}
 	percpu_ref_put(&iter->c->writes);
 
@@ -2202,9 +2204,12 @@ int bch_btree_insert(struct cache_set *c, enum btree_id id,
 	bch_btree_iter_init(&iter, c, id,
 			    bkey_start_pos(bch_keylist_front(keys)));
 
-	bch_btree_iter_traverse(&iter);
+	ret = bch_btree_iter_traverse(&iter);
+	if (unlikely(ret))
+		goto out;
+
 	ret = bch_btree_insert_at(&iter, keys, replace, persistent, 0, 0);
-	ret2 = bch_btree_iter_unlock(&iter);
+out:	ret2 = bch_btree_iter_unlock(&iter);
 
 	return ret ?: ret2;
 }
@@ -2305,11 +2310,11 @@ static void btree_iter_up(struct btree_iter *iter)
  * This is the main state machine for walking down the btree - walks down to a
  * specified depth
  */
-static void __bch_btree_iter_traverse(struct btree_iter *iter, unsigned l,
-				      struct bpos pos)
+static int __bch_btree_iter_traverse(struct btree_iter *iter, unsigned l,
+				     struct bpos pos)
 {
 	if (!iter->nodes[iter->level])
-		return;
+		return 0;
 
 	cond_resched();
 retry:
@@ -2354,16 +2359,18 @@ retry:
 
 				iter->error = ret;
 				iter->level = BTREE_MAX_DEPTH;
-				return;
+				return ret;
 			}
 		} else {
 			btree_iter_lock_root(iter, pos);
 		}
+
+	return 0;
 }
 
-static void bch_btree_iter_traverse(struct btree_iter *iter)
+static int bch_btree_iter_traverse(struct btree_iter *iter)
 {
-	__bch_btree_iter_traverse(iter, iter->level, iter->pos);
+	return __bch_btree_iter_traverse(iter, iter->level, iter->pos);
 }
 
 /* Iterate across nodes (leaf and interior nodes) */
@@ -2387,6 +2394,7 @@ struct btree *bch_btree_iter_peek_node(struct btree_iter *iter)
 struct btree *bch_btree_iter_next_node(struct btree_iter *iter)
 {
 	struct btree *b;
+	int ret;
 
 	BUG_ON(iter->is_extents);
 
@@ -2396,7 +2404,10 @@ struct btree *bch_btree_iter_next_node(struct btree_iter *iter)
 		return NULL;
 
 	/* parent node usually won't be locked: redo traversal if necessary */
-	bch_btree_iter_traverse(iter);
+	ret = bch_btree_iter_traverse(iter);
+	if (ret)
+		return NULL;
+
 	b = iter->nodes[iter->level];
 
 	if (bkey_cmp(iter->pos, b->key.p) < 0) {
@@ -2442,9 +2453,12 @@ const struct bkey *bch_btree_iter_peek(struct btree_iter *iter)
 {
 	const struct bkey *k;
 	struct bpos pos = iter->pos;
+	int ret;
 
 	while (1) {
-		__bch_btree_iter_traverse(iter, 0, pos);
+		ret = __bch_btree_iter_traverse(iter, 0, pos);
+		if (ret)
+			return NULL;
 
 		if (likely(k = __btree_iter_peek(iter))) {
 			BUG_ON(bkey_cmp(k->p, pos) < 0);
@@ -2464,9 +2478,12 @@ const struct bkey *bch_btree_iter_peek(struct btree_iter *iter)
 const struct bkey *bch_btree_iter_peek_with_holes(struct btree_iter *iter)
 {
 	const struct bkey *k;
+	int ret;
 
 	while (1) {
-		__bch_btree_iter_traverse(iter, 0, iter->pos);
+		ret = __bch_btree_iter_traverse(iter, 0, iter->pos);
+		if (ret)
+			return NULL;
 
 		k = bch_btree_node_iter_peek_all(iter->node_iters);
 recheck:

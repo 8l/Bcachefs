@@ -1186,7 +1186,9 @@ static bool __journal_res_get(struct cache_set *c, struct journal_res *res,
 			 */
 			if (!c->journal.cur->data->u64s) {
 				BUG_ON(test_bit(JOURNAL_DIRTY,
-						&c->journal.flags));
+						&c->journal.flags) &&
+				       !test_bit(JOURNAL_NEED_WRITE,
+						 &c->journal.flags));
 
 				journal_entry_no_room(c);
 				continue;

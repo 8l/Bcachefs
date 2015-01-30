@@ -74,7 +74,6 @@ static void bch_dirent_to_text(const struct btree *b, char *buf,
 }
 
 const struct btree_keys_ops bch_dirent_ops = {
-	.sort_fixup	= bch_generic_sort_fixup,
 };
 
 const struct bkey_ops bch_bkey_dirent_ops = {

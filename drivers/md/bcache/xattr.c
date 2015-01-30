@@ -56,7 +56,6 @@ static bool bch_xattr_invalid(const struct cache_set *c, const struct bkey *k)
 }
 
 const struct btree_keys_ops bch_xattr_ops = {
-	.sort_fixup	= bch_generic_sort_fixup,
 };
 
 const struct bkey_ops bch_bkey_xattr_ops = {

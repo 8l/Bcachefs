@@ -5,7 +5,11 @@
 #include "bset.h"
 #include "journal_types.h"
 
-struct bkey *bch_generic_sort_fixup(struct btree_node_iter *, struct bkey *);
+void bch_key_sort_fix_overlapping(struct btree_keys *, struct bset *,
+				  struct btree_node_iter *);
+void bch_extent_sort_fix_overlapping(struct btree_keys *, struct bset *,
+				     struct btree_node_iter *);
+
 bool bch_insert_fixup_key(struct btree *,
 			  struct bkey *,
 			  struct btree_node_iter *,

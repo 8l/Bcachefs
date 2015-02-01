@@ -1681,6 +1681,7 @@ static void bch_cache_remove_work(struct work_struct *work)
 		clear_bit(CACHE_DEV_REMOVING, &ca->flags);
 		pr_err("Can't remove last device in tier %u of %pU.",
 		       tier, c->sb.set_uuid.b);
+		bch_notify_cache_remove_failed(ca);
 		return;
 	}
 
@@ -1779,6 +1780,7 @@ static void bch_cache_remove_work(struct work_struct *work)
 
 	if ((!data_off || !meta_off) && (!force)) {
 		clear_bit(CACHE_DEV_REMOVING, &ca->flags);
+		bch_notify_cache_remove_failed(ca);
 		return;
 	}
 

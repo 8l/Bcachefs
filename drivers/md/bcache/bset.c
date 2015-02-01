@@ -98,6 +98,8 @@ void bch_btree_node_iter_verify(struct btree_keys *b,
 	struct btree_node_iter_set *set;
 	struct bset_tree *t;
 
+	BUG_ON(iter->used > MAX_BSETS);
+
 	for (set = iter->data;
 	     set < iter->data + iter->used;
 	     set++) {
@@ -627,6 +629,8 @@ static struct bkey *bch_btree_node_insert_pos(struct btree_keys *b,
 {
 	struct btree_node_iter_set *set;
 
+	BUG_ON(iter->used > MAX_BSETS);
+
 	for (set = iter->data;
 	     set < iter->data + iter->used;
 	     set++)
@@ -647,6 +651,8 @@ static void bch_btree_node_iter_fix(struct btree_node_iter *iter,
 {
 	struct btree_node_iter_set *set;
 	u64 n = where->u64s;
+
+	BUG_ON(iter->used > MAX_BSETS);
 
 	for (set = iter->data;
 	     set < iter->data + iter->used;
@@ -1030,6 +1036,7 @@ void bch_btree_node_iter_push(struct btree_node_iter *iter,
 		     i++)
 			;
 
+		BUG_ON(iter->used >= iter->size);
 		memmove(&iter->data[i + 1],
 			&iter->data[i],
 			(iter->used - i) * sizeof(struct btree_node_iter_set));
@@ -1084,6 +1091,8 @@ static inline void btree_node_iter_sift(struct btree_node_iter *iter, unsigned s
 {
 	unsigned i;
 
+	BUG_ON(iter->used > MAX_BSETS);
+
 	for (i = start;
 	     i + 1 < iter->used &&
 	     btree_node_iter_cmp(iter, iter->data[i], iter->data[i + 1]);
@@ -1094,6 +1103,8 @@ static inline void btree_node_iter_sift(struct btree_node_iter *iter, unsigned s
 void bch_btree_node_iter_sort(struct btree_node_iter *iter)
 {
 	int i;
+
+	BUG_ON(iter->used > MAX_BSETS);
 
 	for (i = iter->used - 1; i >= 0; --i)
 		btree_node_iter_sift(iter, i);
@@ -1112,8 +1123,10 @@ void bch_btree_node_iter_advance(struct btree_node_iter *iter)
 
 	BUG_ON(iter->data->k > iter->data->end);
 
-	if (iter->data->k == iter->data->end)
+	if (iter->data->k == iter->data->end) {
+		BUG_ON(iter->used == 0);
 		iter->data[0] = iter->data[--iter->used];
+	}
 
 	btree_node_iter_sift(iter, 0);
 }

@@ -1,6 +1,7 @@
 #ifndef _BCACHE_IO_H
 #define _BCACHE_IO_H
 
+void bch_cache_io_error_work(struct work_struct *);
 void bch_count_io_errors(struct cache *, int, const char *);
 void bch_bbio_count_io_errors(struct bbio *, int, const char *);
 void bch_bbio_endio(struct bbio *, int, const char *);

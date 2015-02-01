@@ -696,7 +696,8 @@ static void bch_cache_set_read_only(struct cache_set *c)
 		c->journal.work.work.func(&c->journal.work.work);
 	}
 
-	bch_notify_cache_set_read_only(c);
+	if (c->uevent_env)
+		bch_notify_cache_set_read_only(c);
 
 	trace_bcache_cache_set_read_only_done(c);
 }
@@ -770,7 +771,8 @@ static void cache_set_free(struct closure *cl)
 	list_del(&c->list);
 	mutex_unlock(&bch_register_lock);
 
-	bch_notify_cache_set_stopped(c);
+	if (c->uevent_env)
+		bch_notify_cache_set_stopped(c);
 
 	kfree(c->uevent_env);
 
@@ -889,6 +891,9 @@ static const char *bch_cache_set_alloc(struct cache_sb *sb,
 	if (!c)
 		return err;
 
+	if (percpu_ref_init(&c->writes, bch_writes_disabled))
+		goto err_free;
+
 	__module_get(THIS_MODULE);
 	closure_init(&c->cl, NULL);
 	set_closure_fn(&c->cl, cache_set_free, system_wq);
@@ -995,6 +1000,9 @@ static const char *bch_cache_set_alloc(struct cache_sb *sb,
 
 	set_bit(CACHE_SET_CACHE_FULL_EXTENTS, &c->flags);
 
+	if (cache_set_init_fault("cache_set_alloc"))
+		goto err;
+
 	c->search = mempool_create_slab_pool(32, bch_search_cache);
 	if (!c->search)
 		goto err;
@@ -1010,7 +1018,6 @@ static const char *bch_cache_set_alloc(struct cache_sb *sb,
 	    !(c->wq = create_workqueue("bcache")) ||
 	    !(c->prio_clock[READ].rescale_percpu = alloc_percpu(unsigned)) ||
 	    !(c->prio_clock[WRITE].rescale_percpu = alloc_percpu(unsigned)) ||
-	    percpu_ref_init(&c->writes, bch_writes_disabled) ||
 	    bch_journal_alloc(c) ||
 	    bch_btree_cache_alloc(c) ||
 	    bch_bset_sort_state_init(&c->sort, ilog2(c->btree_pages)))
@@ -1032,6 +1039,10 @@ static const char *bch_cache_set_alloc(struct cache_sb *sb,
 	return NULL;
 err:
 	bch_cache_set_stop(c);
+	return err;
+
+err_free:
+	kfree(c);
 	return err;
 }
 

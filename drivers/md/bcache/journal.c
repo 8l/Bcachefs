@@ -840,6 +840,8 @@ static void journal_next_bucket(struct cache_set *c)
 							ja->cur_idx)),
 			    ca->sb.nr_this_dev);
 
+		trace_bcache_journal_next_bucket(ca, ja->cur_idx,
+				ja->last_idx, ja->discard_idx);
 		bch_set_extent_ptrs(e, bch_extent_ptrs(e) + 1);
 	}
 
@@ -1182,6 +1184,7 @@ static bool __journal_res_get(struct cache_set *c, struct journal_res *res,
 		if (!journal_bucket_has_room(c)) {
 			/* Still no room, we have to wait */
 			spin_unlock(&c->journal.lock);
+			trace_bcache_journal_full(c);
 			return false;
 		}
 	}

@@ -476,7 +476,8 @@ static void __bch_write(struct closure *cl)
 		n->bi_rw |= REQ_WRITE;
 		bch_submit_bbio_replicas(n, op->c, k, ptrs_from, false);
 
-		bch_extent_normalize(op->c, k);
+		BUG_ON(bch_extent_normalize(op->c, k));
+
 		bch_check_mark_super(op->c, k, false);
 
 		/*

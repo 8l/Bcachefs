@@ -94,6 +94,7 @@ read_attribute(btree_written);
 read_attribute(metadata_written);
 read_attribute(journal_debug);
 write_attribute(journal_flush);
+read_attribute(internal_uuid);
 
 sysfs_time_stats_attribute(mca_alloc, sec, us);
 sysfs_time_stats_attribute(mca_scan, sec, ms);
@@ -653,6 +654,8 @@ SHOW(bch_cache_set)
 	if (attr == &sysfs_journal_debug)
 		return bch_journal_print_debug(&c->journal, buf);
 
+
+
 	sysfs_printf(verify, "%i", c->verify);
 	sysfs_printf(key_merging_disabled, "%i", c->key_merging_disabled);
 	sysfs_printf(expensive_debug_checks,
@@ -699,6 +702,7 @@ SHOW(bch_cache_set)
 		     test_bit(CACHE_SET_CACHE_FULL_EXTENTS, &c->flags));
 	sysfs_printf(cmpxchg_atomic,		"%u",
 		     test_bit(CACHE_SET_CMPXCHG_ATOMIC, &c->flags));
+	sysfs_printf(internal_uuid, "%pU", c->sb.set_uuid.b);
 
 	return 0;
 }
@@ -875,6 +879,8 @@ STORE(__bch_cache_set)
 		else
 			clear_bit(CACHE_SET_CMPXCHG_ATOMIC, &c->flags);
 	}
+
+
 
 	sysfs_strtoul(pd_controllers_update_seconds,
 		      c->pd_controllers_update_seconds);
@@ -1066,6 +1072,7 @@ static struct attribute *bch_cache_set_internal_files[] = {
 	sysfs_pd_controller_files(tiering),
 
 	&sysfs_cache_full_extents,
+	&sysfs_internal_uuid,
 
 	&sysfs_cmpxchg_atomic,
 

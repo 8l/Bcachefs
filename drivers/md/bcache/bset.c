@@ -942,7 +942,6 @@ static struct bkey *bset_search_tree(struct bset_tree *t,
 /*
  * Returns the first key greater than or equal to @search
  */
-__attribute__((flatten))
 static struct bkey *bch_bset_search(struct btree_keys *b, struct bset_tree *t,
 				    struct bpos search)
 {
@@ -1058,6 +1057,7 @@ static void __bch_btree_node_iter_init(struct btree_keys *b,
 #endif
 }
 
+__attribute__((flatten))
 void bch_btree_node_iter_init(struct btree_keys *b,
 			      struct btree_node_iter *iter,
 			      struct bpos search)

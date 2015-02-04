@@ -1962,6 +1962,8 @@ static int btree_split(struct btree *b,
 		btree_iter_node_set(iter, n3);
 
 		bch_btree_insert_keys(n3, iter, parent_keys, NULL, false);
+		btree_iter_node_set(iter, n3);
+
 		bch_btree_node_write(n3, stack_cl, NULL);
 
 		closure_sync(stack_cl);

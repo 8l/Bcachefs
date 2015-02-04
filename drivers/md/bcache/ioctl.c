@@ -265,6 +265,7 @@ static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 	struct btree_iter iter;
 	const struct bkey *k;
 	int ret = 0;
+	unsigned type;
 	BKEY_PADDED(k) prev_key;
 
 	if (i->btree_id != BTREE_ID_EXTENTS &&
@@ -273,6 +274,8 @@ static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 
 	for_each_btree_key(&iter, c, i->btree_id, k, i->start) {
 		BKEY_PADDED(k) tmp;
+
+		type = k->type;
 
 		if (bkey_cmp(bkey_start_pos(k), i->end) >= 0)
 			break;
@@ -284,6 +287,9 @@ static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 		}
 
 		if (i->btree_id == BTREE_ID_EXTENTS) {
+			if (type == KEY_TYPE_DISCARD && k->version == 0)
+				continue;
+
 			if (k != &tmp.k) {
 				bkey_copy(&tmp.k, k);
 				k = &tmp.k;

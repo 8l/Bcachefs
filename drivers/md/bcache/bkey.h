@@ -374,19 +374,19 @@ struct bkey_s_c_##name {						\
 									\
 static inline struct bkey_i_##name *bkey_i_to_##name(struct bkey_i *k)	\
 {									\
-	BUG_ON(k->k.type != nr);					\
+	EBUG_ON(k->k.type != nr);					\
 	return container_of(&k->k, struct bkey_i_##name, k);		\
 }									\
 									\
 static inline const struct bkey_i_##name *bkey_i_to_##name##_c(const struct bkey_i *k)\
 {									\
-	BUG_ON(k->k.type != nr);					\
+	EBUG_ON(k->k.type != nr);					\
 	return container_of(&k->k, struct bkey_i_##name, k);		\
 }									\
 									\
 static inline struct bkey_s_##name bkey_s_to_##name(struct bkey_s k)	\
 {									\
-	BUG_ON(k.k->type != nr);					\
+	EBUG_ON(k.k->type != nr);					\
 	return (struct bkey_s_##name) {					\
 		.k = k.k,						\
 		.v = container_of(k.v, struct bch_##name, v),		\
@@ -395,7 +395,7 @@ static inline struct bkey_s_##name bkey_s_to_##name(struct bkey_s k)	\
 									\
 static inline struct bkey_s_c_##name bkey_s_c_to_##name(struct bkey_s_c k)\
 {									\
-	BUG_ON(k.k->type != nr);					\
+	EBUG_ON(k.k->type != nr);					\
 	return (struct bkey_s_c_##name) {				\
 		.k = k.k,						\
 		.v = container_of(k.v, struct bch_##name, v),		\
@@ -428,7 +428,7 @@ static inline struct bkey_s_c_##name name##_s_to_s_c(struct bkey_s_##name k)\
 									\
 static inline struct bkey_s_##name bkey_i_to_s_##name(struct bkey_i *k)	\
 {									\
-	BUG_ON(k->k.type != nr);					\
+	EBUG_ON(k->k.type != nr);					\
 	return (struct bkey_s_##name) {					\
 		.k = &k->k,						\
 		.v = container_of(&k->v, struct bch_##name, v),		\
@@ -437,7 +437,7 @@ static inline struct bkey_s_##name bkey_i_to_s_##name(struct bkey_i *k)	\
 									\
 static inline struct bkey_s_c_##name bkey_i_to_s_c_##name(const struct bkey_i *k)\
 {									\
-	BUG_ON(k->k.type != nr);					\
+	EBUG_ON(k->k.type != nr);					\
 	return (struct bkey_s_c_##name) {				\
 		.k = &k->k,						\
 		.v = container_of(&k->v, struct bch_##name, v),		\

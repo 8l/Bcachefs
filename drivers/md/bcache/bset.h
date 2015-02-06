@@ -503,15 +503,6 @@ struct bset_stats {
 
 void bch_btree_keys_stats(struct btree_keys *, struct bset_stats *);
 
-size_t bch_btree_count_u64s(struct btree_keys *);
-
-static inline void verify_nr_live_u64s(struct btree_keys *b)
-{
-#ifdef CONFIG_BCACHE_DEBUG
-	BUG_ON(b->nr_live_u64s != bch_btree_count_u64s(b));
-#endif
-}
-
 /* Debug stuff */
 
 #ifdef CONFIG_BCACHE_DEBUG
@@ -519,6 +510,7 @@ static inline void verify_nr_live_u64s(struct btree_keys *b)
 s64 bch_count_data(struct btree_keys *);
 void bch_dump_bucket(struct btree_keys *);
 void bch_btree_node_iter_verify(struct btree_keys *, struct btree_node_iter *);
+void bch_verify_nr_live_u64s(struct btree_keys *);
 
 #else
 
@@ -526,6 +518,7 @@ static inline s64 bch_count_data(struct btree_keys *b) { return -1; }
 static inline void bch_dump_bucket(struct btree_keys *b) {}
 static inline void bch_btree_node_iter_verify(struct btree_keys *b,
 					 struct btree_node_iter *iter) {}
+static inline void bch_verify_nr_live_u64s(struct btree_keys *b) {}
 
 #endif
 

@@ -1054,18 +1054,24 @@ static struct btree *mca_cannibalize(struct cache_set *c, struct closure *cl)
 	if (ret)
 		return ERR_PTR(ret);
 
-	trace_bcache_mca_cannibalize(c, cl);
+	while (1) {
+		trace_bcache_mca_cannibalize(c, cl);
 
-	list_for_each_entry_reverse(b, &c->btree_cache, list)
-		if (!mca_reap(b, false))
-			return b;
+		list_for_each_entry_reverse(b, &c->btree_cache, list)
+			if (!mca_reap(b, false))
+				return b;
 
-	list_for_each_entry_reverse(b, &c->btree_cache, list)
-		if (!mca_reap(b, true))
-			return b;
+		list_for_each_entry_reverse(b, &c->btree_cache, list)
+			if (!mca_reap(b, true))
+				return b;
 
-	WARN(1, "btree cache cannibalize failed\n");
-	return ERR_PTR(-ENOMEM);
+		/*
+		 * Rare case: all nodes were intent-locked.
+		 * Just busy-wait.
+		 */
+		WARN_ONCE(1, "btree cache cannibalize failed\n");
+		cond_resched();
+	}
 }
 
 /*
@@ -1185,10 +1191,15 @@ retry:
 	b = mca_find(iter->c, k);
 	if (unlikely(!b)) {
 		b = mca_alloc(iter->c, k, level, iter->btree_id, &iter->cl);
+
+		/* We raced and found the btree node in the cache */
 		if (!b)
 			goto retry;
-		if (IS_ERR(b))
+
+		if (IS_ERR(b)) {
+			BUG_ON(PTR_ERR(b) != -EAGAIN);
 			return b;
+		}
 
 		/*
 		 * If the btree node wasn't cached, we can't drop our lock on
@@ -1486,8 +1497,7 @@ int bch_btree_root_read(struct cache_set *c, enum btree_id id,
 	closure_init_stack(&cl);
 
 	while (IS_ERR(b = mca_alloc(c, k, level, id, &cl))) {
-		if (PTR_ERR(b) != -EAGAIN)
-			return PTR_ERR(b);
+		BUG_ON(PTR_ERR(b) != -EAGAIN);
 		closure_sync(&cl);
 	}
 	BUG_ON(!b);

@@ -493,7 +493,7 @@ static long bch_query_uuid(struct cache_set *c, unsigned long arg)
 	struct bch_ioctl_query_uuid __user *user_i = (void __user *) arg;
 
 	if (copy_to_user(&user_i->uuid,
-			 &c->sb.set_uuid,
+			 &c->sb.user_uuid,
 			 sizeof(user_i->uuid)))
 		return -EFAULT;
 

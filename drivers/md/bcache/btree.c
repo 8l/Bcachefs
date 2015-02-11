@@ -253,10 +253,8 @@ void bch_btree_node_read_done(struct btree *b, struct cache *ca,
 	struct bkey_packed *k;
 
 	iter = mempool_alloc(b->c->fill_iter, GFP_NOIO);
-	iter->size = btree_blocks(c);
 	iter->used = 0;
 	iter->is_extents = b->keys.ops->is_extents;
-	iter->b = &b->keys;
 
 	err = "dynamic fault";
 	if (bch_meta_read_fault("btree"))
@@ -338,7 +336,8 @@ void bch_btree_node_read_done(struct btree *b, struct cache *ca,
 			k = bkey_next(k);
 		}
 
-		bch_btree_node_iter_push(iter, i->start, bset_bkey_last(i));
+		bch_btree_node_iter_push(iter, &b->keys,
+					 i->start, bset_bkey_last(i));
 	}
 
 	err = "corrupted btree";
@@ -1636,7 +1635,7 @@ static bool btree_insert_key(struct btree_iter *iter, struct btree *b,
 	BUG_ON(write_block(b) != btree_bset_last(b));
 	BUG_ON(!b->level &&
 	       bkey_cmp(bkey_start_pos(&insert->k), iter->pos) < 0);
-	bch_btree_node_iter_verify(&b->keys, node_iter);
+	bch_btree_node_iter_verify(node_iter, &b->keys);
 
 	if (b->keys.ops->is_extents) {
 		bkey_copy(&temp.key, insert);
@@ -2204,9 +2203,8 @@ int bch_btree_insert_check_key(struct btree_iter *iter,
 
 	bkey_copy(&tmp.key, check_key);
 
-	bch_btree_node_iter_init(&iter->nodes[0]->keys,
-				 &iter->node_iters[0],
-				 bkey_start_pos(&check_key->k));
+	__btree_iter_node_set(iter, iter->nodes[0],
+			      bkey_start_pos(&check_key->k));
 
 	return bch_btree_insert_at(iter, &keylist_single(&tmp.key), NULL,
 				   NULL, iter->btree_id, BTREE_INSERT_ATOMIC);
@@ -2281,7 +2279,8 @@ static inline struct bkey_s_c __btree_iter_peek(struct btree_iter *iter)
 	const struct bkey_format *f =
 		&iter->nodes[iter->level]->keys.set->data->format;
 	struct bkey_packed *k =
-		bch_btree_node_iter_peek(&iter->node_iters[iter->level]);
+		bch_btree_node_iter_peek(&iter->node_iters[iter->level],
+					 &iter->nodes[iter->level]->keys);
 	struct bkey_s_c ret;
 
 	if (!k)
@@ -2381,7 +2380,8 @@ retry:
 
 		while ((k = __btree_iter_peek_all(iter)).k &&
 		       !btree_iter_cmp(iter, pos, k.k->p))
-			bch_btree_node_iter_next_all(&iter->node_iters[iter->level]);
+			bch_btree_node_iter_next_all(&iter->node_iters[iter->level],
+						     &iter->nodes[iter->level]->keys);
 	}
 
 	/*
@@ -2564,7 +2564,8 @@ recheck:
 		} else if (!bkey_deleted(k.k)) {
 			return k;
 		} else {
-			bch_btree_node_iter_next_all(iter->node_iters);
+			bch_btree_node_iter_next_all(&iter->node_iters[0],
+						     &iter->nodes[0]->keys);
 		}
 	}
 

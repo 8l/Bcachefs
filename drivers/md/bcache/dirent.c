@@ -34,43 +34,43 @@ static u64 bch_dirent_hash(const struct qstr *name)
 }
 
 #define __dirent_name_bytes(d)					\
-	(bkey_bytes(&(d)->k) - sizeof(struct bkey_i_dirent))
+	(bkey_val_bytes((d).k) - sizeof(struct bch_dirent))
 
-static unsigned dirent_name_bytes(const struct bkey_i_dirent *d)
+static unsigned dirent_name_bytes(struct bkey_s_c_dirent d)
 {
 	unsigned len = __dirent_name_bytes(d);
 
-	while (len && !d->v.d_name[len - 1])
+	while (len && !d.v->d_name[len - 1])
 		--len;
 
 	return len;
 }
 
-static int dirent_cmp(const struct bkey_i_dirent *d, const struct qstr *q)
+static int dirent_cmp(struct bkey_s_c_dirent d,
+		      const struct qstr *q)
 {
 	int len = dirent_name_bytes(d);
 
-	return len - q->len ?: memcmp(d->v.d_name, q->name, len);
+	return len - q->len ?: memcmp(d.v->d_name, q->name, len);
 }
 
-static bool bch_dirent_invalid(const struct cache_set *c,
-			       const struct bkey *k)
+static bool bch_dirent_invalid(const struct cache_set *c, struct bkey_s_c k)
 {
-	if (k->type != BCH_DIRENT)
+	if (k.k->type != BCH_DIRENT)
 		return true;
 
-	if (bkey_bytes(k) < sizeof(struct bkey_i_dirent))
+	if (bkey_val_bytes(k.k) < sizeof(struct bch_dirent))
 		return true;
 
 	return false;
 }
 
 static void bch_dirent_to_text(const struct btree *b, char *buf,
-			       size_t size, const struct bkey *k)
+			       size_t size, struct bkey_s_c k)
 {
-	const struct bkey_i_dirent *d = bkey_i_to_dirent_c(k);
+	struct bkey_s_c_dirent d = bkey_s_c_to_dirent(k);
 
-	scnprintf(buf, size, "%s -> %llu", d->v.d_name, d->v.d_inum);
+	scnprintf(buf, size, "%s -> %llu", d.v->d_name, d.v->d_inum);
 }
 
 const struct btree_keys_ops bch_dirent_ops = {
@@ -86,50 +86,51 @@ static int __bch_dirent_create(struct cache_set *c, u64 dir_inum,
 			       bool update)
 {
 	struct btree_iter iter;
-	const struct bkey *k;
+	struct bkey_s_c k;
 	struct keylist keys;
 	struct bkey_i_dirent *dirent;
 	int ret = -ENOENT;
 
 	bch_keylist_init(&keys);
 
-	bkey_init(keys.top);
-	keys.top->type = BCH_DIRENT;
-	set_bkey_val_bytes(keys.top, sizeof(struct bch_dirent) + name->len);
+	bkey_init(&keys.top->k);
+	keys.top->k.type = BCH_DIRENT;
+	set_bkey_val_bytes(&keys.top->k, sizeof(struct bch_dirent) + name->len);
 
-	if (bch_keylist_realloc(&keys, keys.top->u64s))
+	if (bch_keylist_realloc(&keys, keys.top->k.u64s))
 		return -ENOMEM;
 
 	dirent = bkey_i_to_dirent(keys.top);
 	dirent->v.d_inum = dst_inum;
+
 	memcpy(dirent->v.d_name, name->name, name->len);
 	memset(dirent->v.d_name + name->len, 0,
 	       round_up(name->len, sizeof(u64)) - name->len);
 
-	BUG_ON(dirent_name_bytes(dirent) != name->len);
-	BUG_ON(dirent_cmp(dirent, name));
+	BUG_ON(dirent_name_bytes(dirent_i_to_s_c(dirent)) != name->len);
+	BUG_ON(dirent_cmp(dirent_i_to_s_c(dirent), name));
 
 	bch_keylist_enqueue(&keys);
 
 	bch_btree_iter_init(&iter, c, BTREE_ID_DIRENTS,
 			    POS(dir_inum, bch_dirent_hash(name)));
 
-	while ((k = bch_btree_iter_peek_with_holes(&iter))) {
+	while ((k = bch_btree_iter_peek_with_holes(&iter)).k) {
 		/* hole? */
-		if (k->type != BCH_DIRENT) {
+		if (k.k->type != BCH_DIRENT) {
 			if (!update)
 				goto insert;
 			break;
 		}
 
-		if (!dirent_cmp(bkey_i_to_dirent_c(k), name)) {
+		if (!dirent_cmp(bkey_s_c_to_dirent(k), name)) {
 			/* found: */
 			if (!update) {
 				ret = -EEXIST;
 				break;
 			}
 insert:
-			dirent->k.p = k->p;
+			dirent->k.p = k.k->p;
 
 			ret = bch_btree_insert_at(&iter, &keys, NULL, NULL,
 						  0, BTREE_INSERT_ATOMIC);
@@ -162,7 +163,7 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 		      const struct qstr *name)
 {
 	struct btree_iter iter;
-	const struct bkey *k;
+	struct bkey_s_c k;
 	u64 hash = bch_dirent_hash(name);
 	int ret = -ENOENT;
 
@@ -172,13 +173,13 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 	bch_btree_iter_init(&iter, c, BTREE_ID_DIRENTS,
 			    POS(dir_inum, bch_dirent_hash(name)));
 
-	while ((k = bch_btree_iter_peek_with_holes(&iter))) {
+	while ((k = bch_btree_iter_peek_with_holes(&iter)).k) {
 		/* hole, not found */
-		if (k->type != BCH_DIRENT)
+		if (k.k->type != BCH_DIRENT)
 			break;
 
-		if (!dirent_cmp(bkey_i_to_dirent_c(k), name)) {
-			struct bkey delete;
+		if (!dirent_cmp(bkey_s_c_to_dirent(k), name)) {
+			struct bkey_i delete;
 
 			/*
 			 * XXX
@@ -189,9 +190,9 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 			 * probing)
 			 */
 
-			bkey_init(&delete);
-			delete.p = k->p;
-			set_bkey_deleted(&delete);
+			bkey_init(&delete.k);
+			delete.k.p = k.k->p;
+			set_bkey_deleted(&delete.k);
 
 			ret = bch_btree_insert_at(&iter,
 						  &keylist_single(&delete),
@@ -213,8 +214,8 @@ u64 bch_dirent_lookup(struct cache_set *c, u64 dir_inum,
 		      const struct qstr *name)
 {
 	struct btree_iter iter;
-	const struct bkey *k;
-	const struct bkey_i_dirent *dirent;
+	struct bkey_s_c k;
+	struct bkey_s_c_dirent dirent;
 	u64 hash = bch_dirent_hash(name);
 
 	pr_debug("searching for %llu:%llu (%s)",
@@ -223,14 +224,14 @@ u64 bch_dirent_lookup(struct cache_set *c, u64 dir_inum,
 	for_each_btree_key_with_holes(&iter, c, BTREE_ID_DIRENTS, k,
 				      POS(dir_inum, bch_dirent_hash(name))) {
 		/* hole, not found */
-		if (k->type != BCH_DIRENT)
+		if (k.k->type != BCH_DIRENT)
 			break;
 
-		dirent = bkey_i_to_dirent_c(k);
+		dirent = bkey_s_c_to_dirent(k);
 
 		/* collision? */
 		if (!dirent_cmp(dirent, name)) {
-			u64 inum = dirent->v.d_inum;
+			u64 inum = dirent.v->d_inum;
 
 			bch_btree_iter_unlock(&iter);
 			pr_debug("found %s: %llu", name->name, inum);
@@ -246,14 +247,14 @@ u64 bch_dirent_lookup(struct cache_set *c, u64 dir_inum,
 int bch_empty_dir(struct cache_set *c, u64 dir_inum)
 {
 	struct btree_iter iter;
-	const struct bkey *k;
+	struct bkey_s_c k;
 
 	for_each_btree_key(&iter, c, BTREE_ID_DIRENTS, k, POS(dir_inum, 0)) {
-		if (k->p.inode > dir_inum)
+		if (k.k->p.inode > dir_inum)
 			break;
 
-		if (k->type == BCH_DIRENT &&
-		    k->p.inode == dir_inum) {
+		if (k.k->type == BCH_DIRENT &&
+		    k.k->p.inode == dir_inum) {
 			bch_btree_iter_unlock(&iter);
 			return -ENOTEMPTY;
 		}
@@ -270,8 +271,8 @@ int bch_readdir(struct file *file, struct dir_context *ctx)
 	struct super_block *sb = inode->i_sb;
 	struct cache_set *c = sb->s_fs_info;
 	struct btree_iter iter;
-	const struct bkey *k;
-	const struct bkey_i_dirent *dirent;
+	struct bkey_s_c k;
+	struct bkey_s_c_dirent dirent;
 	unsigned len;
 
 	if (!dir_emit_dots(file, ctx))
@@ -281,33 +282,33 @@ int bch_readdir(struct file *file, struct dir_context *ctx)
 
 	for_each_btree_key(&iter, c, BTREE_ID_DIRENTS, k,
 			   POS(inode->i_ino, ctx->pos)) {
-		if (k->type != BCH_DIRENT)
+		if (k.k->type != BCH_DIRENT)
 			continue;
 
-		dirent = bkey_i_to_dirent_c(k);
+		dirent = bkey_s_c_to_dirent(k);
 
 		pr_debug("saw %llu:%llu (%s) -> %llu",
-			 k->p.inode, k->p.offset,
-			 dirent->v.d_name, dirent->v.d_inum);
+			 k.k->p.inode, k.k->p.offset,
+			 dirent.v->d_name, dirent.v->d_inum);
 
-		if (bkey_cmp(k->p, POS(inode->i_ino, ctx->pos)) < 0)
+		if (bkey_cmp(k.k->p, POS(inode->i_ino, ctx->pos)) < 0)
 			continue;
 
-		if (k->p.inode > inode->i_ino)
+		if (k.k->p.inode > inode->i_ino)
 			break;
 
 		len = dirent_name_bytes(dirent);
 
-		pr_debug("emitting %s", dirent->v.d_name);
+		pr_debug("emitting %s", dirent.v->d_name);
 
 		/*
 		 * XXX: dir_emit() can fault and block, while we're holding locks
 		 */
-		if (!dir_emit(ctx, dirent->v.d_name, len,
-			      dirent->v.d_inum, DT_UNKNOWN))
+		if (!dir_emit(ctx, dirent.v->d_name, len,
+			      dirent.v->d_inum, DT_UNKNOWN))
 			break;
 
-		ctx->pos = k->p.offset + 1;
+		ctx->pos = k.k->p.offset + 1;
 	}
 	bch_btree_iter_unlock(&iter);
 

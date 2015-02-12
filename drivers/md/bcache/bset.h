@@ -166,7 +166,7 @@ struct bset_tree {
 	unsigned		extra;
 
 	/* copy of the last key in the set */
-	struct bkey		end;
+	struct bkey_packed	end;
 	struct bkey_float	*tree;
 
 	/*
@@ -183,13 +183,30 @@ struct bset_tree {
 	struct bset		*data;
 };
 
+typedef bool (*ptr_filter_fn)(struct btree_keys *, struct bkey_s);
+
+typedef bool (*iter_cmp_fn)(struct btree_node_iter_set,
+			    struct btree_node_iter_set);
+
+enum merge_result {
+	BCH_MERGE_NOMERGE,
+
+	/*
+	 * The keys were mergable, but would have overflowed size - so instead l
+	 * was changed to the maximum size, and both keys were modified:
+	 */
+	BCH_MERGE_PARTIAL,
+	BCH_MERGE_MERGE,
+};
+
 struct btree_keys_ops {
-	bool		(*key_normalize)(struct btree_keys *, struct bkey *);
-	bool		(*key_merge)(struct btree_keys *,
-				     struct bkey *, struct bkey *);
+	ptr_filter_fn	key_normalize;
+	enum merge_result (*key_merge)(struct btree_keys *,
+				       struct bkey_i *, struct bkey_i *);
 	bool		(*key_merge_inline)(struct btree_keys *,
 					    struct btree_node_iter *,
-					    struct bkey *, struct bkey *);
+					    struct bkey_packed *,
+					    struct bkey_packed *);
 
 	/*
 	 * Only used for deciding whether to use bkey_start_pos(k) or just the
@@ -242,7 +259,7 @@ static inline bool bset_written(struct btree_keys *b, struct bset_tree *t)
 	return t <= b->set + b->nsets - b->last_set_unwritten;
 }
 
-static inline bool bkey_written(struct btree_keys *b, struct bkey *k)
+static inline bool bkey_written(struct btree_keys *b, struct bkey_packed *k)
 {
 	return !b->last_set_unwritten || k < b->set[b->nsets].data->start;
 }
@@ -296,16 +313,17 @@ void bch_btree_keys_init(struct btree_keys *, const struct btree_keys_ops *,
 
 void bch_bset_init_next(struct btree_keys *, struct bset *);
 void bch_bset_build_written_tree(struct btree_keys *);
-void bch_bset_fix_invalidated_key(struct btree_keys *, struct bkey *);
+void bch_bset_fix_invalidated_key(struct btree_keys *, struct bkey_packed *);
 
 void bch_bset_insert(struct btree_keys *, struct btree_node_iter *,
-		     struct bkey *);
+		     struct bkey_i *);
 
 /* Bkey utility code */
 
-struct bkey *bkey_prev(struct btree_keys *, struct bset_tree *, struct bkey *);
+struct bkey_packed *bkey_prev(struct btree_keys *, struct bset_tree *,
+			      struct bkey_packed *);
 
-static inline struct bkey *bset_bkey_idx(struct bset *i, unsigned idx)
+static inline struct bkey_packed *bset_bkey_idx(struct bset *i, unsigned idx)
 {
 	return bkey_idx(i, idx);
 }
@@ -316,16 +334,18 @@ static inline struct bkey *bset_bkey_idx(struct bset *i, unsigned idx)
  * key, r will be untouched.
  */
 static inline bool bch_bkey_try_merge(struct btree_keys *b,
-				      struct bkey *l, struct bkey *r)
+				      struct bkey_i *l,
+				      struct bkey_i *r)
 {
 	return b->ops->key_merge
-		? b->ops->key_merge(b, l, r)
+		? b->ops->key_merge(b, l, r) == BCH_MERGE_MERGE
 		: false;
 }
 
 static inline bool bch_bkey_try_merge_inline(struct btree_keys *b,
 					     struct btree_node_iter *iter,
-					     struct bkey *l, struct bkey *r)
+					     struct bkey_packed *l,
+					     struct bkey_packed *r)
 {
 	return b->ops->key_merge_inline
 		? b->ops->key_merge_inline(b, iter, l, r)
@@ -366,22 +386,20 @@ struct btree_node_iter {
 	unsigned	size:24;
 	unsigned	used;
 
-#ifdef CONFIG_BCACHE_DEBUG
 	struct btree_keys *b;
-#endif
 	struct btree_node_iter_set {
-		struct bkey *k, *end;
+		struct bkey_packed *k, *end;
 	} data[MAX_BSETS];
 };
 
 void bch_btree_node_iter_push(struct btree_node_iter *,
-			      struct bkey *, struct bkey *);
+			      struct bkey_packed *, struct bkey_packed *);
 void bch_btree_node_iter_init(struct btree_keys *, struct btree_node_iter *,
 			      struct bpos);
 void bch_btree_node_iter_init_from_start(struct btree_keys *,
 					 struct btree_node_iter *);
-struct bkey *bch_btree_node_iter_bset_pos(struct btree_node_iter *,
-					  struct bset *);
+struct bkey_packed *bch_btree_node_iter_bset_pos(struct btree_node_iter *,
+						 struct bset *);
 
 void bch_btree_node_iter_sort(struct btree_node_iter *);
 void bch_btree_node_iter_advance(struct btree_node_iter *);
@@ -391,7 +409,8 @@ static inline bool bch_btree_node_iter_end(struct btree_node_iter *iter)
 	return !iter->used;
 }
 
-static inline struct bkey *bch_btree_node_iter_peek_all(struct btree_node_iter *iter)
+static inline struct bkey_packed *
+bch_btree_node_iter_peek_all(struct btree_node_iter *iter)
 {
 	return bch_btree_node_iter_end(iter)
 		? NULL
@@ -401,11 +420,12 @@ static inline struct bkey *bch_btree_node_iter_peek_all(struct btree_node_iter *
 /* In debug mode, bch_btree_node_iter_next_all() does debug checks */
 
 #ifdef CONFIG_BCACHE_DEBUG
-struct bkey *bch_btree_node_iter_next_all(struct btree_node_iter *);
+struct bkey_packed *bch_btree_node_iter_next_all(struct btree_node_iter *);
 #else
-static inline struct bkey *bch_btree_node_iter_next_all(struct btree_node_iter *iter)
+static inline struct bkey_packed *
+bch_btree_node_iter_next_all(struct btree_node_iter *iter)
 {
-	struct bkey *ret = bch_btree_node_iter_peek_all(iter);
+	struct bkey_packed *ret = bch_btree_node_iter_peek_all(iter);
 
 	if (ret)
 		bch_btree_node_iter_advance(iter);
@@ -414,9 +434,10 @@ static inline struct bkey *bch_btree_node_iter_next_all(struct btree_node_iter *
 }
 #endif
 
-static inline struct bkey *bch_btree_node_iter_next(struct btree_node_iter *iter)
+static inline struct bkey_packed *
+bch_btree_node_iter_next(struct btree_node_iter *iter)
 {
-	struct bkey *ret;
+	struct bkey_packed *ret;
 
 	do {
 		ret = bch_btree_node_iter_next_all(iter);
@@ -425,9 +446,10 @@ static inline struct bkey *bch_btree_node_iter_next(struct btree_node_iter *iter
 	return ret;
 }
 
-static inline struct bkey *bch_btree_node_iter_peek(struct btree_node_iter *iter)
+static inline struct bkey_packed *
+bch_btree_node_iter_peek(struct btree_node_iter *iter)
 {
-	struct bkey *ret;
+	struct bkey_packed *ret;
 
 	while ((ret = bch_btree_node_iter_peek_all(iter)) &&
 	       bkey_deleted(ret))
@@ -436,17 +458,24 @@ static inline struct bkey *bch_btree_node_iter_peek(struct btree_node_iter *iter
 	return ret;
 }
 
-static inline struct bkey *
+static inline struct bkey_packed *
 bch_btree_node_iter_peek_overlapping(struct btree_node_iter *iter,
 				     struct bkey *end)
 {
-	struct bkey *ret;
+	const struct bkey_format *f = &iter->b->set->data->format;
+	struct bkey_packed *ret;
+	struct bkey u;
 
 	while ((ret = bch_btree_node_iter_peek_all(iter)) &&
-	       (bkey_cmp(ret->p, bkey_start_pos(end)) <= 0))
+	       (bkey_cmp_left_packed(f, ret, bkey_start_pos(end)) <= 0))
 		bch_btree_node_iter_next_all(iter);
 
-	return ret && bkey_cmp(bkey_start_pos(ret), end->p) < 0 ? ret : NULL;
+	if (!ret)
+		return false;
+
+	u = bkey_unpack_key(f, ret);
+
+	return bkey_cmp(bkey_start_pos(&u), end->p) < 0 ? ret : NULL;
 }
 
 /*
@@ -461,6 +490,14 @@ bch_btree_node_iter_peek_overlapping(struct btree_node_iter *iter,
 	for (bch_btree_node_iter_init_from_start((b), (iter));		\
 	     ((k) = bch_btree_node_iter_next_all(iter));)
 
+bool bch_btree_node_iter_next_unpack(struct btree_keys *,
+				     struct btree_node_iter *,
+				     struct bkey_tup *);
+
+#define for_each_btree_node_key_unpack(b, tup, iter)			\
+	for (bch_btree_node_iter_init_from_start((b), (iter));		\
+	     bch_btree_node_iter_next_unpack(b, iter, tup);)
+
 /* Sorting */
 
 struct bset_sort_state {
@@ -471,8 +508,6 @@ struct bset_sort_state {
 
 	struct time_stats	time;
 };
-
-typedef bool (*ptr_filter_fn)(struct btree_keys *, struct bkey *);
 
 typedef void (*btree_keys_sort_fn)(struct btree_keys *, struct bset *,
 				   struct btree_node_iter *iter);

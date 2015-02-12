@@ -213,16 +213,6 @@ struct btree_iter {
 	/* Current position of the iterator */
 	struct bpos		pos;
 
-	/*
-	 * Previous key returned - so that bch_btree_iter_next()/
-	 * bch_btree_iter_next_with_holes() can correctly advance pos.
-	 *
-	 * NOTE: KEY_DELETED(&iter->k) is used to remember whether or not the
-	 * previous key returned was a hole, so bch_btree_iter_advance_pos()
-	 * knows whether or not to advance the btree_node_iter.
-	 */
-	struct bkey		k;
-
 	u32			lock_seq[BTREE_MAX_DEPTH];
 
 	/*
@@ -241,6 +231,12 @@ struct btree_iter {
 	 */
 	struct btree		*nodes[BTREE_MAX_DEPTH + 1];
 	struct btree_node_iter	node_iters[BTREE_MAX_DEPTH];
+
+	/*
+	 * Current unpacked key - so that bch_btree_iter_next()/
+	 * bch_btree_iter_next_with_holes() can correctly advance pos.
+	 */
+	struct bkey_tup		tup;
 };
 
 int bch_btree_iter_unlock(struct btree_iter *);
@@ -264,8 +260,8 @@ void bch_btree_iter_init(struct btree_iter *, struct cache_set *,
 struct btree *bch_btree_iter_peek_node(struct btree_iter *);
 struct btree *bch_btree_iter_next_node(struct btree_iter *);
 
-const struct bkey *bch_btree_iter_peek(struct btree_iter *);
-const struct bkey *bch_btree_iter_peek_with_holes(struct btree_iter *);
+struct bkey_s_c bch_btree_iter_peek(struct btree_iter *);
+struct bkey_s_c bch_btree_iter_peek_with_holes(struct btree_iter *);
 void bch_btree_iter_set_pos(struct btree_iter *, struct bpos);
 void bch_btree_iter_advance_pos(struct btree_iter *);
 bool bch_btree_iter_upgrade(struct btree_iter *);
@@ -297,14 +293,14 @@ static void inline btree_iter_node_set(struct btree_iter *iter, struct btree *b)
 	     (b);							\
 	     (b) = bch_btree_iter_next_node(iter))
 
-#define for_each_btree_key(iter, c, btree_id, k, start)			\
+#define for_each_btree_key(iter, c, btree_id, _k, start)		\
 	for (bch_btree_iter_init((iter), (c), (btree_id), start);	\
-	     ((k) = bch_btree_iter_peek(iter));				\
+	     ((_k) = bch_btree_iter_peek(iter)).k;			\
 	     bch_btree_iter_advance_pos(iter))
 
-#define for_each_btree_key_with_holes(iter, c, btree_id, k, start)	\
+#define for_each_btree_key_with_holes(iter, c, btree_id, _k, start)	\
 	for (bch_btree_iter_init((iter), (c), (btree_id), start);	\
-	     ((k) = bch_btree_iter_peek_with_holes(iter));		\
+	     ((_k) = bch_btree_iter_peek_with_holes(iter)).k;		\
 	     bch_btree_iter_advance_pos(iter))
 
 #define btree_node_root(b)	((b)->c->btree_roots[(b)->btree_id])
@@ -318,6 +314,9 @@ void bch_btree_node_read_done(struct btree *, struct cache *,
 void bch_btree_flush(struct cache_set *);
 void bch_btree_write_oldest(struct cache_set *, u64);
 
+struct btree *__btree_node_alloc_replacement(struct btree *,
+					     enum alloc_reserve,
+					     struct bkey_format);
 struct btree *btree_node_alloc_replacement(struct btree *,
 					   enum alloc_reserve);
 int btree_check_reserve(struct btree *, struct btree_iter *,
@@ -325,11 +324,11 @@ int btree_check_reserve(struct btree *, struct btree_iter *,
 
 int bch_btree_root_alloc(struct cache_set *, enum btree_id, struct closure *);
 int bch_btree_root_read(struct cache_set *, enum btree_id,
-			const struct bkey *, unsigned);
+			const struct bkey_i *, unsigned);
 
 void bch_btree_insert_and_journal(struct btree *,
 				  struct btree_node_iter *,
-				  struct bkey *,
+				  struct bkey_i *,
 				  struct journal_res *);
 
 int bch_btree_insert_node(struct btree *, struct btree_iter *,
@@ -345,7 +344,7 @@ int bch_btree_insert_node(struct btree *, struct btree_iter *,
 int bch_btree_insert_at(struct btree_iter *, struct keylist *,
 			struct bch_replace_info *, struct closure *,
 			enum alloc_reserve, unsigned);
-int bch_btree_insert_check_key(struct btree_iter *, struct bkey *);
+int bch_btree_insert_check_key(struct btree_iter *, struct bkey_i *);
 int bch_btree_insert(struct cache_set *, enum btree_id, struct keylist *,
 		     struct bch_replace_info *, struct closure *);
 

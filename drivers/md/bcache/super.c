@@ -580,10 +580,10 @@ void bcache_write_super(struct cache_set *c)
 }
 
 void bch_check_mark_super_slowpath(struct cache_set *c,
-				   const struct bkey *k, bool meta)
+				   const struct bkey_i *k, bool meta)
 {
 	struct cache_member *mi;
-	const struct bkey_i_extent *e = bkey_i_to_extent_c(k);
+	struct bkey_s_c_extent e = bkey_i_to_s_c_extent(k);
 	const struct bch_extent_ptr *ptr;
 
 	down(&c->sb_write_mutex);
@@ -1126,7 +1126,7 @@ const char *bch_run_cache_set(struct cache_set *c)
 
 		for (id = 0; id < BTREE_ID_NR; id++) {
 			unsigned level;
-			struct bkey *k;
+			struct bkey_i *k;
 
 			err = "bad btree root";
 			k = bch_journal_find_btree_root(c, j, id, &level);
@@ -1205,13 +1205,13 @@ const char *bch_run_cache_set(struct cache_set *c)
 
 		bch_journal_meta(c, &cl);
 
-		bkey_inode_init(&inode.k);
+		bkey_inode_init(&inode.k_i);
 		inode.k.p.inode = BCACHE_ROOT_INO;
 		inode.v.i_mode = S_IFDIR|S_IRWXU|S_IRUGO|S_IXUGO;
 		inode.v.i_nlink = 2;
 
 		err = "error creating root directory";
-		if (bch_inode_update(c, &inode.k))
+		if (bch_inode_update(c, &inode.k_i))
 			goto err;
 	}
 

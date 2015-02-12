@@ -44,12 +44,12 @@ static int xattr_cmp(const struct bch_xattr *xattr, const struct qstr *q)
 	return len - q->len ?: memcmp(xattr->x_name, q->name, len);
 }
 
-static bool bch_xattr_invalid(const struct cache_set *c, const struct bkey *k)
+static bool bch_xattr_invalid(const struct cache_set *c, struct bkey_s_c k)
 {
-	if (k->type != BCH_XATTR)
+	if (k.k->type != BCH_XATTR)
 		return true;
 
-	if (bkey_bytes(k) < sizeof(struct bkey_i_xattr))
+	if (bkey_val_bytes(k.k) < sizeof(struct bch_xattr))
 		return true;
 
 	return false;
@@ -68,7 +68,7 @@ static int bch_xattr_get(struct dentry *dentry, const char *name,
 	struct cache_set *c = dentry->d_inode->i_sb->s_fs_info;
 	struct qstr qname = (struct qstr) QSTR_INIT(name, strlen(name));
 	struct btree_iter iter;
-	const struct bkey *k;
+	struct bkey_s_c k;
 	const struct bch_xattr *xattr;
 
 	if (strcmp(name, "") == 0)
@@ -78,10 +78,10 @@ static int bch_xattr_get(struct dentry *dentry, const char *name,
 				      POS(dentry->d_inode->i_ino,
 					  bch_xattr_hash(&qname))) {
 		/* hole, not found */
-		if (k->type != BCH_XATTR)
+		if (k.k->type != BCH_XATTR)
 			break;
 
-		xattr = &bkey_i_to_xattr_c(k)->v;
+		xattr = bkey_s_c_to_xattr(k).v;
 
 		/* collision? */
 		if (!xattr_cmp(xattr, &qname)) {
@@ -105,7 +105,7 @@ static int bch_xattr_set(struct dentry *dentry, const char *name,
 {
 	struct cache_set *c = dentry->d_inode->i_sb->s_fs_info;
 	struct btree_iter iter;
-	const struct bkey *k;
+	struct bkey_s_c k;
 	struct qstr qname = (struct qstr) QSTR_INIT((char *) name, strlen(name));
 	int ret = -ENODATA;
 
@@ -113,18 +113,18 @@ static int bch_xattr_set(struct dentry *dentry, const char *name,
 			    POS(dentry->d_inode->i_ino,
 				bch_xattr_hash(&qname)));
 
-	while ((k = bch_btree_iter_peek_with_holes(&iter))) {
+	while ((k = bch_btree_iter_peek_with_holes(&iter)).k) {
 		struct keylist keys;
 		int ret;
 
 		/* hole, not found */
-		if (k->type != BCH_XATTR) {
+		if (k.k->type != BCH_XATTR) {
 			if (flags & XATTR_REPLACE) {
 				ret = -ENODATA;
 				break;
 			}
 		} else {
-			const struct bch_xattr *xattr = &bkey_i_to_xattr_c(k)->v;
+			const struct bch_xattr *xattr = bkey_s_c_to_xattr(k).v;
 
 			/* collision? */
 			if (xattr_cmp(xattr, &qname)) {
@@ -140,18 +140,18 @@ static int bch_xattr_set(struct dentry *dentry, const char *name,
 
 		bch_keylist_init(&keys);
 
-		bkey_init(keys.top);
-		keys.top->p = k->p;
+		bkey_init(&keys.top->k);
+		keys.top->k.p = k.k->p;
 
 		if (size) {
 			struct bch_xattr *xattr;
 
-			keys.top->type = BCH_XATTR;
-			set_bkey_val_bytes(keys.top,
+			keys.top->k.type = BCH_XATTR;
+			set_bkey_val_bytes(&keys.top->k,
 					   sizeof(struct bch_xattr) +
 					   qname.len + size);
 
-			if (bch_keylist_realloc(&keys, keys.top->u64s)) {
+			if (bch_keylist_realloc(&keys, keys.top->k.u64s)) {
 				ret = -ENOMEM;
 				break;
 			}
@@ -164,7 +164,7 @@ static int bch_xattr_set(struct dentry *dentry, const char *name,
 			BUG_ON(xattr_cmp(xattr, &qname));
 		} else {
 			/* removing */
-			set_bkey_deleted(keys.top);
+			set_bkey_deleted(&keys.top->k);
 		}
 
 		bch_keylist_enqueue(&keys);
@@ -201,22 +201,22 @@ ssize_t bch_xattr_list(struct dentry *dentry, char *buffer, size_t buffer_size)
 {
 	struct cache_set *c = dentry->d_sb->s_fs_info;
 	struct btree_iter iter;
-	const struct bkey *k;
+	struct bkey_s_c k;
 	const struct bch_xattr *xattr;
 	u64 inum = dentry->d_inode->i_ino;
 	ssize_t ret = 0;
 	size_t len;
 
 	for_each_btree_key(&iter, c, BTREE_ID_XATTRS, k, POS(inum, 0)) {
-		BUG_ON(k->p.inode < inum);
+		BUG_ON(k.k->p.inode < inum);
 
-		if (k->p.inode > inum)
+		if (k.k->p.inode > inum)
 			break;
 
-		if (k->type != BCH_XATTR)
+		if (k.k->type != BCH_XATTR)
 			continue;
 
-		xattr = &bkey_i_to_xattr_c(k)->v;
+		xattr = bkey_s_c_to_xattr(k).v;
 
 		len = bch_xattr_emit(dentry, xattr, buffer, buffer_size);
 		if (len > buffer_size) {

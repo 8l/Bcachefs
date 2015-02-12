@@ -177,6 +177,7 @@
 
 #define pr_fmt(fmt) "bcache: %s() " fmt "\n", __func__
 
+#include <linux/bug.h>
 #include <linux/bcache.h>
 #include <linux/bcache-kernel.h>
 #include <linux/bio.h>

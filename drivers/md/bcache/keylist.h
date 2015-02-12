@@ -37,15 +37,15 @@ void bch_scan_keylist_destroy(struct scan_keylist *kl);
  * copying the structure.
  */
 
-struct bkey *bch_scan_keylist_next(struct scan_keylist *);
+struct bkey_i *bch_scan_keylist_next(struct scan_keylist *);
 
-struct bkey *bch_scan_keylist_next_rescan(struct cache_set *c,
-					  struct scan_keylist *kl,
-					  struct bpos *last_scanned,
-					  struct bpos end,
-					  scan_keylist_pred_fn *pred);
+struct bkey_i *bch_scan_keylist_next_rescan(struct cache_set *c,
+					    struct scan_keylist *kl,
+					    struct bpos *last_scanned,
+					    struct bpos end,
+					    scan_keylist_pred_fn *pred);
 
-int bch_scan_keylist_add(struct scan_keylist *, const struct bkey *);
+int bch_scan_keylist_add(struct scan_keylist *, struct bkey_s_c);
 void bch_scan_keylist_dequeue(struct scan_keylist *);
 
 void bch_keylist_recalc_oldest_gens(struct cache_set *, struct scan_keylist *);

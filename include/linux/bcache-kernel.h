@@ -9,16 +9,38 @@
 #include <linux/wait.h>
 
 struct cache_set;
-struct bkey;
+
+/* bkey with split value */
+struct bkey_s {
+	struct bkey	*k;
+	struct bch_val	*v;
+};
+
+/* bkey with split value, const */
+struct bkey_s_c {
+	const struct bkey	*k;
+	const struct bch_val	*v;
+};
+
+#define type_is(_val, _type)						\
+	(__builtin_types_compatible_p(typeof(_val), _type) ||		\
+	 __builtin_types_compatible_p(typeof(_val), const _type))
+
+#define bkey_next(_k)							\
+({									\
+	BUILD_BUG_ON(!type_is(_k, struct bkey *) &&			\
+		     !type_is(_k, struct bkey_i *) &&			\
+		     !type_is(_k, struct bkey_packed *));		\
+									\
+	((typeof(_k)) __bkey_idx(((struct bkey *) (_k)),		\
+				 ((struct bkey *) (_k))->u64s));	\
+})
 
 #define __bkey_idx(_set, _offset)				\
 	((_set)->_data + (_offset))
 
 #define bkey_idx(_set, _offset)					\
 	((typeof(&(_set)->start[0])) __bkey_idx((_set), (_offset)))
-
-#define bkey_next(_k)						\
-	((typeof(_k)) __bkey_idx(_k, (_k)->u64s))
 
 #define __bset_bkey_last(_set)					\
 	 __bkey_idx((_set), (_set)->u64s)
@@ -55,22 +77,22 @@ struct bkey;
 struct keylist {
 	/* This is a pointer to the LSB (inline_keys until realloc'd) */
 	union {
-		struct bkey		*start_keys;
+		struct bkey_i		*start_keys;
 		uint64_t		*start_keys_p;
 	};
 	/* This is a pointer to the next to enqueue */
 	union {
-		struct bkey		*top;
+		struct bkey_i		*top;
 		uint64_t		*top_p;
 	};
 	/* This is a pointer to the next to dequeue */
 	union {
-		struct bkey		*bot;
+		struct bkey_i		*bot;
 		uint64_t		*bot_p;
 	};
 	/* This is a pointer to beyond the MSB */
 	union {
-		struct bkey		*end_keys;
+		struct bkey_i		*end_keys;
 		uint64_t		*end_keys_p;
 	};
 	/* Enough room for btree_split's keys without realloc */
@@ -108,7 +130,8 @@ static inline bool bch_keylist_fits(struct keylist *l, size_t u64s)
 		return true;
 }
 
-static inline struct bkey *__bch_keylist_next(struct keylist *l, struct bkey *k)
+static inline struct bkey_i *__bch_keylist_next(struct keylist *l,
+						struct bkey_i *k)
 {
 	k = bkey_next(k);
 	BUG_ON(k > l->end_keys);
@@ -125,11 +148,11 @@ static inline struct bkey *__bch_keylist_next(struct keylist *l, struct bkey *k)
 
 static inline void bch_keylist_enqueue(struct keylist *l)
 {
-	BUG_ON(!bch_keylist_fits(l, l->top->u64s));
+	BUG_ON(!bch_keylist_fits(l, l->top->k.u64s));
 	l->top = __bch_keylist_next(l, l->top);
 }
 
-static inline void bch_keylist_add(struct keylist *l, const struct bkey *k)
+static inline void bch_keylist_add(struct keylist *l, const struct bkey_i *k)
 {
 	bkey_copy(l->top, k);
 	bch_keylist_enqueue(l);
@@ -166,7 +189,7 @@ static inline size_t bch_keylist_nkeys(struct keylist *l)
 			(l->end_keys_p - l->bot_p));
 }
 
-static inline struct bkey *bch_keylist_front(struct keylist *l)
+static inline struct bkey_i *bch_keylist_front(struct keylist *l)
 {
 	return l->bot;
 }
@@ -185,7 +208,7 @@ static inline void bch_keylist_dequeue(struct keylist *l)
 	  .end_keys = bkey_next(k)					\
 	}
 
-void bch_keylist_add_in_order(struct keylist *, struct bkey *);
+void bch_keylist_add_in_order(struct keylist *, struct bkey_i *);
 int bch_keylist_realloc(struct keylist *, unsigned need);
 int bch_keylist_realloc_max(struct keylist *, unsigned need, unsigned max);
 
@@ -259,7 +282,7 @@ enum bch_write_flags {
 
 void bch_write_op_init(struct bch_write_op *, struct cache_set *,
 		       struct bio *, struct write_point *,
-		       const struct bkey *, const struct bkey *, unsigned);
+		       struct bkey_s_c, struct bkey_s_c, unsigned);
 
 struct bbio {
 	struct cache		*ca;
@@ -269,7 +292,7 @@ struct bbio {
 	unsigned int            bi_bvec_done;	/* number of bytes completed in
 						   current bvec */
 	unsigned		submit_time_us;
-	struct bkey		key;
+	struct bkey_i		key;
 	struct bch_extent_ptr	ptr;
 	/* Only ever have a single pointer (the one we're doing io to/from) */
 	struct bio		bio;

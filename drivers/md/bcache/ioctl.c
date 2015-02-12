@@ -235,7 +235,7 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 		bio->bi_io_vec		= bio->bi_inline_vecs;
 
 		bch_write_op_init(&op->iop, c, bio, NULL,
-				  &extent, NULL, flags);
+				  bkey_to_s_c(&extent), bkey_s_c_null, flags);
 
 		ret = bio_get_user_pages(bio, i.buf,
 					 extent.size << 9, 0);
@@ -263,7 +263,7 @@ static void bch_ioctl_write(struct kiocb *req, struct cache_set *c,
 static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 {
 	struct btree_iter iter;
-	const struct bkey *k;
+	struct bkey_s_c k;
 	int ret = 0;
 	unsigned type;
 	BKEY_PADDED(k) prev_key;
@@ -275,43 +275,44 @@ static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 	for_each_btree_key(&iter, c, i->btree_id, k, i->start) {
 		BKEY_PADDED(k) tmp;
 
-		type = k->type;
+		type = k.k->type;
 
-		if (bkey_cmp(bkey_start_pos(k), i->end) >= 0)
+		if (bkey_cmp(bkey_start_pos(k.k), i->end) >= 0)
 			break;
 
 		if (!(i->flags & BCH_IOCTL_LIST_VALUES)) {
-			tmp.k = *k;
-			set_bkey_deleted(&tmp.k);
-			k = &tmp.k;
+			tmp.k.k = *k.k;
+			set_bkey_deleted(&tmp.k.k);
+			k = bkey_i_to_s_c(&tmp.k);
 		}
 
 		if (i->btree_id == BTREE_ID_EXTENTS) {
-			if (type == KEY_TYPE_DISCARD && k->version == 0)
+			if (type == KEY_TYPE_DISCARD && k.k->version == 0)
 				continue;
 
-			if (k != &tmp.k) {
-				bkey_copy(&tmp.k, k);
-				k = &tmp.k;
+			if (i->flags & BCH_IOCTL_LIST_VALUES) {
+				bkey_reassemble(&tmp.k, k);
+				k = bkey_i_to_s_c(&tmp.k);
 			}
 
-			if (bkey_cmp(i->start, bkey_start_pos(k)) > 0)
+			if (bkey_cmp(i->start, bkey_start_pos(&tmp.k.k)) > 0)
 				bch_cut_front(i->start, &tmp.k);
 
-			if (bkey_cmp(i->end, k->p) <= 0)
-				bch_cut_back(i->end, &tmp.k);
+			if (bkey_cmp(i->end, tmp.k.k.p) <= 0)
+				bch_cut_back(i->end, &tmp.k.k);
 
 			if (i->keys_found &&
 			    bch_bkey_try_merge(&iter.nodes[0]->keys,
-					       &prev_key.k, &tmp.k)) {
-				i->keys_found -= prev_key.k.u64s;
-				k = &prev_key.k;
+					       &prev_key.k,
+					       &tmp.k)) {
+				i->keys_found -= prev_key.k.k.u64s;
+				k = bkey_i_to_s_c(&prev_key.k);
 			} else {
-				bkey_copy(&prev_key.k, k);
+				bkey_copy(&prev_key.k, &tmp.k);
 			}
 		}
 
-		if (i->keys_found + k->u64s >
+		if (i->keys_found + k.k->u64s >
 		    i->buf_size / sizeof(u64)) {
 			ret = -ENOSPC;
 			break;
@@ -319,12 +320,19 @@ static int __bch_list_keys(struct cache_set *c, struct bch_ioctl_list_keys *i)
 
 		if (copy_to_user(((u64 __user *) (unsigned long)
 				  i->buf) + i->keys_found,
-				 k, bkey_bytes(k))) {
+				 k.k, sizeof(*k.k))) {
 			ret = -EFAULT;
 			break;
 		}
 
-		i->keys_found += k->u64s;
+		if (copy_to_user(((u64 __user *) (unsigned long) i->buf) +
+				 i->keys_found + BKEY_U64s,
+				 k.v, bkey_val_bytes(k.k))) {
+			ret = -EFAULT;
+			break;
+		}
+
+		i->keys_found += k.k->u64s;
 	}
 	bch_btree_iter_unlock(&iter);
 
@@ -390,7 +398,7 @@ static long bch_ioctl_inode_update(struct cache_set *c, unsigned long arg)
 	if (copy_from_user(&i, user_i, sizeof(i)))
 		return -EFAULT;
 
-	if (bkey_invalid(c, BKEY_TYPE_INODES, &i.inode.k)) {
+	if (bkey_invalid(c, BKEY_TYPE_INODES, bkey_i_to_s_c(&i.inode.k_i))) {
 		char status[80];
 
 		bch_inode_status(status, sizeof(status), &i.inode.k);
@@ -398,7 +406,7 @@ static long bch_ioctl_inode_update(struct cache_set *c, unsigned long arg)
 		return -EINVAL;
 	}
 
-	bch_inode_update(c, &i.inode.k);
+	bch_inode_update(c, &i.inode.k_i);
 	return 0;
 }
 
@@ -412,7 +420,7 @@ static long bch_ioctl_inode_create(struct cache_set *c, unsigned long arg)
 	if (copy_from_user(&i, user_i, sizeof(i)))
 		return -EFAULT;
 
-	ret = bch_inode_create(c, &i.inode.k, 0, BLOCKDEV_INODE_MAX,
+	ret = bch_inode_create(c, &i.inode.k_i, 0, BLOCKDEV_INODE_MAX,
 			       &c->unused_inode_hint);
 	if (ret)
 		return ret;
@@ -540,29 +548,29 @@ int bch_copy(struct cache_set *c,
 	bch_btree_iter_init(&iter, c, BTREE_ID_EXTENTS, src);
 
 	while (1) {
-		const struct bkey *k = bch_btree_iter_peek(&iter);
+		struct bkey_s_c k = bch_btree_iter_peek(&iter);
 		BKEY_PADDED(key) copy;
 
-		if (!k || bkey_cmp(bkey_start_pos(k), src_end) >= 0) {
+		if (!k.k || bkey_cmp(bkey_start_pos(k.k), src_end) >= 0) {
 			if (!bch_keylist_empty(&keys->list))
 				goto insert; /* insert any keys on our keylist */
 			break;
 		}
 
 		/* cut pointers to size */
-		bkey_copy(&copy.key, k);
+		bkey_reassemble(&copy.key, k);
 		bch_cut_front(src, &copy.key);
-		bch_cut_back(src_end, &copy.key);
+		bch_cut_back(src_end, &copy.key.k);
 
 		/* modify copy to reference destination */
-		copy.key.p.inode = dst.inode;
-		copy.key.p.offset -= src.offset;
-		copy.key.p.offset += dst.offset;
+		copy.key.k.p.inode = dst.inode;
+		copy.key.k.p.offset -= src.offset;
+		copy.key.k.p.offset += dst.offset;
 
 		if (version != ((u64) 0ULL)) {
 			/* Version 0 means retain the source version */
 			/* Else use the new version */
-			copy.key.version = version;
+			copy.key.k.version = version;
 		}
 
 		/*
@@ -570,7 +578,7 @@ int bch_copy(struct cache_set *c,
 		 * key; otherwise insert what we've slurped up so far (and don't
 		 * advance iter yet)
 		 */
-		if (!bch_scan_keylist_add(keys, &copy.key)) {
+		if (!bch_scan_keylist_add(keys, bkey_i_to_s_c(&copy.key))) {
 			bch_btree_iter_advance_pos(&iter);
 			continue;
 		}

@@ -1572,6 +1572,8 @@ static void bch_cache_remove_work(struct work_struct *work)
 
 	closure_init_stack(&cl);
 
+	bch_notify_cache_removing(ca);
+
 	mutex_lock(&bch_register_lock);
 	allmi = cache_member_info_get(c);
 	mi = &allmi->m[ca->sb.nr_this_dev];
@@ -1766,8 +1768,6 @@ bool bch_cache_remove(struct cache *ca, bool force)
 {
 	if (test_and_set_bit(CACHE_DEV_REMOVING, &ca->flags))
 		return false;
-
-	bch_notify_cache_removing(ca);
 
 	if (force)
 		set_bit(CACHE_DEV_FORCE_REMOVE, &ca->flags);

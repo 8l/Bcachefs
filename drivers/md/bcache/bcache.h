@@ -193,6 +193,7 @@
 #include <linux/workqueue.h>
 
 #include "bset.h"
+#include "fifo.h"
 #include "util.h"
 #include "closure.h"
 

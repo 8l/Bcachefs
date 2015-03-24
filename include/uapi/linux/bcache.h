@@ -326,7 +326,7 @@ struct bch_inode_blockdev {
 
 	uuid_le			i_uuid;
 	__u8			i_label[32];
-};
+} __packed;
 BKEY_VAL_TYPE(inode_blockdev,	BCH_INODE_BLOCKDEV);
 
 BITMASK(INODE_FLASH_ONLY,	struct bch_inode_blockdev,

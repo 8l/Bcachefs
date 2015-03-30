@@ -1116,7 +1116,6 @@ static const char *run_cache_set(struct cache_set *c)
 			}
 
 		bch_journal_replay(c, &journal);
-		set_bit(JOURNAL_REPLAY_DONE, &c->journal.flags);
 	} else {
 		pr_notice("invalidating existing data");
 
@@ -1153,7 +1152,7 @@ static const char *run_cache_set(struct cache_set *c)
 		 * written until the SET_CACHE_SYNC() here:
 		 */
 		SET_CACHE_SYNC(&c->sb, true);
-		set_bit(JOURNAL_REPLAY_DONE, &c->journal.flags);
+		bch_journal_set_replay_done(&c->journal);
 
 		bch_journal_meta(c, &cl);
 	}

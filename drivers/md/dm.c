@@ -1788,6 +1788,8 @@ static void dm_make_request(struct request_queue *q, struct bio *bio)
 	int srcu_idx;
 	struct dm_table *map;
 
+	blk_queue_split(q, &bio, q->bio_split);
+
 	map = dm_get_live_table(md, &srcu_idx);
 
 	generic_start_io_acct(rw, bio_sectors(bio), &dm_disk(md)->part0);

@@ -293,12 +293,20 @@ enum bch_inode_types {
 	BCH_INODE_BLOCKDEV	= 129,
 };
 
+enum {
+	BCH_FS_PRIVATE_START		= 16,
+	__BCH_INODE_I_SIZE_DIRTY	= 16,
+};
+
+#define BCH_FL_USER_FLAGS	((1U << BCH_FS_PRIVATE_START) - 1)
+
+#define BCH_INODE_I_SIZE_DIRTY	(1 << __BCH_INODE_I_SIZE_DIRTY)
+
 struct bch_inode {
 	struct bch_val		v;
-	/* Randomly generated, conceptually similar to a generation number */
-	__u64			i_sequence;
 
-	__u32			pad1;
+	__u16			i_mode;
+	__u16			pad;
 	__u32			i_flags;
 
 	/* Nanoseconds */
@@ -312,11 +320,7 @@ struct bch_inode {
 	__u32			i_gid;
 	__u32			i_nlink;
 
-	__u16			i_mode;
-	__u16			i_replicas;	/* target number of replicas */
-
 	__u32			i_dev;
-	__u32			pad2;
 };
 BKEY_VAL_TYPE(inode,		BCH_INODE_FS);
 

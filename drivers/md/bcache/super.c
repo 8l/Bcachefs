@@ -553,11 +553,11 @@ void bcache_write_super(struct cache_set *c)
 	__bcache_write_super(c);
 }
 
-void bch_check_mark_super_slowpath(struct cache_set *c, const struct bkey *k,
+void bch_check_mark_super_slowpath(struct cache_set *c, const struct bkey_i *k,
 				   bool meta)
 {
 	struct cache_member *mi;
-	const struct bkey_i_extent *e = bkey_i_to_extent_c(k);
+	struct bkey_s_c_extent e = bkey_i_to_s_c_extent(k);
 	const struct bch_extent_ptr *ptr;
 
 	down(&c->sb_write_mutex);
@@ -1071,7 +1071,7 @@ static const char *run_cache_set(struct cache_set *c)
 
 		for (id = 0; id < BTREE_ID_NR; id++) {
 			unsigned level;
-			struct bkey *k;
+			struct bkey_i *k;
 
 			err = "bad btree root";
 			k = bch_journal_find_btree_root(c, j, id, &level);
@@ -2225,6 +2225,7 @@ static int __init bcache_init(void)
 	mutex_init(&bch_register_lock);
 	register_reboot_notifier(&reboot);
 	closure_debug_init();
+	bkey_pack_test();
 
 	if (!(bcache_io_wq = create_workqueue("bcache_io")) ||
 	    !(bcache_kset = kset_create_and_add("bcache", NULL, fs_kobj)) ||

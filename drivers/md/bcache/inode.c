@@ -155,11 +155,12 @@ again:
 	return -ENOSPC;
 }
 
-int bch_inode_update(struct cache_set *c, struct bkey_i *inode)
+int bch_inode_update(struct cache_set *c, struct bkey_i *inode,
+		     struct closure *cl, u64 *journal_seq)
 {
 	return bch_btree_insert(c, BTREE_ID_INODES,
 				&keylist_single(inode),
-				NULL, NULL, NULL);
+				NULL, cl, journal_seq);
 }
 
 int bch_inode_rm(struct cache_set *c, u64 inode_nr)

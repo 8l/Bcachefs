@@ -1153,6 +1153,7 @@ static const char *run_cache_set(struct cache_set *c)
 		SET_CACHE_SYNC(&c->sb, true);
 		bch_journal_set_replay_done(&c->journal);
 
+		/* XXX: necessary? */
 		bch_journal_meta(c, &cl);
 	}
 

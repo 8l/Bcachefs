@@ -57,6 +57,7 @@ static void update_writeback_rate(struct work_struct *work)
 struct dirty_io {
 	struct closure		cl;
 	struct cached_dev	*dc;
+	struct cache		*ca;
 	int			error;
 	/* Must be last */
 	struct bio		bio;
@@ -158,12 +159,12 @@ static void read_dirty_endio(struct bio *bio, int error)
 	struct dirty_io *io = w->private;
 	struct cache_set *c = io->dc->disk.c;
 
-	bch_count_io_errors(PTR_CACHE(c, &w->key, 0),
-			    error, "reading dirty data from cache");
+	bch_count_io_errors(io->ca, error, "reading dirty data from cache");
 
-	if (ptr_stale(c, &w->key, 0))
+	if (ptr_stale(c, io->ca, &w->key, 0))
 		error = -EINTR;
 
+	percpu_ref_put(&io->ca->ref);
 	dirty_endio(bio, error);
 }
 
@@ -178,10 +179,11 @@ static void read_dirty_submit(struct closure *cl)
 
 static void read_dirty(struct cached_dev *dc)
 {
-	int ptr;
 	struct keybuf_key *w;
 	struct dirty_io *io;
 	struct closure cl;
+	struct cache *ca;
+	unsigned ptr;
 
 	closure_init_stack(&cl);
 
@@ -196,8 +198,8 @@ static void read_dirty(struct cached_dev *dc)
 		if (!w)
 			break;
 
-		ptr = bch_extent_pick_ptr(dc->disk.c, &w->key);
-		if (ptr < 0) {
+		ca = bch_extent_pick_ptr(dc->disk.c, &w->key, &ptr);
+		if (!ca) {
 			bch_keybuf_del(&dc->writeback_keys, w);
 			continue;
 		}
@@ -205,21 +207,25 @@ static void read_dirty(struct cached_dev *dc)
 		io = kzalloc(sizeof(struct dirty_io) + sizeof(struct bio_vec)
 			     * DIV_ROUND_UP(KEY_SIZE(&w->key), PAGE_SECTORS),
 			     GFP_KERNEL);
-		if (!io)
+		if (!io) {
+			percpu_ref_put(&ca->ref);
 			goto err;
+		}
 
 		w->private	= io;
 		io->dc		= dc;
+		io->ca		= ca;
 
 		dirty_init(w);
 		io->bio.bi_iter.bi_sector = PTR_OFFSET(&w->key, ptr);
-		io->bio.bi_bdev		= PTR_CACHE(dc->disk.c,
-						    &w->key, ptr)->bdev;
+		io->bio.bi_bdev		= ca->bdev;
 		io->bio.bi_rw		= READ;
 		io->bio.bi_end_io	= read_dirty_endio;
 
-		if (bio_alloc_pages(&io->bio, GFP_KERNEL))
+		if (bio_alloc_pages(&io->bio, GFP_KERNEL)) {
+			percpu_ref_put(&ca->ref);
 			goto err_free;
+		}
 
 		trace_bcache_writeback(&w->key);
 

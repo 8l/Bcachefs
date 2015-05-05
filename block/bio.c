@@ -52,7 +52,7 @@ static struct biovec_slab bvec_slabs[BIOVEC_NR_POOLS] __read_mostly = {
  * fs_bio_set is the bio_set containing bio and iovec memory pools used by
  * IO code that does not need private memory pools.
  */
-struct bio_set *fs_bio_set;
+struct bio_set fs_bio_set;
 EXPORT_SYMBOL(fs_bio_set);
 
 /*
@@ -2147,11 +2147,10 @@ static int __init init_bio(void)
 	bio_integrity_init();
 	biovec_init_slabs();
 
-	fs_bio_set = bioset_create(BIO_POOL_SIZE, 0);
-	if (!fs_bio_set)
+	if (bioset_init(&fs_bio_set, BIO_POOL_SIZE, 0))
 		panic("bio: can't allocate bios\n");
 
-	if (bioset_integrity_create(fs_bio_set, BIO_POOL_SIZE))
+	if (bioset_integrity_create(&fs_bio_set, BIO_POOL_SIZE))
 		panic("bio: can't create integrity pool\n");
 
 	return 0;

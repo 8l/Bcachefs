@@ -1562,7 +1562,7 @@ static void make_request(struct mddev *mddev, struct bio *bio)
 			split = bio_split(bio, chunk_sects -
 					  (bio->bi_iter.bi_sector &
 					   (chunk_sects - 1)),
-					  GFP_NOIO, fs_bio_set);
+					  GFP_NOIO, &fs_bio_set);
 			bio_chain(split, bio);
 		} else {
 			split = bio;

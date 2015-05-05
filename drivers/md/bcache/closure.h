@@ -342,6 +342,12 @@ do {									\
 	return;								\
 } while (0)
 
+#define closure_return_with_destructor_noreturn(_cl, _destructor)	\
+do {									\
+	set_closure_fn(_cl, _destructor, NULL);				\
+	closure_sub(_cl, CLOSURE_RUNNING - CLOSURE_DESTRUCTOR + 1);	\
+} while (0)
+
 /**
  * closure_return - finish execution of a closure, with destructor
  *
@@ -353,8 +359,7 @@ do {									\
  */
 #define closure_return_with_destructor(_cl, _destructor)		\
 do {									\
-	set_closure_fn(_cl, _destructor, NULL);				\
-	closure_sub(_cl, CLOSURE_RUNNING - CLOSURE_DESTRUCTOR + 1);	\
+	closure_return_with_destructor_noreturn(_cl, _destructor);	\
 	return;								\
 } while (0)
 

@@ -661,7 +661,7 @@ static void journal_entry_no_room(struct cache_set *c)
 	int i;
 
 	for (i = bch_extent_ptrs(&e->k) - 1; i >= 0; --i)
-		if (!(ca = PTR_CACHE(c, &e->v, i)) ||
+		if (!(ca = PTR_CACHE(c, &e->v.ptr[i])) ||
 		    ca->journal.sectors_free <= c->journal.sectors_free)
 			bch_extent_drop_ptr(&e->k, i);
 
@@ -748,7 +748,7 @@ static bool journal_reclaim(struct cache_set *c, u64 *oldest_seq)
 	 * empty, or filled up their current journal bucket:
 	 */
 	for (i = bch_extent_ptrs(&e->k) - 1; i >= 0; --i)
-		if (!(ca = PTR_CACHE(c, &e->v, i)) ||
+		if (!(ca = PTR_CACHE(c, &e->v.ptr[i])) ||
 		    !ca->journal.sectors_free ||
 		    CACHE_STATE(&ca->mi) != CACHE_ACTIVE)
 			bch_extent_drop_ptr(&e->k, i);
@@ -810,7 +810,7 @@ static bool journal_reclaim(struct cache_set *c, u64 *oldest_seq)
 
 	for (i = 0; i < bch_extent_ptrs(&e->k); i++)
 		c->journal.sectors_free = min(c->journal.sectors_free,
-					     (ca = PTR_CACHE(c, &e->v, i))
+					     (ca = PTR_CACHE(c, &e->v.ptr[i]))
 					     ? ca->journal.sectors_free : 0);
 	if (c->journal.sectors_free == UINT_MAX)
 		c->journal.sectors_free = 0;
@@ -898,6 +898,7 @@ static void journal_write_locked(struct closure *cl)
 	struct cache *ca;
 	struct journal_write *w = c->journal.cur;
 	struct bkey_i_extent *e = bkey_i_to_extent(&c->journal.key);
+	struct bch_extent_ptr *ptr;
 	BKEY_PADDED(k) tmp;
 	unsigned i, sectors;
 
@@ -940,9 +941,9 @@ static void journal_write_locked(struct closure *cl)
 	BUG_ON(sectors > c->journal.sectors_free);
 	c->journal.sectors_free -= sectors;
 
-	for (i = 0; i < bch_extent_ptrs(&e->k); i++) {
+	extent_for_each_ptr(e, ptr) {
 		rcu_read_lock();
-		ca = PTR_CACHE(c, &e->v, i);
+		ca = PTR_CACHE(c, ptr);
 		if (ca)
 			percpu_ref_get(&ca->ref);
 		rcu_read_unlock();
@@ -961,7 +962,7 @@ static void journal_write_locked(struct closure *cl)
 		atomic_long_add(sectors, &ca->meta_sectors_written);
 
 		bio_reset(bio);
-		bio->bi_iter.bi_sector	= PTR_OFFSET(&e->v.ptr[i]);
+		bio->bi_iter.bi_sector	= PTR_OFFSET(ptr);
 		bio->bi_bdev		= ca->bdev;
 		bio->bi_rw		= (REQ_WRITE|REQ_SYNC|REQ_META|
 					   REQ_FLUSH|REQ_FUA);
@@ -974,8 +975,7 @@ static void journal_write_locked(struct closure *cl)
 		trace_bcache_journal_write(bio);
 		bio_list_add(&list, bio);
 
-		SET_PTR_OFFSET(&e->v.ptr[i],
-			       PTR_OFFSET(&e->v.ptr[i]) + sectors);
+		SET_PTR_OFFSET(ptr, PTR_OFFSET(ptr) + sectors);
 
 		ca->journal.seq[ca->journal.cur_idx] = w->data->seq;
 	}

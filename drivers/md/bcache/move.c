@@ -357,7 +357,7 @@ static void read_moving_endio(struct bio *bio, int error)
 	if (error) {
 		io->op.error = error;
 		moving_error(io->context, MOVING_FLAG_READ);
-	} else if (ptr_stale(b->ca, &bkey_i_to_extent_c(&b->key)->v, 0)) {
+	} else if (ptr_stale(b->ca, &bkey_i_to_extent_c(&b->key)->v.ptr[0])) {
 		io->op.error = -EINTR;
 	}
 
@@ -383,7 +383,7 @@ static void __bch_data_move(struct closure *cl)
 	struct moving_io *io = container_of(cl, struct moving_io, cl);
 	struct cache *ca;
 	u64 size = io->key.size;
-	int ptr;
+	const struct bch_extent_ptr *ptr;
 
 	ca = bch_extent_pick_ptr_avoiding(io->op.c, &io->key, &ptr,
 					  io->context->avoid);
@@ -971,7 +971,7 @@ static int bch_flag_key_bad(struct btree_iter *iter,
 			 * because bch_extent_normalize() will sort it
 			 * incorrectly but fortunately we don't need to.
 			 */
-			if (bch_extent_ptr_is_dirty(c, &e->k, ptr))
+			if (bch_extent_ptr_is_dirty(c, e, &e->v.ptr[ptr]))
 				e->v.ptr[ptr] = PTR(0, 0, PTR_LOST_DEV);
 			else
 				bch_extent_drop_ptr(&e->k, ptr);

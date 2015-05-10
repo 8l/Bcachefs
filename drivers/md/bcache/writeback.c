@@ -169,8 +169,8 @@ static void read_dirty_endio(struct bio *bio, int error)
 
 	bch_count_io_errors(io->ca, error, "reading dirty data from cache");
 
-	if (ptr_stale(io->ca, &bkey_i_to_extent_c(&io->replace.key)->v,
-		      io->ptr))
+	if (ptr_stale(io->ca,
+		      &bkey_i_to_extent_c(&io->replace.key)->v.ptr[io->ptr]))
 		error = -EINTR;
 
 	percpu_ref_put(&io->ca->ref);
@@ -192,8 +192,8 @@ static void read_dirty(struct cached_dev *dc)
 	struct dirty_io *io;
 	struct closure cl;
 	struct cache *ca;
-	const struct bkey_i_extent *e;
-	unsigned ptr, i;
+	const struct bch_extent_ptr *ptr;
+	unsigned i;
 	struct bio_vec *bv;
 	BKEY_PADDED(k) tmp;
 
@@ -239,13 +239,11 @@ static void read_dirty(struct cached_dev *dc)
 			io->dc		= dc;
 			io->ca		= ca;
 			io->w		= w;
-			io->ptr		= ptr;
+			io->ptr		= ptr - bkey_i_to_extent(&tmp.k)->v.ptr;
 			atomic_inc(&w->ref);
 
 			dirty_init(io);
-			e = bkey_i_to_extent_c(&io->replace.key);
-
-			io->bio.bi_iter.bi_sector = PTR_OFFSET(&e->v.ptr[ptr]);
+			io->bio.bi_iter.bi_sector = PTR_OFFSET(ptr);
 			io->bio.bi_bdev		= ca->bdev;
 			io->bio.bi_rw		= READ;
 			io->bio.bi_end_io	= read_dirty_endio;

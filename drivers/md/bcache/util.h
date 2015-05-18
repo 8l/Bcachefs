@@ -566,6 +566,7 @@ static inline unsigned fract_exp_two(unsigned x, unsigned fract_bits)
 }
 
 void bch_bio_map(struct bio *bio, void *base);
+void bch_bio_free_pages(struct bio *);
 
 static inline sector_t bdev_sectors(struct block_device *bdev)
 {

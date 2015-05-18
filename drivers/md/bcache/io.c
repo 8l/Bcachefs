@@ -778,17 +778,13 @@ static void cache_promote_done(struct closure *cl)
 	struct cache_promote_op *op = container_of(cl,
 					struct cache_promote_op, cl);
 	struct cache_set *c = op->iop.c;
-	int i;
-	struct bio_vec *bv;
 
 	if (op->iop.replace_collision) {
 		trace_bcache_promote_collision(&op->iop.replace_info.key.k);
 		atomic_inc(&c->accounting.collector.cache_miss_collisions);
 	}
 
-	bio_for_each_segment_all(bv, op->iop.bio, i)
-		__free_page(bv->bv_page);
-
+	bch_bio_free_pages(op->iop.bio);
 	kfree(op);
 }
 

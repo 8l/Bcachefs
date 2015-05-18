@@ -113,14 +113,7 @@ struct moving_io *moving_io_alloc(struct bkey_s_c k)
 
 void moving_io_free(struct moving_io *io)
 {
-	struct bio *bio = &io->bio.bio;
-	struct bio_vec *bv;
-	int i;
-
-	bio_for_each_segment_all(bv, bio, i)
-		if (bv->bv_page)
-			__free_page(bv->bv_page);
-
+	bch_bio_free_pages(&io->bio.bio);
 	kfree(io);
 }
 

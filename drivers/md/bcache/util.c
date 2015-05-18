@@ -379,6 +379,16 @@ start:		bv->bv_len	= min_t(size_t, PAGE_SIZE - bv->bv_offset,
 	}
 }
 
+void bch_bio_free_pages(struct bio *bio)
+{
+	struct bio_vec *bv;
+	unsigned i;
+
+	bio_for_each_segment_all(bv, bio, i)
+		if (bv->bv_page)
+			__free_page(bv->bv_page);
+}
+
 /*
  * Portions Copyright (c) 1996-2001, PostgreSQL Global Development Group (Any
  * use permitted, subject to terms of PostgreSQL license; see.)

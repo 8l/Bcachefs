@@ -3,6 +3,8 @@ config BCACHE
 	tristate "Block device as cache"
 	select LIBCRC32C
 	select FS_POSIX_ACL
+	select ZLIB_INFLATE
+	select ZLIB_DEFLATE
 	---help---
 	Allows a block device to be used as cache for other devices; uses
 	a btree for indexing and the layout is optimized for SSDs.

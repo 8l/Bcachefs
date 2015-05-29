@@ -66,7 +66,7 @@ void bch_btree_verify(struct cache_set *c, struct btree *b)
 	if (IS_ERR_OR_NULL(pick.ca))
 		return;
 
-	bio = bio_alloc_bioset(GFP_NOIO, btree_pages(c), &c->btree_bio);
+	bio = bio_alloc_bioset(GFP_NOIO, btree_pages(c), &c->btree_read_bio);
 	bio->bi_rw		= REQ_META|READ_SYNC;
 	bio->bi_bdev		= pick.ca->disk_sb.bdev;
 	bio->bi_iter.bi_size	= btree_bytes(c);

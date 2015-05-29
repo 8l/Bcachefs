@@ -43,7 +43,7 @@ TESTSCFLAG(Allocated, private)
 PAGEFLAG(Append, private_2)
 TESTSCFLAG(Append, private_2)
 
-static struct bio_set *bch_fs_bioset;
+static struct bio_set *bch_writepage_bioset;
 static struct kmem_cache *bch_inode_cache;
 static DECLARE_WAIT_QUEUE_HEAD(bch_append_wait);
 
@@ -1016,7 +1016,7 @@ static int bch_readpage(struct file *file, struct page *page)
 struct bch_writepage_io {
 	struct closure		cl;
 	struct bch_write_op	op;
-	struct bbio		bio;
+	struct bch_write_bio	bio;
 };
 
 struct bch_writepage {
@@ -1030,13 +1030,14 @@ static void bch_writepage_io_free(struct closure *cl)
 	struct bch_writepage_io *io = container_of(cl,
 					struct bch_writepage_io, cl);
 	struct cache_set *c = io->op.c;
-	struct inode *inode = io->bio.bio.bi_io_vec[0].bv_page->mapping->host;
+	struct bio *bio = &io->bio.bio.bio;
+	struct inode *inode = bio->bi_io_vec[0].bv_page->mapping->host;
 	struct bch_inode_info *ei = to_bch_ei(inode);
-	const int uptodate = test_bit(BIO_UPTODATE, &io->bio.bio.bi_flags);
+	const int uptodate = test_bit(BIO_UPTODATE, &bio->bi_flags);
 	struct bio_vec *bvec;
 	int i;
 
-	bio_for_each_segment_all(bvec, &io->bio.bio, i) {
+	bio_for_each_segment_all(bvec, bio, i) {
 		struct page *page = bvec->bv_page;
 
 		BUG_ON(!PageWriteback(page));
@@ -1051,15 +1052,15 @@ static void bch_writepage_io_free(struct closure *cl)
 		end_page_writeback(page);
 	}
 
-	bio_put(&io->bio.bio);
+	bio_put(bio);
 }
 
 static void bch_writepage_do_io(struct bch_writepage_io *io)
 {
 	pr_debug("writing %u sectors to %llu:%llu",
-		 bio_sectors(&io->bio.bio),
+		 bio_sectors(&io->bio.bio.bio),
 		 io->op.insert_key.k.p.inode,
-		 (u64) io->bio.bio.bi_iter.bi_sector);
+		 (u64) io->bio.bio.bio.bi_iter.bi_sector);
 
 	closure_call(&io->op.cl, bch_write, NULL, &io->cl);
 	closure_return_with_destructor(&io->cl, bch_writepage_io_free);
@@ -1109,17 +1110,18 @@ do_io:
 	mutex_unlock(&ei->update_lock);
 
 	if (!w->io) {
-		bio = bio_alloc_bioset(GFP_NOFS, BIO_MAX_PAGES, bch_fs_bioset);
-		w->io = container_of(bio, struct bch_writepage_io, bio.bio);
+		bio = bio_alloc_bioset(GFP_NOFS, BIO_MAX_PAGES,
+				       bch_writepage_bioset);
+		w->io = container_of(bio, struct bch_writepage_io, bio.bio.bio);
 
 		closure_init(&w->io->cl, NULL);
-		bch_write_op_init(&w->io->op, w->c, bio, NULL,
+		bch_write_op_init(&w->io->op, w->c, &w->io->bio, NULL,
 				  bkey_to_s_c(&KEY(w->inum, 0, 0)),
 				  bkey_s_c_null, 0);
 		w->io->op.journal_seq = &ei->journal_seq;
 	}
 
-	if (bch_bio_add_page(&w->io->bio.bio, page)) {
+	if (bch_bio_add_page(&w->io->bio.bio.bio, page)) {
 		bch_writepage_do_io(w->io);
 		w->io = NULL;
 		goto do_io;
@@ -1462,7 +1464,7 @@ struct dio_write_bio {
 	struct closure		cl;
 	struct dio_write	*dio;
 	struct bch_write_op	iop;
-	struct bbio		bio;
+	struct bch_write_bio	bio;
 };
 
 static void __bch_dio_write_complete(struct dio_write *dio)
@@ -1487,8 +1489,8 @@ static void bch_dio_write_complete(struct closure *cl)
 
 static void bch_direct_IO_write_done(struct closure *cl)
 {
-	struct dio_write_bio *op = container_of(cl,
-					struct dio_write_bio, cl);
+	struct dio_write_bio *op =
+		container_of(cl, struct dio_write_bio, cl);
 	struct bio_vec *bv;
 	int i;
 
@@ -1496,7 +1498,7 @@ static void bch_direct_IO_write_done(struct closure *cl)
 		op->dio->ret = op->iop.error;
 	closure_put(&op->dio->cl);
 
-	bio_for_each_segment_all(bv, &op->bio.bio, i)
+	bio_for_each_segment_all(bv, &op->bio.bio.bio, i)
 		page_cache_release(bv->bv_page);
 	kfree(op);
 }
@@ -1552,7 +1554,7 @@ static int bch_direct_IO_write(struct cache_set *c, struct kiocb *req,
 			break;
 		}
 
-		bio = &op->bio.bio;
+		bio = &op->bio.bio.bio;
 		bio_init(bio);
 		bio->bi_iter.bi_sector	= offset >> 9;
 		bio->bi_max_vecs	= pages;
@@ -1570,7 +1572,7 @@ static int bch_direct_IO_write(struct cache_set *c, struct kiocb *req,
 		op->dio = dio;
 		closure_init(&op->cl, NULL);
 
-		bch_write_op_init(&op->iop, c, bio, NULL,
+		bch_write_op_init(&op->iop, c, &op->bio, NULL,
 				  bkey_to_s_c(&KEY(inum,
 						   bio_end_sector(bio),
 						   bio_sectors(bio))),
@@ -2048,8 +2050,8 @@ void bch_fs_exit(void)
 	unregister_filesystem(&bcache_fs_type);
 	if (bch_dio_read_bioset)
 		bioset_free(bch_dio_read_bioset);
-	if (bch_fs_bioset)
-		bioset_free(bch_fs_bioset);
+	if (bch_writepage_bioset)
+		bioset_free(bch_writepage_bioset);
 	if (bch_inode_cache)
 		kmem_cache_destroy(bch_inode_cache);
 }
@@ -2062,9 +2064,9 @@ int __init bch_fs_init(void)
 	if (!bch_inode_cache)
 		goto err;
 
-	bch_fs_bioset = bioset_create(4,
-				offsetof(struct bch_writepage_io, bio.bio));
-	if (!bch_fs_bioset)
+	bch_writepage_bioset =
+		bioset_create(4, offsetof(struct bch_writepage_io, bio.bio.bio));
+	if (!bch_writepage_bioset)
 		goto err;
 
 

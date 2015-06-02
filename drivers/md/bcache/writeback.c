@@ -242,11 +242,13 @@ err:
 void bcache_dev_sectors_dirty_add(struct cache_set *c, unsigned inode,
 				  uint64_t offset, int nr_sectors)
 {
-	struct bcache_device *d = c->devices[inode];
+	struct bcache_device *d;
 	unsigned stripe_offset, stripe, sectors_dirty;
 
+	rcu_read_lock();
+	d = bch_dev_find(c, inode);
 	if (!d)
-		return;
+		goto out;
 
 	stripe = offset_to_stripe(d, offset);
 	stripe_offset = offset & (d->stripe_size - 1);
@@ -272,6 +274,8 @@ void bcache_dev_sectors_dirty_add(struct cache_set *c, unsigned inode,
 		stripe_offset = 0;
 		stripe++;
 	}
+out:
+	rcu_read_unlock();
 }
 
 static bool dirty_pred(struct keybuf *buf, struct bkey *k)
@@ -282,6 +286,7 @@ static bool dirty_pred(struct keybuf *buf, struct bkey *k)
 static void refill_full_stripes(struct cached_dev *dc)
 {
 	struct keybuf *buf = &dc->writeback_keys;
+	unsigned inode = bcache_dev_inum(&dc->disk);
 	unsigned start_stripe, stripe, next_stripe;
 	bool wrapped = false;
 
@@ -302,11 +307,11 @@ static void refill_full_stripes(struct cached_dev *dc)
 		next_stripe = find_next_zero_bit(dc->disk.full_dirty_stripes,
 						 dc->disk.nr_stripes, stripe);
 
-		buf->last_scanned = KEY(dc->disk.id,
+		buf->last_scanned = KEY(inode,
 					stripe * dc->disk.stripe_size, 0);
 
 		bch_refill_keybuf(dc->disk.c, buf,
-				  &KEY(dc->disk.id,
+				  &KEY(inode,
 				       next_stripe * dc->disk.stripe_size, 0),
 				  dirty_pred);
 
@@ -328,7 +333,8 @@ next:
 static bool refill_dirty(struct cached_dev *dc)
 {
 	struct keybuf *buf = &dc->writeback_keys;
-	struct bkey end = KEY(dc->disk.id, MAX_KEY_OFFSET, 0);
+	unsigned inode = bcache_dev_inum(&dc->disk);
+	struct bkey end = KEY(inode, MAX_KEY_OFFSET, 0);
 	bool searched_from_start = false;
 
 	if (dc->partial_stripes_expensive) {
@@ -338,7 +344,7 @@ static bool refill_dirty(struct cached_dev *dc)
 	}
 
 	if (bkey_cmp(&buf->last_scanned, &end) >= 0) {
-		buf->last_scanned = KEY(dc->disk.id, 0, 0);
+		buf->last_scanned = KEY(inode, 0, 0);
 		searched_from_start = true;
 	}
 
@@ -403,27 +409,30 @@ static int bch_writeback_thread(void *arg)
 
 void bch_mark_writeback_keys(struct cache_set *c)
 {
+	struct radix_tree_iter iter;
+	void **slot;
 	unsigned i;
 
 	/* don't reclaim buckets to which writeback keys point */
 	rcu_read_lock();
 
-	for (i = 0; i < c->nr_uuids; i++) {
-		struct bcache_device *d = c->devices[i];
+	radix_tree_for_each_slot(slot, &c->devices, &iter, 0) {
+		struct bcache_device *d;
 		struct cached_dev *dc;
 		struct keybuf_key *w, *n;
-		unsigned j;
 
-		if (!d || UUID_FLASH_ONLY(&c->uuids[i]))
+		d = radix_tree_deref_slot(slot);
+
+		if (INODE_FLASH_ONLY(&d->inode))
 			continue;
 		dc = container_of(d, struct cached_dev, disk);
 
 		spin_lock(&dc->writeback_keys.lock);
 		rbtree_postorder_for_each_entry_safe(w, n,
 					&dc->writeback_keys.keys, node)
-			for (j = 0; j < bch_extent_ptrs(&w->key); j++)
-				SET_GC_MARK(PTR_BUCKET(c, &w->key, j),
-					    GC_MARK_DIRTY);
+			for (i = 0; i < bch_extent_ptrs(&w->key); i++)
+				SET_GC_MARK(PTR_BUCKET(c, &w->key, i),
+					GC_MARK_DIRTY);
 		spin_unlock(&dc->writeback_keys.lock);
 	}
 
@@ -457,7 +466,7 @@ void bch_sectors_dirty_init(struct cached_dev *dc)
 	struct sectors_dirty_init op;
 
 	bch_btree_op_init(&op.op, -1);
-	op.inode = dc->disk.id;
+	op.inode = bcache_dev_inum(&dc->disk);
 
 	bch_btree_map_keys(&op.op, dc->disk.c, BTREE_ID_EXTENTS,
 			   &KEY(op.inode, 0, 0), sectors_dirty_init_fn, 0);

@@ -10,6 +10,7 @@
 #include "btree.h"
 #include "clock.h"
 #include "debug.h"
+#include "error.h"
 #include "extents.h"
 #include "io.h"
 #include "keybuf.h"
@@ -168,7 +169,9 @@ static void read_dirty_endio(struct bio *bio, int error)
 {
 	struct dirty_io *io = container_of(bio, struct dirty_io, bio);
 
-	bch_count_io_errors(io->ca, error, "reading dirty data from cache");
+	cache_nonfatal_io_err_on(error, io->ca, "writeback read");
+
+	bch_account_io_completion(io->ca);
 
 	if (ptr_stale(io->ca, &io->ptr))
 		error = -EINTR;

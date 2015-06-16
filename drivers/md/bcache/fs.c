@@ -15,6 +15,7 @@
 
 #include <linux/aio.h>
 #include <linux/compat.h>
+#include <linux/falloc.h>
 #include <linux/migrate.h>
 #include <linux/module.h>
 #include <linux/mount.h>
@@ -772,6 +773,131 @@ out:
 	return ret < 0 ? ret : 0;
 }
 
+static long bch_fcollapse(struct inode *inode, loff_t offset, loff_t len)
+{
+	struct bch_inode_info *ei = to_bch_ei(inode);
+	struct cache_set *c = inode->i_sb->s_fs_info;
+	struct btree_iter src_iter;
+	struct btree_iter dst_iter;
+	struct bpos dst = POS(inode->i_ino, offset >> 9);
+	struct bpos src = POS(inode->i_ino, (offset + len) >> 9);
+	struct bpos end = POS(inode->i_ino, round_up(inode->i_size, PAGE_SIZE) >> 9);
+	BKEY_PADDED(k) copy;
+	struct bkey_s_c k;
+	int ret;
+
+	if ((offset | len) & (PAGE_CACHE_SIZE - 1))
+		return -EINVAL;
+
+	bch_btree_iter_init(&src_iter, c, BTREE_ID_EXTENTS, src);
+	bch_btree_iter_init_intent(&dst_iter, c, BTREE_ID_EXTENTS, dst);
+	bch_btree_iter_link(&src_iter, &dst_iter);
+
+	/*
+	 * We need i_mutex to keep the page cache consistent with the extents
+	 * btree, and the btree consistent with i_size - we don't need outside
+	 * locking for the extents btree itself, because we're using linked
+	 * iterators
+	 *
+	 * XXX: hmm, need to prevent reads adding things to the pagecache until
+	 * we're done?
+	 */
+	mutex_lock(&inode->i_mutex);
+
+	ret = -EINVAL;
+	if (offset + len >= inode->i_size)
+		goto err;
+
+	if (inode->i_size < len)
+		goto err;
+
+	inode_dio_wait(inode);
+
+	ret = filemap_write_and_wait_range(inode->i_mapping,
+					   offset, -1);
+	if (ret)
+		goto err;
+
+	ret = invalidate_inode_pages2_range(inode->i_mapping,
+					    offset >> PAGE_CACHE_SHIFT, -1);
+	if (ret)
+		goto err;
+
+	while (bkey_cmp(src_iter.pos, end) < 0) {
+		/* Have to take intent locks before read locks: */
+		ret = bch_btree_iter_traverse(&dst_iter);
+		if (ret)
+			goto err;
+
+		k = bch_btree_iter_peek_with_holes(&src_iter);
+
+		if (!k.k) {
+			ret = -EIO;
+			goto err;
+		}
+
+		bkey_reassemble(&copy.k, k);
+		bch_cut_front(src, &copy.k);
+
+		copy.k.k.p.offset -= len >> 9;
+
+		if (bkey_deleted(&copy.k.k))
+			copy.k.k.type = KEY_TYPE_DISCARD;
+
+		BUG_ON(bkey_cmp(dst_iter.pos, bkey_start_pos(&copy.k.k)));
+
+		ret = bch_btree_insert_at(&dst_iter,
+					  &keylist_single(&copy.k),
+					  NULL, &ei->journal_seq,
+					  BTREE_INSERT_ATOMIC);
+		if (ret < 0 && ret != -EINTR)
+			goto err;
+
+		src = dst_iter.pos;
+		src.offset += len >> 9;
+
+		bch_btree_iter_set_pos(&src_iter, src);
+		bch_btree_iter_unlock(&src_iter);
+	}
+
+	bch_btree_iter_unlock(&src_iter);
+	bch_btree_iter_unlock(&dst_iter);
+
+	ret = bch_discard(c,
+		POS(inode->i_ino, round_up(inode->i_size - len, PAGE_SIZE) >> 9),
+		POS(inode->i_ino, U64_MAX),
+		0, &ei->journal_seq);
+	if (ret)
+		goto err;
+
+	mutex_lock(&ei->update_lock);
+	i_size_write(inode, inode->i_size - len);
+	ret = bch_write_inode(c, ei);
+	mutex_unlock(&ei->update_lock);
+
+	mutex_unlock(&inode->i_mutex);
+	return 0;
+err:
+	bch_btree_iter_unlock(&src_iter);
+	bch_btree_iter_unlock(&dst_iter);
+	mutex_unlock(&inode->i_mutex);
+	return ret;
+}
+
+static long bch_fallocate(struct file *file, int mode,
+			  loff_t offset, loff_t len)
+{
+	struct inode *inode = file_inode(file);
+
+	if (mode & FALLOC_FL_COLLAPSE_RANGE)
+		return bch_fcollapse(inode, offset, len);
+
+	if (mode & FALLOC_FL_INSERT_RANGE)
+		return -EOPNOTSUPP;
+
+	return -EOPNOTSUPP;
+}
+
 static int bch_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 {
 	struct inode *inode = file->f_mapping->host;
@@ -947,6 +1073,7 @@ static const struct file_operations bch_file_operations = {
 	.fsync		= bch_fsync,
 	.splice_read	= generic_file_splice_read,
 	.splice_write	= iter_file_splice_write,
+	.fallocate	= bch_fallocate,
 
 	.unlocked_ioctl = bch_fs_ioctl,
 #ifdef CONFIG_COMPAT

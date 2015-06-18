@@ -54,6 +54,7 @@ const char *bch_btree_id_names[BTREE_ID_NR] = {
 #undef DEF_BTREE_ID
 
 static void bch_btree_iter_reinit_node(struct btree_iter *, struct btree *);
+static bool btree_iter_cmp(struct btree_iter *, struct bpos, struct bpos);
 
 #define for_each_linked_btree_iter(_iter, _linked)			\
 	for ((_linked) = (_iter)->next;					\
@@ -2218,6 +2219,40 @@ static void btree_node_flush(struct journal_entry_pin *pin)
 
 /* Btree insertion */
 
+static void __btree_node_iter_fix(struct btree_iter *iter,
+				  struct btree *b,
+				  struct bkey_packed *where)
+{
+	struct bkey_format *f = &b->keys.format;
+	struct btree_node_iter *node_iter = &iter->node_iters[b->level];
+	struct btree_node_iter_set *set;
+	unsigned offset = __btree_node_key_to_offset(&b->keys, where);
+	unsigned shift = where->u64s;
+
+	BUG_ON(node_iter->used > MAX_BSETS);
+
+	for (set = node_iter->data;
+	     set < node_iter->data + node_iter->used;
+	     set++)
+		if (set->end >= offset) {
+			set->end += shift;
+
+			if (set->k > offset ||
+			    (set->k == offset &&
+			     !btree_iter_cmp(iter, iter->pos,
+					     bkey_unpack_key(f, where).p)))
+				set->k += shift;
+
+			return;
+		}
+
+	/* didn't find the bset in the iterator - might have to readd it: */
+
+	if (btree_iter_cmp(iter, iter->pos, bkey_unpack_key(f, where).p))
+		bch_btree_node_iter_push(node_iter, &b->keys, where,
+					 bset_bkey_last(bset_tree_last(&b->keys)->data));
+}
+
 /* Wrapper around bch_bset_insert() that fixes linked iterators: */
 void bch_btree_bset_insert(struct btree_iter *iter,
 			   struct btree *b,
@@ -2227,13 +2262,14 @@ void bch_btree_bset_insert(struct btree_iter *iter,
 	struct btree_iter *linked;
 	struct bkey_packed *where = NULL;
 
+	BUG_ON(insert->k.u64s > bch_btree_keys_u64s_remaining(b));
+
 	bch_bset_insert(&b->keys, node_iter, insert, &where);
 
 	for_each_linked_btree_iter(iter, linked)
 		if (linked->nodes[b->level] == b) {
 			if (where)
-				bch_btree_node_iter_fix(&linked->node_iters[b->level],
-							&b->keys, where);
+				__btree_node_iter_fix(linked, b, where);
 			bch_btree_node_iter_sort(&linked->node_iters[b->level],
 						 &b->keys);
 		}

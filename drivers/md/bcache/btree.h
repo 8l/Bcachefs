@@ -503,6 +503,15 @@ int bch_btree_insert_node(struct btree *, struct btree_iter *,
 
 int bch_btree_insert_at(struct btree_iter *, struct keylist *,
 			struct bch_replace_info *, u64 *, unsigned);
+
+struct btree_insert_multi {
+	struct btree_iter	iter;
+	struct bkey_i		*k;
+};
+
+int bch_btree_insert_at_multi(struct btree_insert_multi *,
+			      unsigned, u64 *, unsigned);
+
 int bch_btree_insert_check_key(struct btree_iter *, struct bkey_i *);
 int bch_btree_insert(struct cache_set *, enum btree_id, struct keylist *,
 		     struct bch_replace_info *, u64 *, int flags);

@@ -196,6 +196,7 @@
 #include "fifo.h"
 #include "util.h"
 #include "closure.h"
+#include "opts.h"
 
 #include <linux/dynamic_fault.h>
 

@@ -131,28 +131,22 @@ const struct bkey_ops bch_bkey_dirent_ops = {
 	.val_to_text	= bch_dirent_to_text,
 };
 
-static int __bch_dirent_create(struct cache_set *c, u64 dir_inum,
-			       u8 type, const struct qstr *name,
-			       u64 dst_inum, bool update,
-			       u64 *journal_seq)
+static struct bkey_i_dirent *dirent_create_key(struct keylist *keys, u8 type,
+					       const struct qstr *name, u64 dst)
 {
-	struct btree_iter iter;
-	struct bkey_s_c k;
-	struct keylist keys;
 	struct bkey_i_dirent *dirent;
 	unsigned u64s = BKEY_U64s +
 		DIV_ROUND_UP(sizeof(struct bch_dirent) + name->len,
 			     sizeof(u64));
-	int ret = -ENOENT;
 
-	bch_keylist_init(&keys, NULL, 0);
+	bch_keylist_init(keys, NULL, 0);
 
-	if (bch_keylist_realloc(&keys, u64s))
-		return -ENOMEM;
+	if (bch_keylist_realloc(keys, u64s))
+		return NULL;
 
-	dirent = bkey_dirent_init(keys.top);
+	dirent = bkey_dirent_init(keys->top);
 	dirent->k.u64s = u64s;
-	dirent->v.d_inum = dst_inum;
+	dirent->v.d_inum = dst;
 	dirent->v.d_type = type;
 
 	memcpy(dirent->v.d_name, name->name, name->len);
@@ -163,60 +157,103 @@ static int __bch_dirent_create(struct cache_set *c, u64 dir_inum,
 	BUG_ON(dirent_name_bytes(dirent_i_to_s_c(dirent)) != name->len);
 	BUG_ON(dirent_cmp(dirent_i_to_s_c(dirent), name));
 
-	bch_keylist_enqueue(&keys);
+	bch_keylist_enqueue(keys);
+	return dirent;
+}
 
-	bch_btree_iter_init_intent(&iter, c, BTREE_ID_DIRENTS,
-				   POS(dir_inum, bch_dirent_hash(name)));
+static struct bkey_s_c __dirent_find(struct btree_iter *iter,
+				     u64 dir, const struct qstr *name)
+{
+	struct bkey_s_c k;
 
-	while ((k = bch_btree_iter_peek_with_holes(&iter)).k) {
-		/* hole? */
-		if (k.k->type != BCH_DIRENT) {
-			if (!update)
-				goto insert;
+	while ((k = bch_btree_iter_peek_with_holes(iter)).k) {
+		if (k.k->p.inode != dir)
 			break;
+
+		switch (k.k->type) {
+		case BCH_DIRENT:
+			if (!dirent_cmp(bkey_s_c_to_dirent(k), name))
+				return k;
+
+			/* hash collision, keep going */
+			break;
+		case BCH_DIRENT_WHITEOUT:
+			/* hash collision, keep going */
+			break;
+		default:
+			/* hole, not found */
+			goto not_found;
 		}
 
-		if (!dirent_cmp(bkey_s_c_to_dirent(k), name)) {
-			/* found: */
-			if (!update) {
-				ret = -EEXIST;
-				break;
-			}
-insert:
-			dirent->k.p = k.k->p;
+		bch_btree_iter_advance_pos(iter);
+	}
+not_found:
+	return (struct bkey_s_c) { .k = ERR_PTR(-ENOENT) };
+}
 
-			ret = bch_btree_insert_at(&iter, &keys, NULL,
-						  journal_seq,
-						  BTREE_INSERT_ATOMIC);
-			if (ret != -EINTR)
-				break;
+static struct bkey_s_c __dirent_find_hole(struct btree_iter *iter,
+					  u64 dir, const struct qstr *name)
+{
+	struct bkey_s_c k;
+
+	while ((k = bch_btree_iter_peek_with_holes(iter)).k) {
+		if (k.k->p.inode != dir)
+			return (struct bkey_s_c) { .k = ERR_PTR(-ENOSPC) };
+
+		if (k.k->type != BCH_DIRENT) {
+			return k;
+		} else if (!dirent_cmp(bkey_s_c_to_dirent(k), name)) {
+			return (struct bkey_s_c) { .k = ERR_PTR(-EEXIST) };
 		} else {
 			/* collision */
-			bch_btree_iter_advance_pos(&iter);
+			bch_btree_iter_advance_pos(iter);
 		}
 	}
-	bch_btree_iter_unlock(&iter);
-	bch_keylist_free(&keys);
 
-	return ret;
+	return (struct bkey_s_c) { .k = ERR_PTR(-ENOSPC) };
 }
 
 int bch_dirent_create(struct cache_set *c, u64 dir_inum, u8 type,
 		      const struct qstr *name, u64 dst_inum,
 		      u64 *journal_seq)
 {
-	return __bch_dirent_create(c, dir_inum, type,
-				   name, dst_inum, false,
-				   journal_seq);
-}
+	struct btree_iter iter;
+	struct bkey_s_c k;
+	struct keylist keys;
+	struct bkey_i_dirent *dirent;
+	int ret;
 
-int bch_dirent_update(struct cache_set *c, u64 dir_inum,
-		      const struct qstr *name, u64 dst_inum,
-		      u64 *journal_seq)
-{
-	return __bch_dirent_create(c, dir_inum, DT_UNKNOWN,
-				   name, dst_inum, true,
-				   journal_seq);
+	bch_keylist_init(&keys, NULL, 0);
+
+	dirent = dirent_create_key(&keys, type, name, dst_inum);
+	if (!dirent)
+		return -ENOMEM;
+
+	bch_btree_iter_init_intent(&iter, c, BTREE_ID_DIRENTS,
+				   POS(dir_inum, bch_dirent_hash(name)));
+
+	do {
+		k = __dirent_find_hole(&iter, dir_inum, name);
+		if (IS_ERR(k.k)) {
+			ret = bch_btree_iter_unlock(&iter) ?: PTR_ERR(k.k);
+			break;
+		}
+
+		dirent->k.p = k.k->p;
+
+		ret = bch_btree_insert_at(&iter, &keys, NULL,
+					  journal_seq,
+					  BTREE_INSERT_ATOMIC);
+		/*
+		 * XXX: if we ever cleanup whiteouts, we may need to rewind
+		 * iterator on -EINTR
+		 */
+	} while (ret == -EINTR);
+
+	bch_btree_iter_unlock(&iter);
+	bch_keylist_free(&keys);
+
+	return ret;
 }
 
 int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
@@ -224,6 +261,7 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 {
 	struct btree_iter iter;
 	struct bkey_s_c k;
+	struct bkey_i delete;
 	u64 hash = bch_dirent_hash(name);
 	int ret = -ENOENT;
 
@@ -233,37 +271,121 @@ int bch_dirent_delete(struct cache_set *c, u64 dir_inum,
 	bch_btree_iter_init_intent(&iter, c, BTREE_ID_DIRENTS,
 				   POS(dir_inum, bch_dirent_hash(name)));
 
-	while ((k = bch_btree_iter_peek_with_holes(&iter)).k) {
-		switch (k.k->type) {
-		case BCH_DIRENT:
-			if (!dirent_cmp(bkey_s_c_to_dirent(k), name)) {
-				struct bkey_i delete;
+	do {
+		k = __dirent_find(&iter, dir_inum, name);
+		if (IS_ERR(k.k))
+			return bch_btree_iter_unlock(&iter) ?: PTR_ERR(k.k);
 
-				bkey_init(&delete.k);
-				delete.k.p = k.k->p;
-				delete.k.type = BCH_DIRENT_WHITEOUT;
+		bkey_init(&delete.k);
+		delete.k.p = k.k->p;
+		delete.k.type = BCH_DIRENT_WHITEOUT;
 
-				ret = bch_btree_insert_at(&iter,
-						&keylist_single(&delete),
-						NULL, NULL,
-						BTREE_INSERT_NOFAIL|
-						BTREE_INSERT_ATOMIC);
-				if (ret == -EINTR)
-					continue;
-			}
-			break;
-		case BCH_DIRENT_WHITEOUT:
-			break;
-		default:
-			/* hole, not found */
-			goto out;
-		}
+		ret = bch_btree_insert_at(&iter,
+					  &keylist_single(&delete),
+					  NULL, NULL,
+					  BTREE_INSERT_NOFAIL|
+					  BTREE_INSERT_ATOMIC);
+		/*
+		 * XXX: if we ever cleanup whiteouts, we may need to rewind
+		 * iterator on -EINTR
+		 */
+	} while (ret == -EINTR);
 
-		bch_btree_iter_advance_pos(&iter);
-	}
-out:
 	bch_btree_iter_unlock(&iter);
 
+	return ret;
+}
+
+int bch_dirent_rename(struct cache_set *c,
+		      u64 src_dir, const struct qstr *src_name,
+		      u64 dst_dir, const struct qstr *dst_name,
+		      u64 *journal_seq, bool overwriting)
+{
+	struct btree_insert_multi trans[2];
+	struct btree_iter *src_iter = &trans[0].iter;
+	struct btree_iter *dst_iter = &trans[1].iter;
+	struct bkey_s_c k;
+	struct bkey_s_c_dirent src;
+	struct bkey_i_dirent *dst;
+	struct bkey_i delete;
+	struct keylist keys;
+	int ret;
+
+	dst = dirent_create_key(&keys, 0, dst_name, 0);
+	if (!dst)
+		return -ENOMEM;
+
+	bch_btree_iter_init_intent(src_iter, c, BTREE_ID_DIRENTS,
+				   POS(src_dir, bch_dirent_hash(src_name)));
+	bch_btree_iter_init_intent(dst_iter, c, BTREE_ID_DIRENTS,
+				   POS(dst_dir, bch_dirent_hash(dst_name)));
+	bch_btree_iter_link(src_iter, dst_iter);
+
+	do {
+		/*
+		 * Have to traverse lower btree nodes before higher - due to
+		 * lock ordering.
+		 */
+		if (bkey_cmp(src_iter->pos, dst_iter->pos) < 0) {
+			k = __dirent_find(src_iter, src_dir, src_name);
+			if (IS_ERR(k.k)) {
+				ret = PTR_ERR(k.k);
+				goto err;
+			}
+
+			src = bkey_s_c_to_dirent(k);
+
+			k = overwriting
+				? __dirent_find(dst_iter, dst_dir, dst_name)
+				: __dirent_find_hole(dst_iter, dst_dir, dst_name);
+			if (IS_ERR(k.k)) {
+				ret = PTR_ERR(k.k);
+				goto err;
+			}
+
+			dst->k.p = k.k->p;
+		} else {
+			k = overwriting
+				? __dirent_find(dst_iter, dst_dir, dst_name)
+				: __dirent_find_hole(dst_iter, dst_dir, dst_name);
+			if (IS_ERR(k.k)) {
+				ret = PTR_ERR(k.k);
+				goto err;
+			}
+
+			dst->k.p = k.k->p;
+
+			k = __dirent_find(src_iter, src_dir, src_name);
+			if (IS_ERR(k.k)) {
+				ret = PTR_ERR(k.k);
+				goto err;
+			}
+
+			src = bkey_s_c_to_dirent(k);
+		}
+
+		bkey_init(&delete.k);
+		delete.k.p = src.k->p;
+		delete.k.type = BCH_DIRENT_WHITEOUT;
+
+		dst->v.d_inum = src.v->d_inum;
+		dst->v.d_type = src.v->d_type;
+
+		trans[0].k = &delete;
+		trans[1].k = &dst->k_i;
+
+		ret = bch_btree_insert_at_multi(trans, ARRAY_SIZE(trans),
+						journal_seq, 0);
+		bch_btree_iter_unlock(src_iter);
+		bch_btree_iter_unlock(dst_iter);
+	} while (ret == -EINTR);
+
+	bch_keylist_free(&keys);
+	return ret;
+err:
+	ret = bch_btree_iter_unlock(src_iter) ?: ret;
+	ret = bch_btree_iter_unlock(dst_iter) ?: ret;
+	bch_keylist_free(&keys);
 	return ret;
 }
 

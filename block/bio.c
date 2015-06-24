@@ -1001,6 +1001,7 @@ void bio_copy_data_iter(struct bio *dst, struct bvec_iter dst_iter,
 		bio_advance_iter(dst, &dst_iter, bytes);
 	}
 }
+EXPORT_SYMBOL(bio_copy_data_iter);
 
 /**
  * bio_copy_data - copy contents of data buffers from one chain of bios to
@@ -1683,6 +1684,7 @@ void bio_set_pages_dirty(struct bio *bio)
 			set_page_dirty_lock(page);
 	}
 }
+EXPORT_SYMBOL_GPL(bio_set_pages_dirty);
 
 static void bio_release_pages(struct bio *bio)
 {
@@ -1766,6 +1768,7 @@ void bio_check_pages_dirty(struct bio *bio)
 		bio_put(bio);
 	}
 }
+EXPORT_SYMBOL_GPL(bio_check_pages_dirty);
 
 void generic_start_io_acct(int rw, unsigned long sectors,
 			   struct hd_struct *part)

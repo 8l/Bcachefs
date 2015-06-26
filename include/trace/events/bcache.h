@@ -6,8 +6,16 @@
 
 #include <linux/tracepoint.h>
 
-#include "btree.h"
-#include "keylist.h"
+struct bcache_device;
+struct bio;
+struct bkey;
+struct btree;
+struct cache;
+struct cache_set;
+struct keylist;
+struct moving_queue;
+
+#include "alloc_types.h"
 
 DECLARE_EVENT_CLASS(bcache_request,
 	TP_PROTO(struct bcache_device *d, struct bio *bio),

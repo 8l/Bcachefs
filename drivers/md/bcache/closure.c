@@ -69,8 +69,8 @@ void __closure_wake_up(struct closure_waitlist *wait_list)
 
 	while (list) {
 		struct llist_node *t = list;
-		list = llist_next(list);
 
+		list = llist_next(list);
 		t->next = reverse;
 		reverse = t;
 	}
@@ -161,6 +161,7 @@ static struct dentry *debug;
 static int debug_seq_show(struct seq_file *f, void *data)
 {
 	struct closure *cl;
+
 	spin_lock_irq(&closure_list_lock);
 
 	list_for_each_entry(cl, &closure_list, all) {
@@ -179,7 +180,7 @@ static int debug_seq_show(struct seq_file *f, void *data)
 			seq_printf(f, " W %pF\n",
 				   (void *) cl->waiting_on);
 
-		seq_printf(f, "\n");
+		seq_puts(f, "\n");
 	}
 
 	spin_unlock_irq(&closure_list_lock);

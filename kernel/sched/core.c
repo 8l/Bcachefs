@@ -4563,7 +4563,8 @@ void show_state_filter(unsigned long state_filter)
 		 * console might take a lot of time:
 		 */
 		touch_nmi_watchdog();
-		if (!state_filter || (p->state & state_filter))
+		if (!(p->state & TASK_IDLE_WORKER) &&
+		    (!state_filter || (p->state & state_filter)))
 			sched_show_task(p);
 	}
 

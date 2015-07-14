@@ -1410,6 +1410,7 @@ static void journal_write_locked(struct closure *cl)
 	clear_bit(JOURNAL_DIRTY, &j->flags);
 	cancel_delayed_work(&j->write_work);
 
+	/* XXX: stuff */
 	spin_lock(&c->btree_root_lock);
 
 	for (i = 0; i < BTREE_ID_NR; i++)

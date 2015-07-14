@@ -398,6 +398,9 @@ static int bch_btree_set_root(struct btree_iter *iter, struct btree *b,
 	bch_pending_btree_node_free_insert_done(c, NULL, old->btree_id,
 						bkey_i_to_s_c(&old->key));
 
+	continue_at_noreturn(&as->cl, async_split_writes_done,
+			     system_wq);
+
 	/*
 	 * Ensure new btree root is persistent (reachable via the
 	 * journal) before returning and the caller unlocking it:
@@ -936,7 +939,9 @@ static void async_split_writes_done(struct closure *cl)
 
 	/* Writes are finished, persist pointers to new nodes: */
 
-	/* XXX: error handling */
+	if (test_bit(CACHE_SET_BTREE_WRITE_ERROR, &c->flags)) {
+		BUG();
+	}
 
 	if (b) {
 		six_lock_read(&b->lock);
@@ -953,6 +958,13 @@ static void async_split_writes_done(struct closure *cl)
 			}
 		}
 		six_unlock_read(&b->lock);
+	} else {
+		u64 seq = c->journal.seq;
+		int ret;
+
+		bch_journal_res_put(&c->journal, &as->res);
+
+		ret = bch_journal_flush_seq(&c->journal, seq);
 	}
 
 	continue_at(cl, async_split_update_done, system_wq);
@@ -1336,14 +1348,6 @@ static int btree_split(struct btree *b, struct btree_iter *iter,
 		if (ret)
 			goto err;
 	} else {
-		/* Wait on journal flush and btree node writes: */
-		closure_sync(&as->cl);
-
-		/* Check for journal error after waiting on the journal flush: */
-		if (bch_journal_error(&c->journal) ||
-		    test_bit(CACHE_SET_BTREE_WRITE_ERROR, &c->flags))
-			goto err;
-
 		if (n3) {
 			ret = bch_btree_set_root(iter, n3, &as->res);
 			if (ret)

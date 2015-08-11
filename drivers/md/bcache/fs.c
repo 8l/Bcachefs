@@ -2040,6 +2040,26 @@ static int bch_sync_fs(struct super_block *sb, int wait)
 	return bch_journal_flush(&c->journal);
 }
 
+static struct cache_set *bdev_to_cache_set(struct block_device *bdev)
+{
+	struct cache_set *c;
+	struct cache *ca;
+	unsigned i;
+
+	rcu_read_lock();
+
+	list_for_each_entry(c, &bch_cache_sets, list)
+		for_each_cache_rcu(ca, c, i)
+			if (ca->disk_sb.bdev == bdev) {
+				rcu_read_unlock();
+				return c;
+			}
+
+	rcu_read_unlock();
+
+	return NULL;
+}
+
 static struct cache_set *bch_open_as_blockdevs(const char *_dev_name,
 					       struct cache_set_opts opts)
 {
@@ -2057,7 +2077,7 @@ static struct cache_set *bch_open_as_blockdevs(const char *_dev_name,
 
 	devs = kcalloc(nr_devs, sizeof(const char *), GFP_KERNEL);
 	if (!devs)
-		goto out;
+		goto err;
 
 	for (i = 0, s = dev_name;
 	     s;
@@ -2066,16 +2086,48 @@ static struct cache_set *bch_open_as_blockdevs(const char *_dev_name,
 
 	err = bch_register_cache_set(devs, nr_devs, opts, &c);
 	if (err) {
-		pr_err("register_cache_set err %s", err);
-		goto out;
+		/*
+		 * Already open?
+		 * Look up each block device, make sure they all belong to a
+		 * cache set and they all belong to the _same_ cache set
+		 */
+
+		mutex_lock(&bch_register_lock);
+
+		for (i = 0; i < nr_devs; i++) {
+			struct block_device *bdev = lookup_bdev(devs[i]);
+			struct cache_set *c2;
+
+			if (IS_ERR(bdev))
+				goto err_unlock;
+
+			c2 = bdev_to_cache_set(bdev);
+			bdput(bdev);
+
+			if (!c)
+				c = c2;
+
+			if (c != c2)
+				goto err_unlock;
+		}
+
+		if (!c)
+			goto err_unlock;
+
+		closure_get(&c->cl);
+		mutex_unlock(&bch_register_lock);
 	}
 
 	set_bit(CACHE_SET_BDEV_MOUNTED, &c->flags);
-out:
+err:
 	kfree(devs);
 	kfree(dev_name);
 
 	return c;
+err_unlock:
+	mutex_unlock(&bch_register_lock);
+	pr_err("register_cache_set err %s", err);
+	goto err;
 }
 
 enum {
@@ -2228,6 +2280,17 @@ static const struct super_operations bch_super_operations = {
 #endif
 };
 
+static int bch_test_super(struct super_block *s, void *data)
+{
+	return s->s_fs_info == data;
+}
+
+static int bch_set_super(struct super_block *s, void *data)
+{
+	s->s_fs_info = data;
+	return 0;
+}
+
 static struct dentry *bch_mount(struct file_system_type *fs_type,
 				int flags, const char *dev_name, void *data)
 {
@@ -2246,10 +2309,22 @@ static struct dentry *bch_mount(struct file_system_type *fs_type,
 	if (!c)
 		return ERR_PTR(-ENOENT);
 
-	sb = sget(fs_type, NULL, set_anon_super, flags, NULL);
+	sb = sget(fs_type, bch_test_super, bch_set_super, flags|MS_NOSEC, c);
 	if (IS_ERR(sb)) {
-		ret = PTR_ERR(sb);
-		goto err;
+		closure_put(&c->cl);
+		return ERR_CAST(sb);
+	}
+
+	BUG_ON(sb->s_fs_info != c);
+
+	if (sb->s_root) {
+		closure_put(&c->cl);
+
+		if ((flags ^ sb->s_flags) & MS_RDONLY) {
+			ret = -EBUSY;
+			goto err_put_super;
+		}
+		goto out;
 	}
 
 	/* XXX: blocksize */
@@ -2260,15 +2335,20 @@ static struct dentry *bch_mount(struct file_system_type *fs_type,
 	sb->s_xattr		= bch_xattr_handlers;
 	sb->s_magic		= BCACHE_STATFS_MAGIC;
 	sb->s_time_gran		= 1;
-	sb->s_fs_info		= c;
 	c->vfs_sb		= sb;
+	sb->s_bdi		= &c->bdi;
 
 	rcu_read_lock();
 	for_each_cache_rcu(ca, c, i) {
-		char b[BDEVNAME_SIZE];
+		struct block_device *bdev = ca->disk_sb.bdev;
 
-		strlcpy(sb->s_id, bdevname(ca->disk_sb.bdev, b),
-			sizeof(sb->s_id));
+		BUILD_BUG_ON(sizeof(sb->s_id) < BDEVNAME_SIZE);
+
+		bdevname(bdev, sb->s_id);
+
+		/* XXX: do we even need s_bdev? */
+		sb->s_bdev	= bdev;
+		sb->s_dev	= bdev->bd_dev;
 		break;
 	}
 	rcu_read_unlock();
@@ -2277,10 +2357,6 @@ static struct dentry *bch_mount(struct file_system_type *fs_type,
 		sb->s_flags	|= MS_POSIXACL;
 	else
 		sb->s_flags	|= opts.posix_acl ? MS_POSIXACL : 0;
-
-	/* XXX: do we even need s_bdev? */
-	sb->s_bdev		= c->cache[0]->disk_sb.bdev;
-	sb->s_bdi		= &c->bdi;
 
 	inode = bch_vfs_inode_get(sb, BCACHE_ROOT_INO);
 	if (IS_ERR(inode)) {
@@ -2295,12 +2371,11 @@ static struct dentry *bch_mount(struct file_system_type *fs_type,
 	}
 
 	sb->s_flags |= MS_ACTIVE;
+out:
 	return dget(sb->s_root);
 
 err_put_super:
 	deactivate_locked_super(sb);
-err:
-	closure_put(&c->cl);
 	return ERR_PTR(ret);
 }
 

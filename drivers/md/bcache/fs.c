@@ -708,6 +708,8 @@ static int bch_setattr(struct dentry *dentry, struct iattr *iattr)
 		 */
 		i_size_dirty_put(ei);
 		inode->i_mtime = inode->i_ctime = CURRENT_TIME;
+
+		/* XXX: do we need to wait for i_size_dirty_count to hit 0? */
 	}
 
 	mutex_lock(&ei->update_lock);

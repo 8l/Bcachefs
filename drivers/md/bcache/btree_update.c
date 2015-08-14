@@ -123,14 +123,23 @@ static void bch_pending_btree_node_free_insert_done(struct cache_set *c,
 found:
 	d->index_update_done = true;
 
+	/*
+	 * need to avoid racing with the start of gc... taking a write lock here
+	 * is a hack, we should be doing the gc_will_visit() checks inside
+	 * bch_mark_pointers while we have a read lock on gc_cur_lock, but that
+	 * would be a pain...
+	 */
+	write_seqlock(&c->gc_cur_lock);
+
 	if ((b
-	     ? !gc_will_visit_node(c, b)
-	     : !gc_will_visit_root(c, id)) &&
-	    gc_will_visit(c, GC_PHASE_PENDING_DELETE, POS_MIN, 0))
+	     ? !__gc_will_visit_node(c, b)
+	     : !__gc_will_visit_root(c, id)) &&
+	    __gc_will_visit(c, GC_PHASE_PENDING_DELETE, POS_MIN, 0))
 		bch_mark_pointers(c, NULL,
 				  bkey_i_to_s_c_extent(&d->key),
 				  CACHE_BTREE_NODE_SIZE(&c->sb),
 				  false, true, true);
+	write_sequnlock(&c->gc_cur_lock);
 
 	/*
 	 * XXX; check gc position and mark/unmark as needed

@@ -29,9 +29,9 @@ static inline bool gc_will_visit(struct cache_set *c, enum gc_phase phase,
 	bool ret;
 
 	do {
-		seq = read_seqcount_begin(&c->gc_cur_lock);
+		seq = read_seqbegin(&c->gc_cur_lock);
 		ret = __gc_will_visit(c, phase, pos, level);
-	} while (read_seqcount_retry(&c->gc_cur_lock, seq));
+	} while (read_seqretry(&c->gc_cur_lock, seq));
 
 	return ret;
 }
@@ -58,6 +58,11 @@ static inline bool __gc_will_visit_node(struct cache_set *c, struct btree *b)
 static inline bool gc_will_visit_node(struct cache_set *c, struct btree *b)
 {
 	return gc_will_visit(c, b->btree_id, b->key.k.p, b->level);
+}
+
+static inline bool __gc_will_visit_root(struct cache_set *c, enum btree_id id)
+{
+	return __gc_will_visit(c, (int) id, POS_MAX, U8_MAX);
 }
 
 static inline bool gc_will_visit_root(struct cache_set *c, enum btree_id id)

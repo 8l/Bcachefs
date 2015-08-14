@@ -168,11 +168,11 @@ bool btree_gc_mark_node(struct cache_set *c, struct btree *b)
 static inline void __gc_set_pos(struct cache_set *c, enum gc_phase phase,
 				struct bpos pos, unsigned level)
 {
-	write_seqcount_begin(&c->gc_cur_lock);
+	write_seqlock(&c->gc_cur_lock);
 	c->gc_cur_phase = phase;
 	c->gc_cur_pos	= pos;
 	c->gc_cur_level = level;
-	write_seqcount_end(&c->gc_cur_lock);
+	write_sequnlock(&c->gc_cur_lock);
 }
 
 static inline void gc_set_pos(struct cache_set *c, enum gc_phase phase,

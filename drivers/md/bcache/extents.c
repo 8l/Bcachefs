@@ -399,10 +399,10 @@ static void btree_ptr_debugcheck(struct cache_set *c, struct btree *b,
 				goto err;
 
 			do {
-				seq = read_seqcount_begin(&c->gc_cur_lock);
+				seq = read_seqbegin(&c->gc_cur_lock);
 				bad = (!__gc_will_visit_node(c, b) &&
 				       !g->mark.is_metadata);
-			} while (read_seqcount_retry(&c->gc_cur_lock, seq));
+			} while (read_seqretry(&c->gc_cur_lock, seq));
 
 			err = "inconsistent";
 			if (bad)
@@ -1401,7 +1401,7 @@ static void bch_extent_debugcheck(struct cache_set *c, struct btree *b,
 			do {
 				struct bucket_mark mark;
 
-				seq = read_seqcount_begin(&c->gc_cur_lock);
+				seq = read_seqbegin(&c->gc_cur_lock);
 				mark = READ_ONCE(g->mark);
 
 				/* between mark and bucket gen */
@@ -1422,7 +1422,7 @@ static void bch_extent_debugcheck(struct cache_set *c, struct btree *b,
 					(!mark.dirty_sectors &&
 					 !mark.owned_by_allocator &&
 					 dirty)));
-			} while (read_seqcount_retry(&c->gc_cur_lock, seq));
+			} while (read_seqretry(&c->gc_cur_lock, seq));
 
 			if (bad)
 				goto bad_ptr;

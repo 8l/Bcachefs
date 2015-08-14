@@ -1634,7 +1634,7 @@ static void bch_read_retry(struct bbio *bbio)
 {
 	struct bio *bio = &bbio->bio;
 	struct bio *parent;
-	u64 inode;
+	u64 inode = 0;
 
 	trace_bcache_read_retry(bio);
 

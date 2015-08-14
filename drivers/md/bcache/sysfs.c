@@ -178,6 +178,10 @@ rw_attribute(data_replicas_want);
 read_attribute(data_replicas_have);
 read_attribute(tier);
 
+read_attribute(sectors_capacity);
+read_attribute(sectors_used);
+read_attribute(sectors_reserved);
+
 static struct attribute sysfs_state_rw = {
 	.name = "state",
 	.mode = S_IRUGO|S_IWUSR
@@ -646,6 +650,10 @@ SHOW(bch_cache_set)
 	sysfs_print(writeback_keys_failed,
 		    atomic_long_read(&c->writeback_keys_failed));
 
+	sysfs_print(sectors_capacity,	c->capacity);
+	sysfs_print(sectors_used,	__cache_set_sectors_used(c));
+	sysfs_print(sectors_reserved,	atomic_long_read(&c->sectors_reserved));
+
 	if (attr == &sysfs_checksum_type)
 		return bch_snprint_string_list(buf, PAGE_SIZE,
 				bch_csum_types,
@@ -966,6 +974,10 @@ static struct attribute *bch_cache_set_files[] = {
 	&sysfs_foreground_target_percent,
 	&sysfs_sector_reserve_percent,
 	&sysfs_tiering_percent,
+
+	&sysfs_sectors_capacity,
+	&sysfs_sectors_used,
+	&sysfs_sectors_reserved,
 
 	&sysfs_journal_flush,
 	NULL

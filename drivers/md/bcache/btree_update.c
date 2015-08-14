@@ -714,7 +714,7 @@ static bool btree_insert_key(struct btree_iter *iter, struct btree *b,
 	struct bkey_i *insert = bch_keylist_front(insert_keys), *orig = insert;
 	BKEY_PADDED(key) temp;
 	struct bpos done;
-	s64 newsize, oldsize = bch_count_data(&b->keys);
+	//s64 newsize, oldsize = bch_count_data(&b->keys);
 	bool do_insert;
 
 	BUG_ON(bkey_deleted(&insert->k) && bkey_val_u64s(&insert->k));
@@ -750,8 +750,8 @@ static bool btree_insert_key(struct btree_iter *iter, struct btree *b,
 	if (dequeue)
 		bch_keylist_dequeue(insert_keys);
 
-	newsize = bch_count_data(&b->keys);
-	BUG_ON(newsize != -1 && newsize < oldsize);
+	//newsize = bch_count_data(&b->keys);
+	//BUG_ON(newsize != -1 && newsize < oldsize);
 
 	trace_bcache_btree_insert_key(b, insert, replace != NULL, do_insert);
 

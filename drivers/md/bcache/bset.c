@@ -1404,6 +1404,12 @@ struct bkey_packed *bch_btree_node_iter_next_all(struct btree_node_iter *iter,
 {
 	struct bkey_packed *ret = bch_btree_node_iter_peek_all(iter, b);
 
+	/*
+	 * XXX: assert that if keys compare equal, and one key is deleted and
+	 * another is not, the deleted key is _not_ newer (in a more recent
+	 * bset)
+	 */
+
 	if (ret) {
 		bch_btree_node_iter_advance(iter, b);
 		bch_btree_node_iter_next_check(iter, b, ret);

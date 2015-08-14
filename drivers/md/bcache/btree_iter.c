@@ -387,13 +387,28 @@ static int btree_iter_down(struct btree_iter *iter, struct bpos pos)
 	struct bkey_s_c k = __btree_iter_peek(iter);
 	BKEY_PADDED(k) tmp;
 
+	if (!k.k)
+		panic("iter_peek NULL, pos %llu:%llu\n",
+		      pos.inode, pos.offset);
+
 	bkey_reassemble(&tmp.k, k);
 
 	b = bch_btree_node_get(iter, &tmp.k, iter->level - 1);
 	if (unlikely(IS_ERR(b)))
 		return PTR_ERR(b);
 
+	if (bkey_cmp(pos, b->data->min_key) < 0) {
+		bch_dump_bucket(&iter->nodes[iter->level]->keys);
+		printk(KERN_ERR "pos %llu:%llu min_key %llu:%llu\n",
+		      pos.inode,
+		      pos.offset,
+		      b->data->min_key.inode,
+		      b->data->min_key.offset);
+		BUG();
+	}
+
 	--iter->level;
+	BUG_ON(b->level != iter->level);
 	btree_iter_node_set(iter, b, pos);
 	return 0;
 }
@@ -543,7 +558,10 @@ struct btree *bch_btree_iter_next_node(struct btree_iter *iter)
 	b = iter->nodes[iter->level];
 
 	if (bkey_cmp(iter->pos, b->key.k.p) < 0) {
-		struct bpos pos = bkey_successor(iter->pos);
+		struct bpos pos =
+			iter->btree_id == BTREE_ID_INODES
+			? btree_type_successor(iter->btree_id, iter->pos)
+			: bkey_successor(iter->pos);
 
 		ret = __bch_btree_iter_traverse(iter, 0, pos);
 		if (ret)

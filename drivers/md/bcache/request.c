@@ -98,7 +98,7 @@ static void bch_data_insert_keys_done(struct closure *cl)
 		}
 
 	if (!op->insert_data_done)
-		continue_at(cl, bch_data_insert_start, op->wq);
+		continue_at(cl, bch_data_insert_start, op->c->wq);
 
 	bch_keylist_free(&op->insert_keys);
 	closure_return(cl);
@@ -120,7 +120,7 @@ static void __bch_data_insert_keys(struct closure *cl)
 	}
 
 	if (ret == -EAGAIN)
-		continue_at(cl, __bch_data_insert_keys, op->c->btree_insert_wq);
+		continue_at(cl, __bch_data_insert_keys, op->c->wq);
 
 	closure_return(cl);
 }
@@ -138,7 +138,7 @@ static void bch_data_insert_keys(struct closure *cl)
 	__bch_btree_op_init(&op->op, id, reserve, 0);
 
 	closure_call(&op->op.cl, __bch_data_insert_keys, NULL, cl);
-	continue_at(cl, bch_data_insert_keys_done, op->c->btree_insert_wq);
+	continue_at(cl, bch_data_insert_keys_done, op->c->wq);
 }
 
 /**
@@ -176,8 +176,7 @@ static void bch_data_invalidate(struct closure *cl)
 	op->insert_data_done = true;
 	bio_put(bio);
 out:
-	continue_at(cl, bch_data_insert_keys,
-		    op->c->btree_insert_wq);
+	continue_at(cl, bch_data_insert_keys, op->c->wq);
 }
 
 static void bch_data_insert_error(struct closure *cl)
@@ -221,7 +220,7 @@ static void bch_data_insert_endio(struct bio *bio, int error)
 			op->error = error;
 		else if (!op->replace)
 			set_closure_fn(cl, bch_data_insert_error,
-				       op->c->btree_insert_wq);
+				       op->c->wq);
 		else
 			set_closure_fn(cl, NULL, NULL);
 	}
@@ -254,15 +253,14 @@ static void bch_data_insert_start(struct closure *cl)
 
 		if (open_bucket_nr == ARRAY_SIZE(op->open_buckets))
 			continue_at(cl, bch_data_insert_keys,
-				    op->c->btree_insert_wq);
+				    op->c->wq);
 
 		/* for the device pointers and 1 for the chksum */
 		if (bch_keylist_realloc(&op->insert_keys,
 					KEY_U64s(&op->insert_key) +
 					BKEY_PAD_PTRS +
 					(KEY_CSUM(&op->insert_key) ? 1 : 0)))
-			continue_at(cl, bch_data_insert_keys,
-				    op->c->btree_insert_wq);
+			continue_at(cl, bch_data_insert_keys, op->c->wq);
 
 		memset(ptrs_to_write, 0, sizeof(ptrs_to_write));
 
@@ -280,10 +278,11 @@ static void bch_data_insert_start(struct closure *cl)
 			 * before allocating another open bucket. We only hit
 			 * this case if open_bucket_nr > 1. */
 			if (bch_keylist_empty(&op->insert_keys))
-				continue_at(cl, bch_data_insert_start, op->wq);
+				continue_at(cl, bch_data_insert_start,
+					    op->c->wq);
 			else
 				continue_at(cl, bch_data_insert_keys,
-					    op->c->btree_insert_wq);
+					    op->c->wq);
 		} else if (IS_ERR(b))
 			goto err;
 
@@ -308,7 +307,7 @@ static void bch_data_insert_start(struct closure *cl)
 	} while (n != bio);
 
 	op->insert_data_done = true;
-	continue_at(cl, bch_data_insert_keys, op->c->btree_insert_wq);
+	continue_at(cl, bch_data_insert_keys, op->c->wq);
 err:
 	BUG_ON(op->wait);
 
@@ -336,8 +335,7 @@ err:
 		bio_put(bio);
 
 		if (!bch_keylist_empty(&op->insert_keys))
-			continue_at(cl, bch_data_insert_keys,
-				    op->c->btree_insert_wq);
+			continue_at(cl, bch_data_insert_keys, op->c->wq);
 		else
 			closure_return(cl);
 	}
@@ -519,7 +517,6 @@ static void __cache_promote(struct cache_set *c, struct bio *orig_bio,
 	op->orig_bio	= orig_bio;
 
 	bch_data_insert_op_init(&op->iop, c,
-				bcache_wq,
 				bio,
 				hash_long((unsigned long) current, 16),
 				false,
@@ -536,7 +533,7 @@ static void __cache_promote(struct cache_set *c, struct bio *orig_bio,
 	bbio->submit_time_us = local_clock_us();
 	closure_bio_submit(bio, &op->cl);
 
-	continue_at(&op->cl, cache_promote_write, bcache_wq);
+	continue_at(&op->cl, cache_promote_write, c->wq);
 out_free:
 	kfree(op);
 out_submit:
@@ -921,7 +918,7 @@ static void cache_lookup(struct closure *cl)
 				 &KEY(s->inode, bio->bi_iter.bi_sector, 0),
 				 cache_lookup_fn, MAP_HOLES | MAP_ASYNC);
 	if (ret == -EAGAIN)
-		continue_at(cl, cache_lookup, bcache_wq);
+		continue_at(cl, cache_lookup, s->iop.c->wq);
 	else if (ret)
 		pr_err("error %i", ret);
 
@@ -1061,9 +1058,9 @@ static void cached_dev_read_done_bh(struct closure *cl)
 	trace_bcache_read(s->orig_bio, !s->cache_miss, s->bypass);
 
 	if (s->iop.error)
-		continue_at_nobarrier(cl, cached_dev_read_error, bcache_wq);
+		continue_at_nobarrier(cl, cached_dev_read_error, s->iop.c->wq);
 	else if (dc->verify)
-		continue_at_nobarrier(cl, cached_dev_read_done, bcache_wq);
+		continue_at_nobarrier(cl, cached_dev_read_done, s->iop.c->wq);
 	else
 		continue_at_nobarrier(cl, cached_dev_bio_complete, NULL);
 }
@@ -1214,7 +1211,7 @@ static void cached_dev_write(struct cached_dev *dc, struct search *s)
 		closure_bio_submit(bio, cl);
 	}
 
-	bch_data_insert_op_init(&s->iop, dc->disk.c, bcache_wq, insert_bio,
+	bch_data_insert_op_init(&s->iop, dc->disk.c, insert_bio,
 				hash_long((unsigned long) current, 16),
 				!KEY_CACHED(&insert_key), bypass,
 				bio->bi_rw & (REQ_FLUSH|REQ_FUA),
@@ -1263,7 +1260,7 @@ static void cached_dev_make_request(struct request_queue *q, struct bio *bio)
 			 */
 			continue_at_nobarrier(&s->cl,
 					      cached_dev_nodata,
-					      bcache_wq);
+					      d->c->wq);
 		} else {
 			s->bypass = check_should_bypass(dc, bio, rw);
 
@@ -1377,13 +1374,13 @@ static void flash_dev_make_request(struct request_queue *q, struct bio *bio)
 		 */
 		continue_at_nobarrier(&s->cl,
 				      flash_dev_nodata,
-				      bcache_wq);
+				      d->c->wq);
 	}
 
 	bch_increment_clock(d->c, bio->bi_iter.bi_size, rw);
 
 	if (rw) {
-		bch_data_insert_op_init(&s->iop, d->c, bcache_wq, bio,
+		bch_data_insert_op_init(&s->iop, d->c, bio,
 					hash_long((unsigned long) current, 16),
 					true,
 					bio->bi_rw & REQ_DISCARD,

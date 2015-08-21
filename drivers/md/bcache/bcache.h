@@ -543,7 +543,6 @@ struct cache {
 	struct work_struct	remove_work;
 
 	struct cache_set	*set;
-	/* Cache tier is protected by bucket_lock */
 	struct cache_sb		sb;
 
 	struct bcache_superblock disk_sb;
@@ -568,6 +567,7 @@ struct cache {
 	u64			*prio_buckets;
 	u64			*prio_last_buckets;
 	u64			prio_journal_bucket;
+	spinlock_t		prio_buckets_lock;
 
 	/*
 	 * free: Buckets that are ready to be used
@@ -577,16 +577,12 @@ struct cache {
 	 * their new gen to disk. After prio_write() finishes writing the new
 	 * gens/prios, they'll be moved to the free list (and possibly discarded
 	 * in the process)
-	 *
-	 * Protected by bucket_lock.
 	 */
 	DECLARE_FIFO(long, free)[RESERVE_NR];
 	DECLARE_FIFO(long, free_inc);
+	spinlock_t		freelist_lock;
 
 	size_t			fifo_last_bucket;
-
-	/* The allocator thread might be waiting to enqueue to these FIFOs */
-	wait_queue_head_t	fifo_wait;
 
 	/* Allocation stuff: */
 	u8			*bucket_gens;
@@ -616,8 +612,6 @@ struct cache {
 	 * open buckets used in moving garbage collection
 	 * NOTE: GC_GEN == 0 signifies no moving gc, so accessing the
 	 * gc_buckets array is always GC_GEN-1.
-	 *
-	 * Protected by bucket_lock.
 	 */
 #define NUM_GC_GENS 7
 	struct write_point	gc_buckets[NUM_GC_GENS];
@@ -662,7 +656,7 @@ struct gc_stat {
 
 struct cache_tier {
 	unsigned		nr_devices;
-	struct cache		*devices[MAX_CACHES_PER_SET];
+	struct cache __rcu	*devices[MAX_CACHES_PER_SET];
 
 	/*
 	 * writepoint specific to this tier, for cache promote/background
@@ -755,7 +749,8 @@ struct cache_set {
 	/* ALLOCATION */
 	struct cache_tier	cache_by_alloc[CACHE_TIERS];
 	struct mutex		bucket_lock;
-	/* Protected by bucket_lock */
+
+	/* Protected by freelist_lock */
 	struct closure_waitlist	bucket_wait;
 
 

@@ -464,6 +464,9 @@ void __bch_btree_node_write(struct btree *b, struct closure *parent)
 
 	lockdep_assert_held(&b->write_lock);
 
+	if (!test_and_clear_bit(BTREE_NODE_dirty, &b->flags))
+		return;
+
 	trace_bcache_btree_write(b);
 
 	BUG_ON(b->written >= btree_blocks(b));
@@ -477,7 +480,6 @@ void __bch_btree_node_write(struct btree *b, struct closure *parent)
 	down(&b->io_mutex);
 	closure_init(&b->io, parent ?: &b->c->cl);
 
-	clear_bit(BTREE_NODE_dirty,	 &b->flags);
 	change_bit(BTREE_NODE_write_idx, &b->flags);
 
 	do_btree_node_write(b);
@@ -976,6 +978,7 @@ static struct btree *mca_alloc(struct cache_set *c, struct bkey *k, int level,
 		goto err;
 
 	BUG_ON(!down_write_trylock(&b->lock));
+	BUG_ON(!mutex_trylock(&b->write_lock));
 	if (!b->keys.set->data)
 		goto err;
 out:
@@ -1003,8 +1006,10 @@ out_unlock:
 	mutex_unlock(&c->btree_cache_lock);
 	return b;
 err:
-	if (b)
+	if (b) {
+		mutex_unlock(&b->write_lock);
 		rw_unlock(true, b);
+	}
 
 	b = mca_cannibalize(c, k, cl);
 	if (!IS_ERR(b))
@@ -1047,6 +1052,7 @@ retry:
 			return b;
 
 		bch_btree_node_read(b);
+		mutex_unlock(&b->write_lock);
 
 		if (!write)
 			downgrade_write(&b->lock);
@@ -1088,6 +1094,7 @@ static void btree_node_prefetch(struct btree *parent, struct bkey *k)
 	if (!IS_ERR_OR_NULL(b)) {
 		b->parent = parent;
 		bch_btree_node_read(b);
+		mutex_unlock(&b->write_lock);
 		rw_unlock(true, b);
 	}
 }
@@ -1170,6 +1177,7 @@ retry:
 	b->accessed = 1;
 	b->parent = parent;
 	bch_bset_init_next(&b->keys, b->keys.set->data, bset_magic(&b->c->sb));
+	set_btree_node_dirty(b);
 
 	trace_bcache_btree_node_alloc(b);
 	return b;
@@ -1185,10 +1193,8 @@ static struct btree *btree_node_alloc_replacement(struct btree *b,
 
 	n = bch_btree_node_alloc(b->c, op, b->level, b->btree_id, b->parent);
 	if (n) {
-		mutex_lock(&n->write_lock);
 		bch_btree_sort_into(&n->keys, &b->keys, &b->c->sort);
 		bkey_copy_key(&n->key, &b->key);
-		mutex_unlock(&n->write_lock);
 	}
 
 	return n;
@@ -1247,7 +1253,6 @@ int bch_btree_root_alloc(struct cache_set *c, enum btree_id id,
 	if (!b)
 		return -EINVAL;
 
-	mutex_lock(&b->write_lock);
 	bkey_copy_key(&b->key, &MAX_KEY);
 	bch_btree_node_write(b, cl);
 	mutex_unlock(&b->write_lock);
@@ -1424,7 +1429,7 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 	for (i = 0; i < nodes; i++) {
 		new_nodes[i] = btree_node_alloc_replacement(r[i].b, NULL);
 		if (!new_nodes[i])
-			goto out_nocoalesce;
+			goto out_nocoalesce_unlock;
 	}
 
 	/*
@@ -1434,10 +1439,7 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 	 * allocs/sorts
 	 */
 	if (btree_check_reserve(b, NULL))
-		goto out_nocoalesce;
-
-	for (i = 0; i < nodes; i++)
-		mutex_lock(&new_nodes[i]->write_lock);
+		goto out_nocoalesce_unlock;
 
 	/*
 	 * Conceptually we concatenate the nodes' keys together and slice them
@@ -1547,6 +1549,10 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 	/* Invalidated our iterator */
 	return -EINTR;
 
+out_nocoalesce_unlock:
+	for (i = 0; i < nodes; i++)
+		if (!IS_ERR_OR_NULL(new_nodes[i]))
+			mutex_unlock(&new_nodes[i]->write_lock);
 out_nocoalesce:
 	trace_bcache_btree_gc_coalesce_fail(b->c);
 
@@ -1576,7 +1582,7 @@ static int btree_gc_rewrite_node(struct btree *b, struct btree_op *op,
 		return 0;
 
 	n = btree_node_alloc_replacement(replace, NULL);
-	BUG_ON(!n);
+	mutex_unlock(&n->write_lock);
 
 	/* recheck reserve after allocating replacement node */
 	if (btree_check_reserve(b, NULL)) {
@@ -1718,6 +1724,7 @@ static int bch_btree_gc_root(struct btree *b, struct btree_op *op,
 		n = btree_node_alloc_replacement(b, NULL);
 
 		if (!IS_ERR_OR_NULL(n)) {
+			mutex_unlock(&n->write_lock);
 			bch_btree_node_write_sync(n);
 
 			bch_btree_set_root(n);
@@ -2267,8 +2274,6 @@ static int btree_split(struct btree *b, struct btree_op *op,
 	n1 = btree_node_alloc_replacement(b, op);
 	set1 = btree_bset_first(n1);
 
-	mutex_lock(&n1->write_lock);
-
 	bch_btree_insert_keys(n1, op, insert_keys, replace_key, flush);
 
 	/*
@@ -2305,8 +2310,6 @@ static int btree_split(struct btree *b, struct btree_op *op,
 						  b->btree_id, NULL);
 			BUG_ON(!n3);
 		}
-
-		mutex_lock(&n2->write_lock);
 
 		/*
 		 * Has to be a linear search because we don't have an auxiliary
@@ -2347,7 +2350,6 @@ static int btree_split(struct btree *b, struct btree_op *op,
 
 	if (n3) {
 		/* Depth increases, make a new root */
-		mutex_lock(&n3->write_lock);
 		bkey_copy_key(&n3->key, &MAX_KEY);
 		bch_btree_insert_keys(n3, op, &parent_keys, NULL, false);
 		bch_btree_node_write(n3, &cl);

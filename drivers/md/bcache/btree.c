@@ -91,20 +91,33 @@ static int __bch_btree_insert_node(struct btree *, struct btree_op *,
  * call you again and you'll have the correct lock.
  */
 
-static inline bool btree_node_read_locked(struct btree_op *op, int level)
+static inline void mark_btree_node_intent_locked(struct btree_op *op,
+						 unsigned level)
 {
-	return test_bit(level, (void *) &op->locks_read);
+	op->nodes_locked |= 1 << level;
+	op->nodes_intent_locked |= 1 << level;
 }
 
-static inline bool btree_node_intent_locked(struct btree_op *op, int level)
+static inline void mark_btree_node_read_locked(struct btree_op *op,
+					       unsigned level)
 {
-	return test_bit(level, (void *) &op->locks_intent);
+	op->nodes_locked |= 1 << level;
 }
 
-static inline bool btree_node_locked(struct btree_op *op, int level)
+static inline bool btree_node_intent_locked(struct btree_op *op, unsigned level)
 {
-	return btree_node_read_locked(op, level) ||
-		btree_node_intent_locked(op, level);
+	return op->nodes_intent_locked & (1 << level);
+}
+
+static inline bool btree_node_locked(struct btree_op *op, unsigned level)
+{
+	return op->nodes_locked & (1 << level);
+}
+
+static inline bool btree_node_read_locked(struct btree_op *op, unsigned level)
+{
+	return btree_node_locked(op, level) &&
+		!btree_node_intent_locked(op, level);
 }
 
 static inline bool btree_want_intent(struct btree_op *op, int level)
@@ -112,12 +125,16 @@ static inline bool btree_want_intent(struct btree_op *op, int level)
 	return level <= op->locks_want;
 }
 
-static void btree_node_unlock(struct btree_op *op, struct btree *b, int level)
+static void btree_node_unlock(struct btree_op *op, struct btree *b,
+			      unsigned level)
 {
-	if (__test_and_clear_bit(level, (void *) &op->locks_intent))
+	if (btree_node_intent_locked(op, level))
 		six_unlock_intent(&b->lock);
-	else if (__test_and_clear_bit(level, (void *) &op->locks_read))
+	else if (btree_node_read_locked(op, level))
 		six_unlock_read(&b->lock);
+
+	__clear_bit(level, (void *) &op->nodes_intent_locked);
+	__clear_bit(level, (void *) &op->nodes_locked);
 }
 
 #define __btree_node_lock(b, op, _level, check_if_raced, type)		\
@@ -128,7 +145,7 @@ static void btree_node_unlock(struct btree_op *op, struct btree *b, int level)
 	if ((_raced = ((check_if_raced) || ((b)->level != _level)))) {	\
 		six_unlock_##type(&(b)->lock);				\
 	} else {							\
-		__set_bit(_level, (void *) &(op)->locks_##type);	\
+		mark_btree_node_##type##_locked((op), (_level));	\
 		(op)->lock_seq[_level] = (b)->lock.state.seq;		\
 	}								\
 									\
@@ -147,7 +164,7 @@ static void btree_node_unlock(struct btree_op *op, struct btree *b, int level)
 					 (op)->lock_seq[_level]);	\
 									\
 	if (_locked)							\
-		__set_bit((_level), (void *) &(op)->locks_##type);	\
+		mark_btree_node_##type##_locked((op), (_level));	\
 									\
 	_locked;							\
 })
@@ -168,12 +185,10 @@ static int btree_lock_upgrade(struct btree *b, struct btree_op *op,
 	if (btree_node_intent_locked(op, level))
 		return 0;
 
-	if (btree_node_read_locked(op, level)
+	if (btree_node_locked(op, level)
 	    ? six_trylock_convert(&b->lock, read, intent)
 	    : six_relock_intent(&b->lock, op->lock_seq[level])) {
-		__clear_bit(level, (void *) &op->locks_read);
-		__set_bit(level, (void *) &op->locks_intent);
-
+		mark_btree_node_intent_locked(op, level);
 		trace_bcache_btree_upgrade_lock(b, op);
 		return 0;
 	}
@@ -217,8 +232,8 @@ static int btree_lock_upgrade(struct btree *b, struct btree_op *op,
 	while (1) {							\
 		struct btree *_b;					\
 									\
-		(op)->locks_intent	= 0;				\
-		(op)->locks_read	= 0;				\
+		(op)->nodes_locked = 0;					\
+		(op)->nodes_intent_locked = 0;				\
 		(op)->iterator_invalidated = 0;				\
 									\
 		_b = (c)->btree_roots[(op)->id];			\
@@ -1228,9 +1243,9 @@ retry:
 		six_unlock_write(&b->lock);
 
 		if (btree_want_intent(op, level)) {
-			__set_bit(level, (void *) &op->locks_intent);
+			mark_btree_node_intent_locked(op, level);
 		} else {
-			__set_bit(level, (void *) &op->locks_read);
+			mark_btree_node_read_locked(op, level);
 			BUG_ON(!six_trylock_convert(&b->lock, intent, read));
 		}
 	} else {

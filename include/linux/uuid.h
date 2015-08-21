@@ -21,7 +21,7 @@
 #define _LINUX_UUID_H_
 
 #include <uapi/linux/uuid.h>
-
+#include <linux/string.h>
 
 static inline int uuid_le_cmp(const uuid_le u1, const uuid_le u2)
 {

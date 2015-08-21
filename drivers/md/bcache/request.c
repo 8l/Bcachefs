@@ -1128,7 +1128,7 @@ static int cached_dev_cache_miss(struct bch_read_op *r_op, struct btree *b,
 
 	cache_promote(b->c, to_bbio(miss), &replace.key);
 
-	return ret;
+	return miss == bio ? MAP_DONE : MAP_CONTINUE;
 }
 
 /* Process writes */

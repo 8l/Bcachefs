@@ -1655,7 +1655,7 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 	}
 
 	/* Insert the newly coalesced nodes */
-	bch_btree_insert_node(b, op, &keylist, NULL, false);
+	bch_btree_insert_node(b, op, &keylist, NULL, NULL);
 	BUG_ON(!bch_keylist_empty(&keylist));
 
 	/* Free the old nodes and update our sliding window */
@@ -1730,7 +1730,7 @@ static int btree_gc_rewrite_node(struct btree *b, struct btree_op *op,
 	bch_keylist_init(&keys);
 	bch_keylist_add(&keys, &n->key);
 
-	bch_btree_insert_node(b, op, &keys, NULL, false);
+	bch_btree_insert_node(b, op, &keys, NULL, NULL);
 	BUG_ON(!bch_keylist_empty(&keys));
 
 	six_lock_write(&replace->lock);
@@ -2274,7 +2274,7 @@ enum btree_insert_status {
 static enum btree_insert_status
 bch_btree_insert_keys(struct btree *b, struct btree_op *op,
 		      struct keylist *insert_keys, struct bkey *replace_key,
-		      bool flush)
+		      struct closure *parent)
 {
 	bool inserted = false, attempted = false, need_split = false;
 	int oldsize = bch_count_data(&b->keys);
@@ -2336,8 +2336,8 @@ bch_btree_insert_keys(struct btree *b, struct btree_op *op,
 
 		attempted = true;
 		inserted |= btree_insert_key(b, k, replace_key, &res,
-				((bch_keylist_is_last(insert_keys, k) &&
-				  flush) ? &op->cl : NULL));
+					     bch_keylist_is_last(insert_keys, k)
+					     ? parent : NULL);
 
 		if (k == insert_keys->keys)
 			bch_keylist_pop_front(insert_keys);
@@ -2345,8 +2345,8 @@ bch_btree_insert_keys(struct btree *b, struct btree_op *op,
 
 	if (res.ref)
 		bch_journal_res_put(b->c, &res,
-				    (bch_keylist_empty(insert_keys) && flush)
-				    ? &op->cl : NULL);
+				    bch_keylist_empty(insert_keys)
+				    ? parent : NULL);
 
 	if (attempted && !inserted)
 		op->insert_collision = true;
@@ -2361,7 +2361,7 @@ bch_btree_insert_keys(struct btree *b, struct btree_op *op,
 static int btree_split(struct btree *b, struct btree_op *op,
 		       struct keylist *insert_keys,
 		       struct bkey *replace_key,
-		       bool flush)
+		       struct closure *parent)
 {
 	struct btree *n1, *n2 = NULL, *n3 = NULL;
 	struct bset *set1, *set2;
@@ -2390,7 +2390,7 @@ static int btree_split(struct btree *b, struct btree_op *op,
 	n1 = btree_node_alloc_replacement(b, op);
 	set1 = btree_bset_first(n1);
 
-	bch_btree_insert_keys(n1, op, insert_keys, replace_key, flush);
+	bch_btree_insert_keys(n1, op, insert_keys, replace_key, parent);
 
 	/*
 	 * There might be duplicate (deleted) keys after the
@@ -2489,7 +2489,7 @@ static int btree_split(struct btree *b, struct btree_op *op,
 		/* Split a non root node */
 		closure_sync(&cl);
 
-		bch_btree_insert_node(b->parent, op, &parent_keys, NULL, false);
+		bch_btree_insert_node(b->parent, op, &parent_keys, NULL, NULL);
 		BUG_ON(!bch_keylist_empty(&parent_keys));
 	}
 
@@ -2510,8 +2510,7 @@ static int btree_split(struct btree *b, struct btree_op *op,
  * @op:			pointer to struct btree_op
  * @insert_keys:	list of keys to insert
  * @replace_key:	old key for compare exchange
- * @flush:		if true, @op->cl won't return until last key written to
- *			journal
+ * @parent:		if not null, @parent will wait on journal write
  *
  * This is top level for common btree insertion/index update code. The control
  * flow goes roughly like:
@@ -2540,7 +2539,7 @@ static int btree_split(struct btree *b, struct btree_op *op,
 int bch_btree_insert_node(struct btree *b, struct btree_op *op,
 			  struct keylist *insert_keys,
 			  struct bkey *replace_key,
-			  bool flush)
+			  struct closure *parent)
 {
 	struct closure cl;
 
@@ -2552,7 +2551,8 @@ int bch_btree_insert_node(struct btree *b, struct btree_op *op,
 	btree_node_lock_for_insert(b);
 	op->iterator_invalidated = 1;
 
-	switch (bch_btree_insert_keys(b, op, insert_keys, replace_key, flush)) {
+	switch (bch_btree_insert_keys(b, op, insert_keys,
+				      replace_key, parent)) {
 	case BTREE_INSERT_NO_INSERT:
 		six_unlock_write(&b->lock);
 		return 0;
@@ -2592,7 +2592,7 @@ int bch_btree_insert_node(struct btree *b, struct btree_op *op,
 			return -EINTR;
 		} else {
 			return btree_split(b, op, insert_keys,
-					   replace_key, flush);
+					   replace_key, parent);
 		}
 	default:
 		BUG();
@@ -2638,7 +2638,7 @@ int bch_btree_insert_check_key(struct btree *b, struct btree_op *op,
 
 	bch_keylist_add(&insert, check_key);
 
-	return bch_btree_insert_node(b, op, &insert, NULL, false);
+	return bch_btree_insert_node(b, op, &insert, NULL, NULL);
 }
 
 struct btree_insert_op {
@@ -2653,7 +2653,7 @@ static int btree_insert_fn(struct btree_op *b_op, struct btree *b)
 					struct btree_insert_op, op);
 
 	int ret = bch_btree_insert_node(b, &op->op, op->keys,
-					op->replace_key, false);
+					op->replace_key, NULL);
 	return bch_keylist_empty(op->keys) ? MAP_DONE : ret;
 }
 

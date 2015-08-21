@@ -554,7 +554,7 @@ static void cache_promote_endio(struct bio *bio, int error)
 
 	if (error)
 		op->iop.error = error;
-	else if (ptr_stale(b->ca->set, b->ca, &b->key, 0))
+	else if (b->ca && ptr_stale(b->ca->set, b->ca, &b->key, 0))
 		op->stale = 1;
 
 	bch_bbio_endio(b, error, "reading from cache");
@@ -568,7 +568,7 @@ static void cache_promote_endio(struct bio *bio, int error)
  * @orig_bio must actually be a bbio with a valid key.
  */
 static void cache_promote(struct cache_set *c, struct bbio *orig_bio,
-			  struct bkey *replace_key, bio_end_io_t *bi_end_io)
+			  struct bkey *replace_key)
 {
 	struct cache_promote_op *op;
 	struct bio *bio;
@@ -589,7 +589,7 @@ static void cache_promote(struct cache_set *c, struct bbio *orig_bio,
 	bio->bi_bdev		= orig_bio->bio.bi_bdev;
 	bio->bi_iter.bi_sector	= orig_bio->bio.bi_iter.bi_sector;
 	bio->bi_iter.bi_size	= orig_bio->bio.bi_iter.bi_size;
-	bio->bi_end_io		= bi_end_io;
+	bio->bi_end_io		= cache_promote_endio;
 	bio->bi_private		= &op->cl;
 	bio->bi_io_vec		= bio->bi_inline_vecs;
 	bch_bio_map(bio, NULL);
@@ -597,8 +597,7 @@ static void cache_promote(struct cache_set *c, struct bbio *orig_bio,
 	if (bio_alloc_pages(bio, __GFP_NOWARN|GFP_NOIO))
 		goto out_free;
 
-	if (op->bio.ca)
-		percpu_ref_get(&op->bio.ca->ref);
+	orig_bio->ca = NULL;
 
 	closure_init(&op->cl, &c->cl);
 	op->orig_bio		= &orig_bio->bio;
@@ -793,20 +792,21 @@ static void bch_read_endio(struct bio *bio, int error)
 {
 	struct bbio *b = to_bbio(bio);
 	struct cache *ca = b->ca;
-	struct cache_set *c = b->ca->set;
 
 	bch_bbio_count_io_errors(b, error, "reading from cache");
 
-	if (!error && (race_fault() || ptr_stale(c, ca, &b->key, 0))) {
+	if (!error && ca &&
+	    (race_fault() || ptr_stale(ca->set, ca, &b->key, 0))) {
 		/* Read bucket invalidate race */
-		atomic_long_inc(&c->cache_read_races);
-		bch_read_requeue(c, bio);
+		atomic_long_inc(&ca->set->cache_read_races);
+		bch_read_requeue(ca->set, bio);
 	} else {
 		bio_endio(bio->bi_private, error);
 		bio_put(bio);
 	}
 
-	percpu_ref_put(&ca->ref);
+	if (ca)
+		percpu_ref_put(&ca->ref);
 }
 
 /* XXX: this looks a lot like cache_lookup_fn() */
@@ -862,7 +862,7 @@ static int bch_read_fn(struct btree_op *b_op, struct btree *b, struct bkey *k)
 	if (!CACHE_TIER(&b->c->members[PTR_DEV(k, ptr)]))
 		generic_make_request(n);
 	else
-		cache_promote(b->c, bbio, k, cache_promote_endio);
+		cache_promote(b->c, bbio, k);
 	return ret;
 }
 
@@ -1071,19 +1071,6 @@ static int cached_dev_cache_miss_bypass(struct bch_read_op *r_op,
 	return miss == bio ? MAP_DONE : MAP_CONTINUE;
 }
 
-static void cached_dev_cache_miss_endio(struct bio *bio, int error)
-{
-	struct closure *cl = bio->bi_private;
-	struct bbio *b = to_bbio(bio);
-	struct cache_promote_op *op = container_of(b,
-					struct cache_promote_op, bio);
-
-	if (error)
-		op->iop.error = error;
-
-	closure_put(cl);
-}
-
 /**
  * cached_dev_cache_miss - populate cache with data from backing device
  *
@@ -1139,8 +1126,7 @@ static int cached_dev_cache_miss(struct bch_read_op *r_op, struct btree *b,
 				 bio_sectors(miss));
 	to_bbio(miss)->ca = NULL;
 
-	cache_promote(b->c, to_bbio(miss), &replace.key,
-		      cached_dev_cache_miss_endio);
+	cache_promote(b->c, to_bbio(miss), &replace.key);
 
 	return ret;
 }

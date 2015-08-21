@@ -25,3 +25,9 @@ config BCACHE_CLOSURES_DEBUG
 	Keeps all active closures in a linked list and provides a debugfs
 	interface to list them, which makes it possible to see asynchronous
 	operations that get stuck.
+
+config BCACHE_NO_IO
+	bool "Disable IO to underlying device"
+	depends on BCACHE
+	---help---
+	Stubs out all the actual IO calls

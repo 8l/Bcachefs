@@ -189,6 +189,8 @@ static void btree_node_unlock(struct btree_op *op, struct btree *b, int level)
 		else							\
 			break;						\
 	}								\
+	if (!(async))							\
+		closure_sync(&(op)->cl);				\
 	_r;								\
 })
 

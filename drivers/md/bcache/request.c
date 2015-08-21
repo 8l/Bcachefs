@@ -105,7 +105,8 @@ static void bch_data_invalidate(struct closure *cl)
 	op->insert_data_done = true;
 	bio_put(bio);
 out:
-	continue_at(cl, bch_data_insert_keys, op->wq);
+	continue_at(cl, bch_data_insert_keys,
+		    op->c->btree_insert_wq);
 }
 
 static void bch_data_insert_error(struct closure *cl)
@@ -148,7 +149,8 @@ static void bch_data_insert_endio(struct bio *bio, int error)
 		if (KEY_DIRTY(&op->insert_key))
 			op->error = error;
 		else if (!op->replace)
-			set_closure_fn(cl, bch_data_insert_error, op->wq);
+			set_closure_fn(cl, bch_data_insert_error,
+				       op->c->btree_insert_wq);
 		else
 			set_closure_fn(cl, NULL, NULL);
 	}
@@ -181,7 +183,8 @@ static void bch_data_insert_start(struct closure *cl)
 		if (bch_keylist_realloc(&op->insert_keys,
 					bkey_u64s(&op->insert_key) + 1 +
 					(KEY_CSUM(&op->insert_key) ? 1 : 0)))
-			continue_at(cl, bch_data_insert_keys, op->wq);
+			continue_at(cl, bch_data_insert_keys,
+				    op->c->btree_insert_wq);
 
 		k = op->insert_keys.top;
 		bkey_copy(k, &op->insert_key);
@@ -212,7 +215,7 @@ static void bch_data_insert_start(struct closure *cl)
 	} while (n != bio);
 
 	op->insert_data_done = true;
-	continue_at(cl, bch_data_insert_keys, op->wq);
+	continue_at(cl, bch_data_insert_keys, op->c->btree_insert_wq);
 err:
 	BUG_ON(op->wait);
 
@@ -240,7 +243,8 @@ err:
 		bio_put(bio);
 
 		if (!bch_keylist_empty(&op->insert_keys))
-			continue_at(cl, bch_data_insert_keys, op->wq);
+			continue_at(cl, bch_data_insert_keys,
+				    op->c->btree_insert_wq);
 		else
 			closure_return(cl);
 	}

@@ -582,7 +582,7 @@ TRACE_EVENT(bcache_alloc_fail,
 		  __entry->free, __entry->free_inc)
 );
 
-DECLARE_EVENT_CLASS(bcache_open_bucket_wait,
+TRACE_EVENT(bcache_open_bucket_wait,
 	TP_PROTO(struct cache_set *c, bool moving_gc),
 	TP_ARGS(c, moving_gc),
 
@@ -598,16 +598,6 @@ DECLARE_EVENT_CLASS(bcache_open_bucket_wait,
 
 	TP_printk("%pU moving_gc %u",
 		  __entry->uuid, __entry->moving_gc)
-);
-
-DEFINE_EVENT(bcache_open_bucket_wait, bcache_open_bucket_wait_start,
-	TP_PROTO(struct cache_set *c, bool moving_gc),
-	TP_ARGS(c, moving_gc)
-);
-
-DEFINE_EVENT(bcache_open_bucket_wait, bcache_open_bucket_wait_end,
-	TP_PROTO(struct cache_set *c, bool moving_gc),
-	TP_ARGS(c, moving_gc)
 );
 
 /* Background writeback */

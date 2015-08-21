@@ -64,7 +64,7 @@ int bch_inode_create(struct cache_set *c, struct bch_inode *inode,
 	op.search	= *hint;
 again:
 	ret = bch_btree_map_keys(&op.op, c, BTREE_ID_INODES,
-				 PRECEDING_KEY(&KEY(op.search, 0, 0)),
+				 &KEY(op.search, 0, 0),
 				 bch_inode_create_fn, MAP_END_KEY);
 	if (ret == MAP_CONTINUE)
 		ret = -ENOSPC;
